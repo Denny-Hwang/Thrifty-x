@@ -5,7 +5,7 @@ Unit tests for utility functions.
 import numpy as np
 import pytest
 
-from thrifty import util
+from thriftyx import util
 
 
 @pytest.mark.parametrize("num", [15, 16])

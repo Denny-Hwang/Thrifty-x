@@ -4,7 +4,7 @@ Unit tests for setting parsers module.
 
 import pytest
 
-from thrifty import setting_parsers
+from thriftyx import setting_parsers
 
 
 def test_freq_range():

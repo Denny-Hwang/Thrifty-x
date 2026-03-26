@@ -7,7 +7,7 @@ import io
 
 import pytest
 
-from thrifty import settings
+from thriftyx import settings
 
 DEFAULT_FOO = '2e6'
 DEFAULT_BAZ = '1e6'

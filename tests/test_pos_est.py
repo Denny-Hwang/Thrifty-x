@@ -2,8 +2,8 @@ from __future__ import print_function
 
 import itertools
 import numpy as np
-from thrifty import pos_est
-from thrifty import tdoa_est
+from thriftyx import pos_est
+from thriftyx import tdoa_est
 
 SPEED_OF_LIGHT = pos_est.SPEED_OF_LIGHT
 

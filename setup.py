@@ -1,27 +1,25 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""Setuptools-based setup module."""
+"""Setuptools-based setup module (legacy — prefer pyproject.toml)."""
 
 from setuptools import setup, find_packages
 
-INSTALL_REQUIRES = ['numpy',
-                    'scipy']
-
-EXTRAS_REQUIRE = {'analysis': ['matplotlib']}
-
 setup(
-    name='thrifty',
-    version='0.0.1',
-    description='Proof-of-concept SDR software for TDOA positioning',
-    author='Schalk-Willem Krüger',
+    name='thriftyx',
+    version='0.1.0',
+    description='Airspy-based TDOA positioning for wildlife tracking',
+    author='Schalk-Willem Krüger, Sungjoo Hwang',
     python_requires=">=3.10",
-    install_requires=INSTALL_REQUIRES,
-    extras_require=EXTRAS_REQUIRE,
-    packages=find_packages(exclude=('tests', 'docs', 'old')),
+    install_requires=['numpy>=1.23', 'scipy>=1.9'],
+    extras_require={
+        'analysis': ['matplotlib>=3.6'],
+        'fft': ['pyfftw>=0.13'],
+        'dev': ['pytest>=7.0', 'pytest-cov', 'mypy', 'ruff'],
+    },
+    packages=find_packages(include=['thriftyx', 'thriftyx.*']),
     entry_points={
         'console_scripts': [
-            'thrifty = thrifty.cli:_main'
+            'thriftyx = thriftyx.cli:_main',
+            'thrifty = thriftyx.cli:_main',
         ]
     },
 )
