@@ -6,8 +6,8 @@ import pytest
 import numpy as np
 import scipy.signal
 
-from thrifty import soa_estimator
-from thrifty.signal_utils import Signal
+from thriftyx import soa_estimator
+from thriftyx.signal_utils import Signal
 
 
 # 5-bit (length 31) Gold code

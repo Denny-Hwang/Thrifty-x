@@ -1,0 +1,26 @@
+Thrifty-X
+=========
+
+This project is a derivative work of Thrifty, originally developed by
+Schalk Willem Krüger at North-West University (South Africa).
+
+Original project: https://github.com/swkrueger/Thrifty
+Dissertation:     https://hdl.handle.net/10394/25449
+
+Reference:
+  Krüger, S.W. (2016). An inexpensive hyperbolic positioning system for
+  tracking wildlife using off-the-shelf hardware. Master's dissertation,
+  North-West University, Potchefstroom Campus.
+
+Modifications in Thrifty-X:
+  - Replaced RTL-SDR hardware support with Airspy Mini and Airspy R2
+  - Migrated codebase from Python 2 to Python 3.10+
+  - Added Hardware Abstraction Layer (HAL) for SDR devices
+  - Updated I/Q sample processing from 8-bit to 12-bit
+  - Added configuration validation for Airspy hardware
+  - Replaced GnuRadio/osmosdr visualization with matplotlib
+  - Added type hints, dataclasses, and modern Python idioms
+  - Replaced fastcard C library with fastcapture (libairspy-based)
+
+Both the original work and this derivative are licensed under the
+GNU General Public License v3.0 (GPL-3.0-only).

@@ -5,8 +5,8 @@ Unit tests for carrier_sync module.
 import pytest
 import numpy as np
 
-from thrifty import carrier_sync
-from thrifty.signal_utils import Signal
+from thriftyx import carrier_sync
+from thriftyx.signal_utils import Signal
 
 
 FREQ_SHIFT_TESTDATA = [

@@ -7,7 +7,7 @@ import io
 import numpy as np
 import numpy.testing as npt
 
-from thrifty import block_data
+from thriftyx import block_data
 
 
 def test_raw_to_complex():

@@ -5,7 +5,7 @@ Unit tests for carrier_detect module.
 import pytest
 import numpy as np
 
-from thrifty import carrier_detect
+from thriftyx import carrier_detect
 
 
 RANGE_INDEX_TESTDATA = [
