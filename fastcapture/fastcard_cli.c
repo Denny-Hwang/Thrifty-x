@@ -1,18 +1,16 @@
 /**
- * FastCarD: Fast Carrier Detection
- * 
+ * FastCapture: Fast Carrier Detection for Airspy SDR
+ *
  * Features:
- *  - fast IO and raw-to-complex conversion
- *  - fast fft
- *    + fftw if USE_FFTW (default)
- *    + gpufft if USE_GPUFFT (rpi) -- deprecated
+ *  - fast IO and raw-to-complex conversion (int16 I/Q from Airspy)
+ *  - fast fft (fftw)
  *  - volk for abs
- *  - fast md5 (with libb64)
+ *  - fast base64 encoding (with libb64)
  *
  *  Dependencies:
- *   - fftw / gpufft
+ *   - fftw3f
  *   - libvolk
- *   - librtlsdr
+ *   - libairspy
  **/
 
 #include <signal.h>
@@ -27,11 +25,12 @@
 
 #include <argp.h>  // this should be last
 
-const char *argp_program_version = "fastcard " VERSION_STRING;
-static const char doc[] = "FastCarD: Fast Carrier Detection\n\n"
-    "Takes a stream of raw 8-bit IQ samples from a RTL-SDR, splits it into "
-    "fixed-sized blocks, and, if a carrier is detected in a block, outputs the "
-    "block ID, timestamp and the block's raw samples encoded in base64.";
+const char *argp_program_version = "fastcapture " VERSION_STRING;
+static const char doc[] = "FastCapture: Fast Carrier Detection for Airspy\n\n"
+    "Takes a stream of 12-bit signed int16 I/Q samples from an Airspy SDR, "
+    "splits it into fixed-sized blocks, and, if a carrier is detected in a "
+    "block, outputs the block ID, timestamp and the block's raw samples "
+    "encoded in base64.";
 
 fargs_t* args;
 fastcard_t* fastcard = NULL;
@@ -58,7 +57,9 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
 
 void signal_handler(int signo) {
     (void)signo;  // unused
-    fastcard_cancel(fastcard);
+    if (fastcard != NULL) {
+        fastcard_cancel(fastcard);
+    }
 }
 
 static struct argp_option extra_options[] = {
@@ -117,7 +118,8 @@ int main(int argc, char **argv) {
         goto free;   
     }
 
-    base64 = (char*) malloc((2*args->block_len+2)/3*4 + 1);
+    // Airspy: block_len I/Q pairs * 2 int16 values * 2 bytes = block_len * 4 bytes
+    base64 = (char*) malloc((4*args->block_len+2)/3*4 + 1);
     if (base64 == NULL) {
         exit_code = -1;
         goto free;
@@ -125,7 +127,7 @@ int main(int argc, char **argv) {
 
     bool sdr_input = false;
     if (args->input_file) {
-        sdr_input = (strcmp(args->input_file, "rtlsdr") == 0);   
+        sdr_input = (strcmp(args->input_file, "airspy") == 0);
     }
     if (info != NULL) {
         fargs_print_summary(args, info, sdr_input);
@@ -181,9 +183,10 @@ int main(int argc, char **argv) {
             }
 
             if (out != NULL) {
+                // Airspy: block_len I/Q pairs * 2 samples * sizeof(int16_t)
                 Base64encode(base64,
                              (const char*) block->raw_samples,
-                             args->block_len * 2);
+                             args->block_len * 2 * sizeof(int16_t));
                 fprintf(out,
                         "%ld.%06ld %" PRId64" %s\n",
                         block->timestamp.tv_sec,

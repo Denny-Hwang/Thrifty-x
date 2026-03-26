@@ -33,7 +33,11 @@ circbuf_t* circbuf_new(size_t size);
 /// Returns true on success.
 bool circbuf_init(circbuf_t* circbuf, size_t size);
 
-/// Deallocate memory of a circular buffer.
+/// Release internal resources of a circular buffer (for embedded instances).
+void circbuf_destroy(circbuf_t* circbuf);
+
+/// Deallocate internal resources AND free the circbuf_t struct itself.
+/// Only use for heap-allocated circbufs created with circbuf_new().
 void circbuf_free(circbuf_t* circbuf);
 
 /// Read exactly "len" bytes from the circular buffer.

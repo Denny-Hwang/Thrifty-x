@@ -14,7 +14,7 @@
 #define DEFAULT_WISDOM_FILE         NULL
 
 #define DEFAULT_SDR_FREQ            433830000
-#define DEFAULT_SDR_SAMPLE_RATE     2400000
+#define DEFAULT_SDR_SAMPLE_RATE     6000000
 #define DEFAULT_SDR_GAIN            0
 #define DEFAULT_SDR_INDEX           0
 
@@ -31,7 +31,7 @@ const fargs_option_t fargs_options[] = {
     {0, 0, 0, 0, "I/O settings:", 1},
     {"input",  'i', "<FILE>", 0,
         "Input file with samples "
-        "\n('-' for stdin, 'rtlsdr' for librtlsdr)\n[default: stdin]",
+        "\n('-' for stdin, 'airspy' for libairspy)\n[default: stdin]",
         1},
     {"card", ARGP_KEY_CARD, 0, 0,
         "Input is a .card file instead of binary data", 1},
@@ -52,15 +52,15 @@ const fargs_option_t fargs_options[] = {
         "[default: 1]", 2},
 
     // Tuner
-    {0, 0, 0, 0, "Tuner settings (if input is 'rtlsdr'):", 3},
+    {0, 0, 0, 0, "Tuner settings (if input is 'airspy'):", 3},
     {"frequency", 'f', "<hz>", 0,
         "Frequency to tune to [default: 433.83M]", 3},
     {"sample-rate", 's', "<sps>", 0,
-        "Sample rate [default: 2.4M]", 3},
+        "Sample rate [default: 6M]", 3},
     {"gain", 'g', "<db>", 0,
-        "Gain [default: 0]", 3},
+        "LNA gain [default: 0]", 3},
     {"device-index", 'd', "<index>", 0,
-        "RTL-SDR device index [default: 0]", 3},
+        "Airspy device index [default: 0]", 3},
 
     // Carrier detection
     {0, 0, 0, 0, "Carrier detection settings:", 4},

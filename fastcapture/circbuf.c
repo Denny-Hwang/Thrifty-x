@@ -17,15 +17,23 @@ circbuf_t* circbuf_new(size_t size) {
 }
 
 bool circbuf_init(circbuf_t* circbuf, size_t size) {
+    int mutex_ok = 0, produce_ok = 0, consume_ok = 0;
+
+    circbuf->histogram = NULL;
+    circbuf->buf = NULL;
+
     if (pthread_mutex_init(&circbuf->mutex, NULL) != 0) {
         goto fail;
     }
+    mutex_ok = 1;
     if (pthread_cond_init(&circbuf->can_produce, NULL) != 0) {
         goto fail;
     }
+    produce_ok = 1;
     if (pthread_cond_init(&circbuf->can_consume, NULL) != 0) {
         goto fail;
     }
+    consume_ok = 1;
 
     circbuf->size = size;
     circbuf->len = 0;
@@ -48,9 +56,9 @@ bool circbuf_init(circbuf_t* circbuf, size_t size) {
     return true;
 
 fail:
-    pthread_mutex_destroy(&circbuf->mutex);
-    pthread_cond_destroy(&circbuf->can_produce);
-    pthread_cond_destroy(&circbuf->can_consume);
+    if (mutex_ok)   pthread_mutex_destroy(&circbuf->mutex);
+    if (produce_ok) pthread_cond_destroy(&circbuf->can_produce);
+    if (consume_ok) pthread_cond_destroy(&circbuf->can_consume);
     if (circbuf->histogram != NULL)
         free(circbuf->histogram);
     if (circbuf->buf != NULL)
@@ -58,7 +66,7 @@ fail:
     return false;
 }
 
-void circbuf_free(circbuf_t* circbuf) {
+void circbuf_destroy(circbuf_t* circbuf) {
     pthread_mutex_destroy(&circbuf->mutex);
     pthread_cond_destroy(&circbuf->can_produce);
     pthread_cond_destroy(&circbuf->can_consume);
@@ -66,7 +74,12 @@ void circbuf_free(circbuf_t* circbuf) {
         free(circbuf->histogram);
     if (circbuf->buf != NULL)
         free(circbuf->buf);
+    circbuf->histogram = NULL;
+    circbuf->buf = NULL;
+}
 
+void circbuf_free(circbuf_t* circbuf) {
+    circbuf_destroy(circbuf);
     free(circbuf);
 }
 

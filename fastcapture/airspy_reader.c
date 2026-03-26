@@ -107,7 +107,7 @@ static void _airspy_reader_free(void *context)
         airspy_stop_rx(state->device);
         airspy_close(state->device);
     }
-    circbuf_free(&state->circbuf);
+    circbuf_destroy(&state->circbuf);
     free(state);
 }
 
@@ -187,7 +187,7 @@ void airspy_reader_close(reader_t *reader)
         airspy_stop_rx(state->device);
         airspy_close(state->device);
     }
-    circbuf_free(&state->circbuf);
+    circbuf_destroy(&state->circbuf);
     free(state);
-    reader->ctx = NULL;
+    reader->context = NULL;
 }
