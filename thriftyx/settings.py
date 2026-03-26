@@ -110,6 +110,48 @@ DEFINITIONS = {
         -1,
         "Unique identifier of this receiver"
     ),
+
+    'device_type': Definition(
+        ['--device-type'],
+        str,
+        'airspy_mini',
+        "SDR device type ('airspy_mini' or 'airspy_r2')"
+    ),
+
+    'bit_depth': Definition(
+        ['--bit-depth'],
+        int,
+        '12',
+        "ADC bit depth (12 for Airspy, 8 for legacy RTL-SDR)"
+    ),
+
+    'bias_tee': Definition(
+        ['--bias-tee'],
+        setting_parsers.parse_bool,
+        'false',
+        "Enable bias tee voltage on antenna port"
+    ),
+
+    'lna_gain': Definition(
+        ['--lna-gain'],
+        int,
+        '0',
+        "LNA gain stage index (Airspy: 0-14)"
+    ),
+
+    'mixer_gain': Definition(
+        ['--mixer-gain'],
+        int,
+        '0',
+        "Mixer gain stage index (Airspy: 0-15)"
+    ),
+
+    'vga_gain': Definition(
+        ['--vga-gain'],
+        int,
+        '0',
+        "VGA/IF gain stage index (Airspy: 0-15)"
+    ),
 }
 
 DEFAULT_CONFIG_PATH = 'detector.cfg'

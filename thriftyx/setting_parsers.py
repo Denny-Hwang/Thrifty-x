@@ -191,3 +191,23 @@ def threshold(string):
         elif symbol == 'stddev' or symbol == 'd':
             stddev += quantity
     return constant, snr, stddev
+
+
+def parse_bool(string: str) -> bool:
+    """Parse a boolean value from a string.
+
+    Examples
+    --------
+    >>> parse_bool('true')
+    True
+    >>> parse_bool('false')
+    False
+    >>> parse_bool('1')
+    True
+    """
+    if string.lower() in ('true', '1', 'yes', 'on'):
+        return True
+    if string.lower() in ('false', '0', 'no', 'off'):
+        return False
+    raise ValueError(f"Cannot parse '{string}' as boolean. "
+                     "Use: true/false, 1/0, yes/no, on/off")
