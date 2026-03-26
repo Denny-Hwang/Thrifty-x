@@ -6,28 +6,27 @@
 #
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Common Thrifty CLI interface.
+"""Common Thrifty-X CLI interface.
 
-A centralized interface for accessing Thrifty modules with CLI interfaces.
+A centralized interface for accessing Thrifty-X modules with CLI interfaces.
 """
-
 
 import sys
 import importlib
 
 
-HELP = """usage: thrifty <command> [<args>]
+HELP = """usage: thriftyx <command> [<args>]
 
-Thrifty is proof-of-concept SDR software for TDOA positioning using inexpensive
-SDR hardware such as the RTL-SDR.
+Thrifty-X is proof-of-concept SDR software for TDOA positioning using
+Airspy Mini or Airspy R2 SDR hardware.
 
-Thrifty is divided into several modules. Each module is accessible as a command
-and has its own arguments.
+Thrifty-X is divided into several modules. Each module is accessible as a
+command and has its own arguments.
 
 Valid commands are:
 
     ~ Core functionality ~
-    capture           Capture carrier detections from RTL-SDR using fastcard
+    capture           Capture carrier detections from Airspy SDR
     detect            Detect presence of positioning signals and estimate SoA
     identify          Identify transmitter IDs and filter duplicate detections
     match             Match detections from multiple receivers
@@ -35,7 +34,7 @@ Valid commands are:
     pos               Estimate position from TDOA estimates
 
     ~ Analysis tools ~
-    scope             Live time-domain and frequency-domain plots with triggers
+    scope             Live time-domain and frequency-domain plots (matplotlib)
     analyze_toads     Calculate statistics on data in a .toads file
     analyze_detect    Like 'detect', but plot signals for analysis
     analyze_beacon    Analyze the difference in SOA of a beacon between two RXs
@@ -45,23 +44,23 @@ Valid commands are:
     template_generate Generate a new (ideal) template
     template_extract  Extract a new template from captured data
 
-Use 'thrifty help <command>' for information about the command's arguments."""
+Use 'thriftyx help <command>' for information about the command's arguments."""
 
 
 MODULES = {
-    'capture': 'thrifty.fastcard_capture',
-    'detect': 'thrifty.detect',
-    'identify': 'thrifty.identify',
-    'match': 'thrifty.matchmaker',
-    'tdoa': 'thrifty.tdoa_est',
-    'pos': 'thrifty.pos_est',
-    'analyze_toads': 'thrifty.toads_analysis',
-    'analyze_detect': 'thrifty.detect_analysis',
-    'analyze_beacon': 'thrifty.beacon_analysis',
-    'analyze_tdoa': 'thrifty.tdoa_analysis',
-    'template_generate': 'thrifty.template_generate',
-    'template_extract': 'thrifty.template_extract',
-    'scope': 'thrifty.scope',
+    'capture': 'thriftyx.airspy_capture',
+    'detect': 'thriftyx.detect',
+    'identify': 'thriftyx.identify',
+    'match': 'thriftyx.matchmaker',
+    'tdoa': 'thriftyx.tdoa_est',
+    'pos': 'thriftyx.pos_est',
+    'analyze_toads': 'thriftyx.toads_analysis',
+    'analyze_detect': 'thriftyx.detect_analysis',
+    'analyze_beacon': 'thriftyx.beacon_analysis',
+    'analyze_tdoa': 'thriftyx.tdoa_analysis',
+    'template_generate': 'thriftyx.template_generate',
+    'template_extract': 'thriftyx.template_extract',
+    'scope': 'thriftyx.scope',
 }
 
 
@@ -91,7 +90,7 @@ def _main():
         module = importlib.import_module(module_name)
         module._main()
     else:
-        print("thrifty: {} is not a thrifty command. See 'thrifty --help'."
+        print("thriftyx: {} is not a thriftyx command. See 'thriftyx --help'."
               .format(command), file=sys.stderr)
         sys.exit(1)
 
