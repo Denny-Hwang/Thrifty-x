@@ -28,7 +28,7 @@ DEFINITIONS = {
     'sample_rate': Definition(
         ['--sample-rate', '-s'],
         setting_parsers.metric_float,
-        '2.4M',
+        '3M',
         "Sample rate (sps)"
     ),
 

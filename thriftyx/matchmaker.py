@@ -91,7 +91,7 @@ def load_matches(file_):
     for line in file_:
         if len(line) == 0 or line[0] == '#':
             continue
-        match = map(int, line.split())
+        match = list(map(int, line.split()))
         matches.append(match)
     return matches
 
