@@ -43,6 +43,9 @@ def is_outlier(points, thresh=3.5):
     diff = np.sqrt(diff)
     med_abs_deviation = np.median(diff)
 
+    if med_abs_deviation == 0:
+        return np.zeros(len(diff), dtype=bool)
+
     modified_z_score = 0.6745 * diff / med_abs_deviation
 
     return modified_z_score > thresh

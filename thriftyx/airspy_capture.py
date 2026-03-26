@@ -24,7 +24,9 @@ from thriftyx import settings as settings_module
 from thriftyx import setting_parsers
 from thriftyx.block_data import card_writer, write_card_header, raw_to_complex
 from thriftyx.hal.device_factory import create_device
-from thriftyx.exceptions import DeviceNotFoundError, DeviceConfigError
+from thriftyx import config_validator
+from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
+                                  ConfigValidationError)
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +55,20 @@ def capture_cli(args=None):
 
     setting_keys = ['sample_rate', 'tuner_freq', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
-                    'device_type', 'bit_depth', 'bias_tee',
-                    'lna_gain', 'mixer_gain', 'vga_gain']
+                    'bit_depth', 'bias_tee',
+                    'lna_gain', 'mixer_gain', 'vga_gain',
+                    'capture_skip']
     config, extra_args = settings_module.load_args(parser, setting_keys,
                                                     argv=args)
+
+    # Validate configuration before using it
+    try:
+        validation_warnings = config_validator.validate_config(config)
+        for w in validation_warnings:
+            logger.warning("Config warning: %s", w)
+    except ConfigValidationError as e:
+        print(f"ERROR: Invalid configuration: {e}", file=sys.stderr)
+        sys.exit(1)
 
     device_type = config.get('device_type', 'airspy_mini')
     bit_depth = int(config.get('bit_depth', 12))
@@ -64,6 +76,7 @@ def capture_cli(args=None):
     center_freq = int(config.tuner_freq)
     block_size = int(config.block_size)
     block_history = int(config.block_history)
+    capture_skip = int(config.get('capture_skip', 1))
     duration = extra_args.get('duration')
     output_path = extra_args.get('output')
 
@@ -86,32 +99,31 @@ def capture_cli(args=None):
         device.set_gain('mixer', int(config.get('mixer_gain', 0)))
         device.set_gain('vga', int(config.get('vga_gain', 0)))
         device.set_bias_tee(bool(config.get('bias_tee', False)))
-    except DeviceConfigError as e:
-        print(f"ERROR configuring device: {e}", file=sys.stderr)
-        device.close()
-        sys.exit(1)
 
-    # Write v2 header
-    write_card_header(output_file, bit_depth=bit_depth, sample_rate=sample_rate)
+        # Write v2 header
+        write_card_header(output_file, bit_depth=bit_depth,
+                          sample_rate=sample_rate)
 
-    block_idx = 0
-    start_time = time.time()
-    running = [True]
-    history_buf = np.zeros(block_history * 2, dtype=np.int16)
+        block_idx = 0
+        start_time = time.time()
+        running = [True]
+        history_buf = np.zeros(block_history * 2, dtype=np.int16)
 
-    def _sigint_handler(sig, frame):
-        running[0] = False
-        logger.info("Stopping capture...")
+        def _sigint_handler(sig, frame):
+            running[0] = False
+            logger.info("Stopping capture...")
 
-    signal.signal(signal.SIGINT, _sigint_handler)
-    signal.signal(signal.SIGTERM, _sigint_handler)
+        signal.signal(signal.SIGINT, _sigint_handler)
+        signal.signal(signal.SIGTERM, _sigint_handler)
 
-    new_samples = block_size - block_history
+        new_samples = block_size - block_history
 
-    logger.info("Starting capture: %s Hz @ %.1f MHz, block_size=%d",
-                sample_rate, center_freq / 1e6, block_size)
+        logger.info("Starting capture: %s Hz @ %.1f MHz, block_size=%d, "
+                    "skip=%d", sample_rate, center_freq / 1e6, block_size,
+                    capture_skip)
 
-    try:
+        blocks_skipped = 0
+
         while running[0]:
             if duration is not None and (time.time() - start_time) >= duration:
                 break
@@ -119,6 +131,12 @@ def capture_cli(args=None):
             raw = device.read_sync(new_samples)
             if len(raw) < new_samples * 2:
                 break
+
+            # Skip initial blocks (transient AGC/PLL data)
+            if blocks_skipped < capture_skip:
+                blocks_skipped += 1
+                history_buf = raw[-block_history * 2:]
+                continue
 
             # Build full block with history
             block_raw = np.concatenate([history_buf, raw])
@@ -131,13 +149,17 @@ def capture_cli(args=None):
             history_buf = raw[-block_history * 2:]
             block_idx += 1
 
+    except DeviceConfigError as e:
+        print(f"ERROR configuring device: {e}", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         pass
     finally:
         device.close()
         if output_file not in (sys.stdout, sys.stderr):
             output_file.close()
-        logger.info("Captured %d blocks", block_idx)
+        logger.info("Captured %d blocks", block_idx if 'block_idx' in locals()
+                     else 0)
 
 
 # Legacy alias

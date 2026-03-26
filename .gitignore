@@ -7,9 +7,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# C extensions
+*.so
+*.o
+
 # Distribution / packaging
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -33,21 +36,14 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+.pytest_cache/
 
 # virtualenv
 venv/
+.venv/
+env/
 ENV/
 
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-.venv/
-venv/
+# Tool caches
 .mypy_cache/
 .ruff_cache/
-.pytest_cache/
-*.so
-*.o

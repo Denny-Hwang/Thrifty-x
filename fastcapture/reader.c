@@ -1,5 +1,6 @@
+#include <stdlib.h>
+
 #include "reader.h"
-#include "rawconv.h"
 
 int reader_next(reader_t* reader) {
     if (reader->next) {
@@ -55,7 +56,7 @@ block_t * reader_block_new(size_t len) {
     // initial values
     block->index = -1;
     for (size_t i = 0; i < len; ++i) {
-        block->raw_samples[i] = RAWCONV_ZERO;
+        block->raw_samples[i] = 0;
     }
 
     return block;

@@ -235,7 +235,7 @@ def freq_shift(signal, shift):
     shift : float
         Number of (potentially fractional) shift to shift the signal by.
     """
-    freqs = np.arange(len(signal)) * 1. / len(signal) - 0.5
+    freqs = np.arange(len(signal)) * 1. / len(signal)
     shift_signal = np.exp(2j * np.pi * shift * freqs)
     shifted_time = signal * shift_signal
     shifted_fft = shifted_time.fft

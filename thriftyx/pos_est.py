@@ -77,7 +77,7 @@ def solve_numerically(tdoa_array, rx_pos):
     rx0 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx0']])
     rx1 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx1']])
 
-    x0 = [0.1, 0.1]
+    x0 = [0.1] * dims
 
     def model(pos):
         # position relative to {rx0, rx1}

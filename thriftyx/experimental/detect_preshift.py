@@ -64,7 +64,7 @@ class PreshiftDetector(Detector):
         self.frac_shift = None
         if interpolator is not None:
             self.sync.interpolator = interpolator
-        self.corr_shift = False
+        self.corr_shift = corr_shift
 
     def freq_shift_postpone(self, signal, shift):
         int_shift = int(np.round(shift))

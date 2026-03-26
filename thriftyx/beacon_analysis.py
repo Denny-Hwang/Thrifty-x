@@ -21,14 +21,15 @@ from thriftyx import toads_data
 
 
 SPEED_OF_LIGHT = 2.997e8
-SAMPLE_RATE = 2.4e6  # FIXME
-S2M = SPEED_OF_LIGHT / SAMPLE_RATE
 
 
-def plot(soa0, residuals, discontinuities, avg_snr=None):
-    s2m = 3e8 / 2.4e6  # FIXME
+def plot(soa0, residuals, discontinuities, avg_snr=None, sample_rate=6e6):
+    s2m = SPEED_OF_LIGHT / sample_rate
 
-    avg_snr_db = 10 * np.log10(avg_snr)
+    if avg_snr is None:
+        avg_snr_db = float('nan')
+    else:
+        avg_snr_db = 10 * np.log10(avg_snr)
 
     print("residuals: std dev = {:.01f} m; max = {:.01f} m; "
           "avg corr snr = {:.01f}"
@@ -38,7 +39,7 @@ def plot(soa0, residuals, discontinuities, avg_snr=None):
 
     plt.figure(figsize=(11, 6))
     plt.subplot(1, 2, 1)
-    plt.plot(soa0, residuals * S2M, '.-')
+    plt.plot(soa0, residuals * s2m, '.-')
     plt.title("Residuals")
     plt.xlabel("RX sample")
     plt.ylabel("Residual (samples)")

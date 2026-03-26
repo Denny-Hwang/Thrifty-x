@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 #include <airspy.h>
 
@@ -31,7 +32,8 @@
 typedef struct {
     struct airspy_device *device;
     circbuf_t            circbuf;
-    int                  running;
+    volatile int         running;
+    reader_t            *reader;   /* back-pointer for dispatch */
 } airspy_state_t;
 
 
@@ -45,26 +47,68 @@ static int _airspy_callback(airspy_transfer_t *transfer)
     int16_t *src = (int16_t *)transfer->samples;
     size_t   n   = (size_t)(transfer->sample_count) * 2; /* I and Q */
 
-    circbuf_write(&state->circbuf, src, n * sizeof(int16_t));
+    circbuf_put(&state->circbuf, (char *)src, n * sizeof(int16_t));
     return 0;
 }
 
 
 static int _reader_read_next(reader_t *reader)
 {
-    airspy_state_t *state = (airspy_state_t *)reader->ctx;
+    airspy_state_t *state = (airspy_state_t *)reader->context;
     size_t needed = (size_t)(reader->block_size) * 2 * sizeof(int16_t);
     int16_t *dst  = (int16_t *)reader->raw_samples;
 
-    while (circbuf_available(&state->circbuf) < needed) {
-        if (!state->running)
-            return -1;
-        /* Spin-wait — in production, use a condition variable */
-        struct timespec ts = {0, 1000000}; /* 1 ms */
-        nanosleep(&ts, NULL);
+    bool success = circbuf_get(&state->circbuf, (char *)dst, needed);
+    if (!success) {
+        return -1;
     }
-    circbuf_read(&state->circbuf, dst, needed);
     return 0;
+}
+
+
+static int _airspy_reader_next(void *context)
+{
+    /* The reader_t is found by offsetting from context -- but we stored
+       the reader pointer nowhere.  Instead, airspy_reader_open sets
+       reader->next to this function and reader->context to the state,
+       and the dispatch layer in reader.c calls reader->next(reader->context).
+       We need the reader_t* to call _reader_read_next.  So we store a
+       back-pointer in airspy_state_t. */
+    airspy_state_t *state = (airspy_state_t *)context;
+    /* We need the reader_t to call _reader_read_next.  We stored it
+       via the backpointer set in airspy_reader_open. */
+    return _reader_read_next(state->reader);
+}
+
+static int _airspy_reader_stop(void *context)
+{
+    airspy_state_t *state = (airspy_state_t *)context;
+    state->running = 0;
+    if (state->device) {
+        airspy_stop_rx(state->device);
+    }
+    circbuf_cancel(&state->circbuf);
+    return 0;
+}
+
+static void _airspy_reader_cancel(void *context)
+{
+    airspy_state_t *state = (airspy_state_t *)context;
+    state->running = 0;
+    circbuf_cancel(&state->circbuf);
+}
+
+static void _airspy_reader_free(void *context)
+{
+    airspy_state_t *state = (airspy_state_t *)context;
+    if (!state) return;
+    state->running = 0;
+    if (state->device) {
+        airspy_stop_rx(state->device);
+        airspy_close(state->device);
+    }
+    circbuf_free(&state->circbuf);
+    free(state);
 }
 
 
@@ -110,9 +154,15 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     circbuf_init(&state->circbuf, circbuf_size);
 
     state->running = 1;
-    reader->ctx        = state;
+    state->reader          = reader;
+    reader->context        = state;
     reader->read_next  = _reader_read_next;
     reader->sample_format = SAMPLE_FORMAT_INT16;
+    reader->next = (reader_func_t)_airspy_reader_next;
+    reader->start = NULL;
+    reader->stop = (reader_func_t)_airspy_reader_stop;
+    reader->cancel = (reader_func_void_t)_airspy_reader_cancel;
+    reader->free = (reader_func_void_t)_airspy_reader_free;
 
     ret = airspy_start_rx(state->device, _airspy_callback, state);
     if (ret != AIRSPY_SUCCESS) goto err;
@@ -130,8 +180,8 @@ err:
 
 void airspy_reader_close(reader_t *reader)
 {
-    if (!reader || !reader->ctx) return;
-    airspy_state_t *state = (airspy_state_t *)reader->ctx;
+    if (!reader || !reader->context) return;
+    airspy_state_t *state = (airspy_state_t *)reader->context;
     state->running = 0;
     if (state->device) {
         airspy_stop_rx(state->device);

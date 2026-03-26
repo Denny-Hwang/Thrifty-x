@@ -6,11 +6,14 @@
 circbuf_t* circbuf_new(size_t size) {
     circbuf_t *circbuf;
     circbuf = malloc(sizeof(circbuf_t));
-    if (circbuf == NULL || !circbuf_init(circbuf, size)) {
+    if (circbuf == NULL) {
         return NULL;
-    } else {
-        return circbuf;
     }
+    if (!circbuf_init(circbuf, size)) {
+        free(circbuf);
+        return NULL;
+    }
+    return circbuf;
 }
 
 bool circbuf_init(circbuf_t* circbuf, size_t size) {
@@ -45,7 +48,13 @@ bool circbuf_init(circbuf_t* circbuf, size_t size) {
     return true;
 
 fail:
-    // TODO: destroy mutex, conds and buffers
+    pthread_mutex_destroy(&circbuf->mutex);
+    pthread_cond_destroy(&circbuf->can_produce);
+    pthread_cond_destroy(&circbuf->can_consume);
+    if (circbuf->histogram != NULL)
+        free(circbuf->histogram);
+    if (circbuf->buf != NULL)
+        free(circbuf->buf);
     return false;
 }
 
@@ -156,7 +165,10 @@ void circbuf_cancel(circbuf_t* circbuf) {
     }
 
     pthread_mutex_lock(&circbuf->mutex);
-    if (circbuf->cancel) return;
+    if (circbuf->cancel) {
+        pthread_mutex_unlock(&circbuf->mutex);
+        return;
+    }
     circbuf->cancel = true;
     pthread_cond_signal(&circbuf->can_produce);
     pthread_cond_signal(&circbuf->can_consume);

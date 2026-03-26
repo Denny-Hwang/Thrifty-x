@@ -92,7 +92,7 @@ def freq_range(string):
     Examples
     --------
     >>> freq_range("10-20")
-    (100.0, 200.0, False)
+    (10.0, 20.0, False)
     >>> freq_range("100-200 hz")
     (100.0, 200.0, True)
     >>> freq_range("2 - 3 MHz")

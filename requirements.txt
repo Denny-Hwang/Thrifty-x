@@ -1,15 +1,15 @@
 # Core
-numpy
-scipy
+numpy>=1.23
+scipy>=1.9
 
 # Analysis
-matplotlib
+matplotlib>=3.6
 
 # Dev
-pytest
-flake8
-pylint>=1.4.3
-virtualenv
+pytest>=7.0
+pytest-cov
+mypy
+ruff
 
 # Docs
 Sphinx

@@ -245,7 +245,7 @@ def _main():
 
     parser.add_argument('toad_file', type=str, nargs='*', default="*.toad",
                         help="toad file(s) from receivers [default: *.toad]")
-    parser.add_argument('-o', '--output', type=argparse.FileType('wb'),
+    parser.add_argument('-o', '--output', type=argparse.FileType('w'),
                         default='data.toads',
                         help="output file [default: *.taods]")
     parser.add_argument('-m', '--map', type=argparse.FileType('r'),

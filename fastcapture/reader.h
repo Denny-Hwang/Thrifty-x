@@ -44,8 +44,7 @@ typedef int (*reader_func_t)(void* context);
 typedef int (*reader_read_next_t)(reader_t* reader);
 typedef void (*reader_func_void_t)(void* context);
 struct reader_t {
-    void* context;           /* Legacy context pointer */
-    void* ctx;               /* Airspy reader internal state */
+    void* context;           /* Context pointer (used by all readers) */
     reader_func_t next;
     reader_func_t start;
     reader_func_t stop;

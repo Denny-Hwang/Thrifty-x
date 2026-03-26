@@ -88,7 +88,7 @@ fargs_t* fargs_new() {
     fargs->threshold_const = DEFAULT_THRESHOLD_CONST;
     fargs->threshold_snr = DEFAULT_THRESHOLD_SNR;
     fargs->carrier_freq_min = DEFAULT_CARRIER_FREQ_MIN;
-    fargs->carrier_freq_max = DEFAULT_CARRIER_FREQ_MAX;;
+    fargs->carrier_freq_max = DEFAULT_CARRIER_FREQ_MAX;
     fargs->skip = DEFAULT_SKIP;
     
     fargs->input_file = default_input_file;
@@ -113,6 +113,7 @@ int fargs_parse_opt(fargs_t *fargs,
     switch (key) {
         case ARGP_KEY_CARD:
             fargs->input_card = true;
+            break;
         case 'i': fargs->input_file = arg; break;
         case 'm': fargs->wisdom_file = arg; break;
         case 'w':
@@ -131,19 +132,19 @@ int fargs_parse_opt(fargs_t *fargs,
             break;
         case 'b':
             fargs->block_len = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->block_len < 1) {
+            if (*endptr != '\0' || fargs->block_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
             break;
         case 'h':
             fargs->history_len = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->history_len < 1) {
+            if (*endptr != '\0' || fargs->history_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
             break;
         case 'k':
             fargs->skip = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->history_len < 1) {
+            if (*endptr != '\0') {
                 return FARGS_INVALID_VALUE;
             }
             break;
@@ -161,7 +162,7 @@ int fargs_parse_opt(fargs_t *fargs,
             break;
         case 'd':
             fargs->sdr_dev_index = strtoul(arg, &endptr, 10);
-            if (endptr == NULL) {
+            if (*endptr != '\0') {
                 return FARGS_INVALID_VALUE;
             }
             break;
