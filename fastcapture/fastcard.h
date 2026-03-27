@@ -1,7 +1,7 @@
 // Fast carrier detector API
 
-#ifndef FASTFARD_H
-#define FASTFARD_H
+#ifndef FASTCARD_H
+#define FASTCARD_H
 
 #ifdef __cplusplus
 extern "C"
@@ -56,4 +56,4 @@ void fastcard_print_stats(fastcard_t* fc, FILE* out);
 }
 #endif
 
-#endif /* FASTFARD_H */
+#endif /* FASTCARD_H */

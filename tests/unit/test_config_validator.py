@@ -113,13 +113,12 @@ def test_invalid_bit_depth():
         validate_config(config)
 
 
-def test_legacy_rtlsdr_warning():
-    """Legacy RTL-SDR sample rate should produce a warning, not an error."""
+def test_legacy_rtlsdr_rate_rejected():
+    """Legacy RTL-SDR sample rate should be rejected with an error."""
     config = _valid_mini_config()
     config['sample_rate'] = 2_400_000  # RTL-SDR default
-    warnings = validate_config(config)
-    assert len(warnings) > 0
-    assert any('legacy' in w.lower() or 'rtl' in w.lower() for w in warnings)
+    with pytest.raises(ConfigValidationError, match="RTL-SDR"):
+        validate_config(config)
 
 
 def test_minimal_config():

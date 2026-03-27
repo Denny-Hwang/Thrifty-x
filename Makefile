@@ -1,6 +1,6 @@
 # Makefile for common tasks
 
-.PHONE: help
+.PHONY: help
 help:
 	@echo "Please use \`make <target>' where <target> is one of"
 	@echo "  init       to initialize pip requirements"
@@ -20,8 +20,7 @@ test:
 
 .PHONY: lint
 lint:
-	flake8 thrifty/ tests/
-	pylint -rn thrifty/*.py tests/*.py
+	ruff check thriftyx/ tests/
 
 .PHONY: docs
 docs:
@@ -37,5 +36,5 @@ venv:
 	@echo "(refer to http://stackoverflow.com/a/31840553)"
 	@echo ""
 	virtualenv venv; . venv/bin/activate; make init; pip install -e .; deactivate
-	@echo "Run 'venv/bin/active' to enter the virtual environment"
-	@echo "Run 'deactive' to leave the virtual environment"
+	@echo "Run '. venv/bin/activate' to enter the virtual environment"
+	@echo "Run 'deactivate' to leave the virtual environment"

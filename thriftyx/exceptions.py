@@ -35,10 +35,23 @@ class ConfigError(ThriftyXError):
 
 class ConfigSyntaxError(ConfigError):
     """Malformed configuration file."""
+    def __init__(self, line_no, msg):
+        self.line_no = line_no
+        self.msg = msg
+        super().__init__("line #%d: %s" % (line_no, msg))
+
+    def __str__(self):
+        return "line #%d: %s" % (self.line_no, self.msg)
 
 
 class SettingKeyError(ConfigError):
     """Unknown setting key."""
+    def __init__(self, msg):
+        self.msg = msg
+        super().__init__(msg)
+
+    def __str__(self):
+        return repr(self.msg)
 
 
 class ConfigValidationError(ConfigError):

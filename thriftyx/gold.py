@@ -142,7 +142,7 @@ def _main():
     if args.stats:
         _print_stats(seq)
     else:
-        print(map(int, list(seq)))
+        print(list(map(int, list(seq))))
 
     if args.plot:
         plot(seq)

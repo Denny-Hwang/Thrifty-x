@@ -44,6 +44,7 @@ class MockSDRDevice(SDRDevice):
         self._vga_gain = 0
         self._bias_tee = False
         self._sample_count = 0
+        self._rng = np.random.default_rng(seed=42)
 
     def open(self) -> None:
         self._open = True
@@ -103,13 +104,12 @@ class MockSDRDevice(SDRDevice):
 
     def _generate_samples(self, num_samples: int) -> np.ndarray:
         """Generate synthetic int16 I/Q samples."""
-        rng = np.random.default_rng()
         n = np.arange(num_samples) + self._sample_count
         self._sample_count += num_samples
 
         # Noise
-        noise_i = rng.normal(0, self._noise_amplitude, num_samples)
-        noise_q = rng.normal(0, self._noise_amplitude, num_samples)
+        noise_i = self._rng.normal(0, self._noise_amplitude, num_samples)
+        noise_q = self._rng.normal(0, self._noise_amplitude, num_samples)
 
         # Carrier
         if self._carrier_amplitude > 0:

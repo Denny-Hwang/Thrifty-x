@@ -101,20 +101,26 @@ class DetectionResult:
 def _load_toads(stream, with_rxid=True, with_txid=True):
     """Load list of TOA detection serializations from a file."""
     toads = []
+    opened = False
     if isinstance(stream, str):
         stream = open(stream, 'r')
-    for i, line in enumerate(stream):
-        if len(line) == 0 or line[0] == '#':
-            continue
+        opened = True
+    try:
+        for i, line in enumerate(stream):
+            if len(line) == 0 or line[0] == '#':
+                continue
 
-        detection = DetectionResult.deserialize(line,
-                                                with_rxid=with_rxid,
-                                                with_txid=with_txid)
-        if detection is None:
-            print("WARNING: skipped line #{}: "
-                  "line's formatting is invalid".format(i+1))
-            continue
-        toads.append(detection)
+            detection = DetectionResult.deserialize(line,
+                                                    with_rxid=with_rxid,
+                                                    with_txid=with_txid)
+            if detection is None:
+                print("WARNING: skipped line #{}: "
+                      "line's formatting is invalid".format(i+1))
+                continue
+            toads.append(detection)
+    finally:
+        if opened:
+            stream.close()
     return toads
 
 

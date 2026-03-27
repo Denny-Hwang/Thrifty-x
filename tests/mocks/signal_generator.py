@@ -27,8 +27,9 @@ def add_noise(signal: np.ndarray, snr_db: float) -> np.ndarray:
     signal_power = np.mean(np.abs(signal) ** 2)
     snr_linear = 10 ** (snr_db / 10)
     noise_power = signal_power / snr_linear
-    noise = np.random.normal(0, np.sqrt(noise_power / 2), signal.shape) + \
-            1j * np.random.normal(0, np.sqrt(noise_power / 2), signal.shape)
+    rng = np.random.default_rng()
+    noise = rng.normal(0, np.sqrt(noise_power / 2), signal.shape) + \
+            1j * rng.normal(0, np.sqrt(noise_power / 2), signal.shape)
     return (signal + noise).astype(np.complex64)
 
 

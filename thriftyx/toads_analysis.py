@@ -140,7 +140,7 @@ def _plot_column_per_rx(splits, column, **kwargs):
 
 def plot_rxtx_matrix(fig, splits, func):
     rxids = list(splits.keys())
-    txids = list(np.unique(np.concatenate([tx.keys() for tx in splits.values()])))
+    txids = list(np.unique(np.concatenate([list(tx.keys()) for tx in splits.values()])))
     print(txids)
     shareax = None
     for rxid, rx_data in splits.items():

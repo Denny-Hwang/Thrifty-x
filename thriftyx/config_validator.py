@@ -55,14 +55,15 @@ def validate_config(config: dict) -> list[str]:
             valid_rates = AIRSPY_MINI_RATES
         else:
             valid_rates = AIRSPY_R2_RATES
-        if sample_rate not in valid_rates and sample_rate != _RTLSDR_LEGACY_RATE:
+        if sample_rate == _RTLSDR_LEGACY_RATE:
+            raise ConfigValidationError(
+                f"sample_rate {sample_rate} is a legacy RTL-SDR rate and is "
+                "not supported by Airspy hardware. "
+                f"Valid rates for {device_type}: {sorted(valid_rates)}")
+        if sample_rate not in valid_rates:
             raise ConfigValidationError(
                 f"sample_rate {sample_rate} not supported by {device_type}. "
                 f"Valid rates: {sorted(valid_rates)}")
-        if sample_rate == _RTLSDR_LEGACY_RATE:
-            warnings.append(
-                f"sample_rate {sample_rate} looks like a legacy RTL-SDR "
-                "default. Consider using 3000000 or 6000000 for Airspy Mini.")
 
     # 3. center_freq within 24 MHz – 1.8 GHz
     freq = config.get('tuner_freq')
@@ -93,11 +94,20 @@ def validate_config(config: dict) -> list[str]:
     # 6. carrier_window must fit within block_size/2 (Nyquist)
     carrier_window = config.get('carrier_window')
     if carrier_window is not None and block_size is not None:
-        # carrier_window is (start, stop, unit_hz) tuple
+        # carrier_window is (start, stop) or (start, stop, unit_hz) tuple
         if isinstance(carrier_window, (tuple, list)) and len(carrier_window) >= 2:
-            start_bin = carrier_window[0]
-            stop_bin = carrier_window[1]
-            if stop_bin > block_size // 2:
+            start_val = carrier_window[0]
+            stop_val = carrier_window[1]
+            unit_hz = (len(carrier_window) >= 3 and carrier_window[2])
+            if unit_hz:
+                # Values are in Hz; convert to bins before Nyquist check
+                if sample_rate is not None:
+                    stop_bin = int(stop_val * block_size / sample_rate)
+                else:
+                    stop_bin = None  # cannot check without sample_rate
+            else:
+                stop_bin = stop_val
+            if stop_bin is not None and stop_bin > block_size // 2:
                 warnings.append(
                     f"carrier_window stop bin {stop_bin} exceeds Nyquist "
                     f"({block_size // 2}). Check carrier_window setting.")

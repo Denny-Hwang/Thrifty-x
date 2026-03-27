@@ -310,14 +310,20 @@ def estimate_tdoas(detections, matches, window_size,
 
 
 def save_tdoa_groups(output, tdoa_groups):
+    opened = False
     if isinstance(output, str):
         output = open(output, 'w')
-    for group in tdoa_groups:
-        for tdoa in group.tdoas:
-            tdoa = tdoa.copy()
-            tdoa['tdoa'] *= 1e9
-            print(group.group_id, "%.06f" % group.timestamp, group.tx,
-                  *tdoa, file=output)
+        opened = True
+    try:
+        for group in tdoa_groups:
+            for tdoa in group.tdoas:
+                tdoa = tdoa.copy()
+                tdoa['tdoa'] *= 1e9
+                print(group.group_id, "%.06f" % group.timestamp, group.tx,
+                      *tdoa, file=output)
+    finally:
+        if opened:
+            output.close()
 
 
 def load_tdoa_matrix(fname):
@@ -390,7 +396,7 @@ def _main():
                              " used for estimating the TDOA of the mobile unit"
                              " transmission")
     parser.add_argument('-s', '--sample-rate', dest='sample_rate',
-                        type=float, default=2.4e6,
+                        type=float, default=6e6,
                         help="nominal sample rate of receivers")
     args = parser.parse_args()
 

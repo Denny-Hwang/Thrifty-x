@@ -51,9 +51,10 @@ def detect_all(cards, settings, detector=DEFAULT_DETECTOR):
     toad = []
     for rxid, card in cards.items():
         logging.info(" * Detect: RX #%d (%s)", rxid, card)
-        blocks = card_reader(open(card, 'r'))
-        det = detector(settings, blocks, rxid=rxid)
-        toad.extend([result for detected, result in det if detected])
+        with open(card, 'r') as card_file:
+            blocks = card_reader(card_file)
+            det = detector(settings, blocks, rxid=rxid)
+            toad.extend([result for detected, result in det if detected])
     return toad
 
 

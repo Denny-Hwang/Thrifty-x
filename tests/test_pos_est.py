@@ -1,7 +1,6 @@
-from __future__ import print_function
-
 import itertools
 import numpy as np
+import pytest
 from thriftyx import pos_est
 from thriftyx import tdoa_est
 
@@ -28,11 +27,19 @@ def gen_tdoa_data(rx_pos, tx_pos):
         tdoas.append((rx0, rx1, tdoa, 0, 0, 0, 0))
     return np.array(tdoas, dtype=tdoa_est.TDOA_DTYPE)
 
-tdoa_array = gen_tdoa_data(RX_POS, TX_POS)
-print(pos_est.solve_numerically(tdoa_array, RX_POS))  # TODO: assert all close
 
-rx_pairs = zip(tdoa_array['rx0'], tdoa_array['rx1'])
-print(pos_est.dop(TX_POS, RX_POS, rx_pairs))
+def test_solve_numerically():
+    tdoa_array = gen_tdoa_data(RX_POS, TX_POS)
+    position, residual = pos_est.solve_numerically(tdoa_array, RX_POS)
+    np.testing.assert_allclose(position, TX_POS, atol=1.0)
+    assert residual < 1.0
+
+
+def test_dop():
+    tdoa_array = gen_tdoa_data(RX_POS, TX_POS)
+    rx_pairs = list(zip(tdoa_array['rx0'], tdoa_array['rx1']))
+    dop_val = pos_est.dop(TX_POS, RX_POS, rx_pairs)
+    assert dop_val > 0
 
 
 def test_1d_dop():

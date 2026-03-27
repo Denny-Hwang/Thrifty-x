@@ -7,7 +7,7 @@
 
 #include "raw_reader.h"
 #include "card_reader.h"
-#include "rtlsdr_reader.h"
+#include "airspy_reader.h"
 
 
 fastcard_t* fastcard_new(fargs_t* args) {
@@ -19,7 +19,7 @@ fastcard_t* fastcard_new(fargs_t* args) {
     FILE* in;
     if (strlen(args->input_file) == 0 || strcmp(args->input_file, "-") == 0) {
         in = stdin;
-    } else if (strcmp(args->input_file, "rtlsdr") == 0) {
+    } else if (strcmp(args->input_file, "airspy") == 0) {
         in = NULL;
     } else {
         in = fopen(args->input_file, "rb");
@@ -38,6 +38,9 @@ fastcard_t* fastcard_new(fargs_t* args) {
 
     fastcard_t* fc = malloc(sizeof(fastcard_t));
     if (fc == NULL) {
+        if (in && in != stdin) {
+            fclose(in);
+        }
         return NULL;
     }
 
@@ -64,14 +67,33 @@ fastcard_t* fastcard_new(fargs_t* args) {
     reader_settings.history_size = args->history_len;
 
     if (in == NULL) {
-        rtlsdr_settings_t sdr_settings;
-        sdr_settings.sample_rate = args->sdr_sample_rate;
-        sdr_settings.gain = args->sdr_gain;
-        sdr_settings.frequency = args->sdr_freq;
-        sdr_settings.dev_index = args->sdr_dev_index;
+        airspy_reader_config_t sdr_config;
+        sdr_config.sample_rate = args->sdr_sample_rate;
+        sdr_config.center_freq = args->sdr_freq;
+        sdr_config.lna_gain = (uint8_t)args->sdr_gain;
+        sdr_config.mixer_gain = 0;
+        sdr_config.vga_gain = 0;
+        sdr_config.bias_tee = 0;
 
-        fc->reader = rtlsdr_reader_new(reader_settings, &sdr_settings);
-        args->sdr_gain = sdr_settings.gain;  // get exact gain
+        fc->reader = malloc(sizeof(reader_t));
+        if (fc->reader == NULL) {
+            goto fail;
+        }
+        memset(fc->reader, 0, sizeof(reader_t));
+        fc->reader->context = NULL;
+        fc->reader->next = NULL;
+        fc->reader->start = NULL;
+        fc->reader->stop = NULL;
+        fc->reader->cancel = NULL;
+        fc->reader->free = NULL;
+        fc->reader->block_size = args->block_len;
+        fc->reader->raw_samples = fc->data.block->raw_samples;
+
+        if (airspy_reader_open(&sdr_config, fc->reader) != 0) {
+            free(fc->reader);
+            fc->reader = NULL;
+            goto fail;
+        }
     } else {
         if (args->input_card) {
             fc->reader = card_reader_new(reader_settings, in);
@@ -123,7 +145,7 @@ void fastcard_free(fastcard_t* fc) {
     reader_block_free(fc->data.block);
     reader_free(fc->reader);
     fft_free(fc->samples_to_fft);
-    free(fc->data.fft_power);
+    volk_free(fc->data.fft_power);
     free(fc);
 }
 
@@ -204,8 +226,7 @@ void fastcard_cancel(fastcard_t* fc) {
 }
 
 void fastcard_print_stats(fastcard_t* fc, FILE* out) {
-    if (fc->in == NULL) {
-        // print SDR buffer histogram
-        rtlsdr_reader_print_histogram(fc->reader, out);
-    }
+    (void)fc;
+    (void)out;
+    // Airspy reader does not currently support histogram printing
 }

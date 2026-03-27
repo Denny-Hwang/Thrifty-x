@@ -5,7 +5,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='thriftyx',
-    version='0.1.0',
+    version='0.1.0',  # keep in sync with pyproject.toml and thriftyx/__init__.py
     description='Airspy-based TDOA positioning for wildlife tracking',
     author='Schalk-Willem Krüger, Sungjoo Hwang',
     python_requires=">=3.10",

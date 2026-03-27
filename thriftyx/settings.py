@@ -16,9 +16,11 @@ Example:
 
 
 import logging
+import sys
 from collections import namedtuple
 
 from thriftyx import setting_parsers
+from thriftyx.exceptions import ConfigError, ConfigSyntaxError, SettingKeyError
 
 
 # Setting definition
@@ -28,7 +30,7 @@ DEFINITIONS = {
     'sample_rate': Definition(
         ['--sample-rate', '-s'],
         setting_parsers.metric_float,
-        '2.4M',
+        '6M',
         "Sample rate (sps)"
     ),
 
@@ -160,32 +162,6 @@ CONFIG_DELIMITER = ':'
 CONFIG_DEST = 'config'
 
 
-class Error(Exception):
-    """Base class for settings-related exceptions."""
-    pass
-
-
-class ConfigSyntaxError(Error):
-    """Error raised when a config file's syntax is invalid."""
-    def __init__(self, line_no, msg):
-        Error.__init__(self)
-        self.line_no = line_no
-        self.msg = msg
-
-    def __str__(self):
-        return "line #%d: %s" % (self.line_no, self.msg)
-
-
-class SettingKeyError(Error):
-    """Error raised when a setting's definition does not exist."""
-    def __init__(self, msg):
-        Error.__init__(self)
-        self.msg = msg
-
-    def __str__(self):
-        return repr(self.msg)
-
-
 class Namespace(dict):
     """A hackish dict-like object with elements accessible as attributes.
 
@@ -304,7 +280,7 @@ def load_args(parser, keys, argv=None, definitions=None):
     if definitions is None:
         definitions = DEFINITIONS
     if argv is None:
-        argv = None
+        argv = sys.argv[1:]
 
     parser.add_argument('-v', '--verbose', help="Increase output verbosity",
                         action="store_true")
@@ -340,12 +316,16 @@ def load_args(parser, keys, argv=None, definitions=None):
         logging.info("Loaded config file from %s", config_arg)
     args.pop(CONFIG_DEST)
 
-    key_args = {k: v for k, v in args.items()
-                if k in keys and v is not None}
-    extra_args = {k: v for k, v in args.items() if k not in keys}
+    try:
+        key_args = {k: v for k, v in args.items()
+                    if k in keys and v is not None}
+        extra_args = {k: v for k, v in args.items() if k not in keys}
 
-    settings = load(key_args, config_file, definitions)
-    subset = {k: v for k, v in settings.items() if k in keys}
+        settings = load(key_args, config_file, definitions)
+        subset = {k: v for k, v in settings.items() if k in keys}
+    finally:
+        if config_file is not None:
+            config_file.close()
 
     settings_obj = Namespace(subset)
     args_obj = Namespace(extra_args)

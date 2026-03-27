@@ -125,7 +125,7 @@ def block_reader(stream, size, history, bit_depth=8):
     data : :class:`Signal`
     """
     new = size - history
-    data = np.zeros(size)
+    data = np.zeros(size, dtype=np.complex64)
     for block_idx, block in enumerate(_raw_block_reader(stream, new,
                                                           bit_depth=bit_depth)):
         new_data = raw_to_complex(block, bit_depth=bit_depth)
@@ -176,7 +176,13 @@ def card_reader(stream, bit_depth=None):
             continue
         if line.startswith('Using Volk machine:') or line.startswith('linux;'):
             continue
-        timestamp, idx, encoded = line.rstrip('\n').split(' ')
+        try:
+            timestamp, idx, encoded = line.rstrip('\n').split(' ')
+        except ValueError:
+            raise ValueError(
+                "Malformed .card line: expected 'timestamp index data', "
+                "got: {!r}".format(line.rstrip('\n'))
+            )
         raw_bytes = base64.b64decode(encoded)
 
         # Default: if not set from header, use bit_depth arg or fall back to 8

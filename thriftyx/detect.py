@@ -86,7 +86,7 @@ class Detector:
         return self.detect(*next(self.blocks))
 
     def __call__(self, timestamp, block_idx, block):
-        self.detect(timestamp, block_idx, block)
+        return self.detect(timestamp, block_idx, block)
 
     def __iter__(self):
         return self

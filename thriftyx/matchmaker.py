@@ -63,7 +63,7 @@ def match_toads(toads, window, min_match=2):
                 break
             killed[j] = True
 
-            if toads[j].rxid in rx_match != -1:
+            if toads[j].rxid in rx_match:
                 prev = rx_match[toads[j].rxid]
                 collisions.append((prev, j))
                 prev_ampl = toads[prev].corr_info.energy
@@ -86,13 +86,19 @@ def match_toads(toads, window, min_match=2):
 def load_matches(file_):
     """Load match data from .match file."""
     matches = []
+    opened = False
     if isinstance(file_, str):
         file_ = open(file_, 'r')
-    for line in file_:
-        if len(line) == 0 or line[0] == '#':
-            continue
-        match = map(int, line.split())
-        matches.append(match)
+        opened = True
+    try:
+        for line in file_:
+            if len(line) == 0 or line[0] == '#':
+                continue
+            match = list(map(int, line.split()))
+            matches.append(match)
+    finally:
+        if opened:
+            file_.close()
     return matches
 
 
@@ -128,7 +134,7 @@ def _main():
                         type=argparse.FileType('rb'), default='data.toads',
                         help=".toads data (\'-\' streams from stdin)")
     parser.add_argument('-o', '--output', dest='output',
-                        type=argparse.FileType('wb'), default='data.match',
+                        type=argparse.FileType('w'), default='data.match',
                         help="output file (\'-\' for stdout)")
     parser.add_argument('-w', '--window', dest='window', type=float,
                         default=0.2,

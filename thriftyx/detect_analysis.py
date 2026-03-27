@@ -16,14 +16,24 @@ from collections import namedtuple
 
 from matplotlib.backend_bases import key_press_handler
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg
-from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 
 import numpy as np
 
-from PyQt4 import QtGui as qt
-from PyQt4 import QtCore
+try:
+    from PyQt5 import QtWidgets as qt
+    from PyQt5 import QtCore
+except ImportError:
+    try:
+        from PyQt6 import QtWidgets as qt
+        from PyQt6 import QtCore
+    except ImportError:
+        raise ImportError(
+            "Neither PyQt5 nor PyQt6 is installed. "
+            "Please install one of them: pip install PyQt5 or pip install PyQt6"
+        )
 
 from thriftyx.settings import load_args
 from thriftyx.signal_utils import Signal
@@ -276,7 +286,7 @@ class Plotter:
         self._plot_fft_window(ax, zoom_to_window, zoom_padding)
         ax.legend(loc='best')
         ax.set_title('Unsynchronised FFT' +
-                     ' (window)' if zoom_to_window else '')
+                     (' (window)' if zoom_to_window else ''))
 
     def plot_unsynced_fft_window(self, ax, zoom_padding=10):
         """Plot the carrier detection window within the FFT."""
@@ -300,7 +310,7 @@ class Plotter:
         self._plot_fft_window(ax, zoom_to_window, zoom_padding)
         ax.legend(loc='best')
         ax.set_title('FFT after sinc match filter' +
-                     ' (window)' if zoom_to_window else '')
+                     (' (window)' if zoom_to_window else ''))
 
     def _plot_carrier_interpolation(self, ax, indices, offset,
                                     peak_mag, **kwargs):

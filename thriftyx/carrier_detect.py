@@ -152,7 +152,7 @@ def _window_peak(fft_mag, window, peak_filter):
 
     peak_idx = max_idx - filter_delay
     peak_idx += start_idx
-    if peak_idx > len(fft_mag):
+    if peak_idx >= len(fft_mag):
         peak_idx -= len(fft_mag)
 
     return peak_idx, peak_mag

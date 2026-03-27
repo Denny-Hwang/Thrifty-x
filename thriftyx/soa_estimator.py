@@ -151,7 +151,7 @@ def parabolic_interpolation(corr_mag, peak_idx):
     """Sub-sample SoA estimation using parabolic interpolation."""
     # pylint: disable=invalid-name
     if peak_idx == 0 or peak_idx == len(corr_mag) - 1:
-        logging.warn("Parabolic interpolation failed: peak_idx out of bounds."
+        logging.warning("Parabolic interpolation failed: peak_idx out of bounds."
                      " Please ensure history_len >= template_len + 1.")
         return 0
 
@@ -164,7 +164,7 @@ def gaussian_interpolation(corr_mag, peak_idx):
     """Sub-sample SoA estimation using Gaussian interpolation."""
     # pylint: disable=invalid-name
     if peak_idx == 0 or peak_idx == len(corr_mag) - 1:
-        logging.warn("Gaussian interpolation failed: peak_idx out of bounds."
+        logging.warning("Gaussian interpolation failed: peak_idx out of bounds."
                      " Please ensure history_len >= template_len + 1.")
         return 0
 
