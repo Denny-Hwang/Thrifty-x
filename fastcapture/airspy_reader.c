@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #include <airspy.h>
@@ -32,7 +33,7 @@
 typedef struct {
     struct airspy_device *device;
     circbuf_t            circbuf;
-    volatile int         running;
+    atomic_int           running;
     reader_t            *reader;   /* back-pointer for dispatch */
 } airspy_state_t;
 
@@ -40,7 +41,7 @@ typedef struct {
 static int _airspy_callback(airspy_transfer_t *transfer)
 {
     airspy_state_t *state = (airspy_state_t *)transfer->ctx;
-    if (!state->running || transfer->sample_count <= 0)
+    if (!atomic_load(&state->running) || transfer->sample_count <= 0)
         return 0;
 
     /* Samples are 12-bit signed, packed in int16 (lower 12 bits valid) */
@@ -83,7 +84,7 @@ static int _airspy_reader_next(void *context)
 static int _airspy_reader_stop(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
-    state->running = 0;
+    atomic_store(&state->running, 0);
     if (state->device) {
         airspy_stop_rx(state->device);
     }
@@ -94,7 +95,7 @@ static int _airspy_reader_stop(void *context)
 static void _airspy_reader_cancel(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
-    state->running = 0;
+    atomic_store(&state->running, 0);
     circbuf_cancel(&state->circbuf);
 }
 
@@ -102,7 +103,7 @@ static void _airspy_reader_free(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
     if (!state) return;
-    state->running = 0;
+    atomic_store(&state->running, 0);
     if (state->device) {
         airspy_stop_rx(state->device);
         airspy_close(state->device);
@@ -153,7 +154,7 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     size_t circbuf_size = (size_t)(reader->block_size) * 4 * 2 * sizeof(int16_t);
     circbuf_init(&state->circbuf, circbuf_size);
 
-    state->running = 1;
+    atomic_store(&state->running, 1);
     state->reader          = reader;
     reader->context        = state;
     reader->read_next  = _reader_read_next;
@@ -182,7 +183,7 @@ void airspy_reader_close(reader_t *reader)
 {
     if (!reader || !reader->context) return;
     airspy_state_t *state = (airspy_state_t *)reader->context;
-    state->running = 0;
+    atomic_store(&state->running, 0);
     if (state->device) {
         airspy_stop_rx(state->device);
         airspy_close(state->device);

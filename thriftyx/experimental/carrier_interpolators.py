@@ -74,7 +74,7 @@ def gaussian(fft_mag, peak):
     return offset
 
 
-def make_parabole_fit(width):
+def make_parabola_fit(width):
     def _interpolator(fft_mag, peak):
         xdata = np.array(np.arange(-(width//2), width//2+1))
         ydata = fft_mag[peak + xdata]

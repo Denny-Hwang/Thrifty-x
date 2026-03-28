@@ -54,7 +54,8 @@ int cardet_normalize_window(cardet_settings_t *settings) {
         settings->carrier_freq_max = settings->fft_len +
                                      settings->carrier_freq_max;
     }
-    if ((size_t)settings->carrier_freq_min >= settings->fft_len
+    if (settings->carrier_freq_min < 0 || settings->carrier_freq_max < 0
+            || (size_t)settings->carrier_freq_min >= settings->fft_len
             || (size_t)settings->carrier_freq_max >= settings->fft_len) {
         // TODO: don't print in library: report error string to caller
         fprintf(stderr, "Carrier frequency window out of range.\n");

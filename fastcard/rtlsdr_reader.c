@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <rtl-sdr.h>
 
@@ -20,9 +21,7 @@ typedef struct {
     rtlsdr_dev_t *sdr;
     circbuf_t* circbuf;
     pthread_t sdr_thread;
-    // WARNING: keep_running is accessed by multiple threads without a mutex.
-    // FIXME: potential race condition
-    bool volatile sdr_running;
+    atomic_bool sdr_running;
     bool cancelled;
     int return_code;
 
@@ -60,7 +59,7 @@ static int nearest_gain(rtlsdr_dev_t *dev, int target_gain) {
 static void sdr_callback(unsigned char *buf, uint32_t len, void *ctx) {
     if (ctx) {
         rtlsdr_reader_t* state = (rtlsdr_reader_t*) ctx;
-        if (!state->sdr_running) return;
+        if (!atomic_load(&state->sdr_running)) return;
 
         bool have_timestamp = false;
 
@@ -105,7 +104,7 @@ static void *sdr_routine(void * args) {
             state->sdr, sdr_callback, (void *)state,
             RTLSDR_BUF_NUM, RTLSDR_BUF_LENGTH);
 
-    if (state->sdr_running) {
+    if (atomic_load(&state->sdr_running)) {
         // Premature exit -- an error occurred
         circbuf_cancel(state->circbuf);
     } else {
@@ -176,14 +175,14 @@ int rtlsdr_reader_start(rtlsdr_reader_t* state) {
         return -1;
     }
 
-    state->sdr_running = true;
+    atomic_store(&state->sdr_running, true);
     state->return_code = 0;
 
     return 0;
 }
 
 int rtlsdr_reader_stop(rtlsdr_reader_t* state) {
-    state->sdr_running = false;
+    atomic_store(&state->sdr_running, false);
     circbuf_cancel(state->circbuf); // deadlock
     rtlsdr_cancel_async(state->sdr);
 
@@ -217,7 +216,7 @@ reader_t * rtlsdr_reader_new(reader_settings_t reader_settings,
     state->settings = reader_settings;
     state->sdr = NULL;
     state->circbuf = NULL;
-    state->sdr_running = false;
+    atomic_store(&state->sdr_running, false);
     state->return_code = 0;
     state->cancelled = false;
     state->wip_block = NULL;
@@ -296,7 +295,7 @@ reader_t * rtlsdr_reader_new(reader_settings_t reader_settings,
     state->circbuf = circbuf_new(CIRCBUF_SIZE);
     if (state->circbuf == NULL) {
         fprintf(stderr, "Failed to create circular buffer\n");
-        return false;
+        goto fail;
     }
 
     return reader;

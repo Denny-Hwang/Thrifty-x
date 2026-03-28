@@ -20,8 +20,11 @@ import argparse
 from collections import defaultdict
 import glob
 import itertools
+import logging
 
 import numpy as np
+
+UNIDENTIFIED_TX = -1
 
 from thriftyx import toads_data
 from thriftyx.settings import parse_kvconfig
@@ -111,11 +114,14 @@ def classify_transmitters(detections, freqmap):
     txids = []
     for detection in detections:
         freq = detection.carrier_info.bin + detection.carrier_info.offset
-        this_txid = -1  # unidentifier (FIXME: don't use magic number)
+        this_txid = UNIDENTIFIED_TX
         for txid, range_ in freqmap[detection.rxid].items():
             start, stop = range_
             if freq >= start and freq <= stop:
                 this_txid = txid
+        if this_txid == UNIDENTIFIED_TX:
+            logging.warning("Failed to classify transmitter for detection "
+                            "at freq=%.2f on rxid=%s", freq, detection.rxid)
         txids.append(this_txid)
     return txids
 

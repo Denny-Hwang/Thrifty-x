@@ -9,10 +9,10 @@ from tabulate import tabulate
 import numpy as np
 import matplotlib.pyplot as plt
 
-from thrifty import toads_data
-from thrifty import matchmaker
-from thrifty import tdoa_est
-from thrifty import stat_tools
+from thriftyx import toads_data
+from thriftyx import matchmaker
+from thriftyx import tdoa_est
+from thriftyx import stat_tools
 
 MATCH_WINDOW = 0.2
 WINDOW_SIZE = 4

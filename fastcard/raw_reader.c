@@ -40,7 +40,10 @@ int raw_reader_next(raw_reader_t* state) {
 
     // Capture metadata
     output->index++;
-    gettimeofday(&output->timestamp, NULL);
+    if (gettimeofday(&output->timestamp, NULL) != 0) {
+        perror("gettimeofday failed");
+        return -1;
+    }
 
     return 0;
 }

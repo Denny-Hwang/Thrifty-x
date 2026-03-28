@@ -16,8 +16,8 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
-from thrifty import matchmaker
-from thrifty import toads_data
+from thriftyx import matchmaker
+from thriftyx import toads_data
 
 
 def is_outlier(points, thresh=3.5):

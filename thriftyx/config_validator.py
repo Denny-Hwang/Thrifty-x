@@ -86,6 +86,10 @@ def validate_config(config: dict) -> list[str]:
     history = config.get('block_history')
     if history is not None and block_size is not None:
         history = int(history)
+        if history < 1:
+            raise ConfigValidationError(
+                f"block_history ({history}) must be >= 1 to avoid "
+                f"division by zero")
         if history >= block_size:
             raise ConfigValidationError(
                 f"block_history ({history}) must be less than "

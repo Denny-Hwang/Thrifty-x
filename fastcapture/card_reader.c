@@ -66,7 +66,8 @@ int card_reader_next(card_reader_t* state) {
     }
 
     // fgets will terminate string
-    unsigned long num = Base64decode((char*)output->raw_samples, state->base64);
+    unsigned long num = Base64decode((char*)output->raw_samples, state->base64,
+                                     2*state->settings.block_size);
     if (num != 2*state->settings.block_size) {
         fprintf(stderr, "card_reader: block length is %ld, expected %zu\n",
                 num,

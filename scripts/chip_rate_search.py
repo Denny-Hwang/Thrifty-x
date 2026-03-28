@@ -10,11 +10,11 @@ import argparse
 import numpy as np
 import scipy
 
-from thrifty.carrier_sync import DefaultSynchronizer
-from thrifty.soa_estimator import SoaEstimator
-from thrifty.block_data import card_reader
-from thrifty.setting_parsers import metric_float
-from thrifty import template_generate
+from thriftyx.carrier_sync import DefaultSynchronizer
+from thriftyx.soa_estimator import SoaEstimator
+from thriftyx.block_data import card_reader
+from thriftyx.setting_parsers import metric_float
+from thriftyx import template_generate
 
 
 def search(fft, initial_chip_rate, bit_length, code_index, sample_rate):
