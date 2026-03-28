@@ -9,6 +9,7 @@
 """Data structures and utility functions for working with .toad(s) files."""
 
 from collections import namedtuple
+import logging
 
 import numpy as np
 
@@ -114,8 +115,8 @@ def _load_toads(stream, with_rxid=True, with_txid=True):
                                                     with_rxid=with_rxid,
                                                     with_txid=with_txid)
             if detection is None:
-                print("WARNING: skipped line #{}: "
-                      "line's formatting is invalid".format(i+1))
+                logging.warning("skipped line #%d: "
+                               "line's formatting is invalid", i+1)
                 continue
             toads.append(detection)
     finally:

@@ -13,8 +13,8 @@ import argparse
 
 import numpy as np
 
-from thrifty import settings
-from thrifty.block_data import block_reader
+from thriftyx import settings
+from thriftyx.block_data import block_reader
 
 
 def _main():

@@ -27,7 +27,7 @@ fft_state_t * fft_new(size_t fft_len,
     state->output = (fcomplex*) fftwf_malloc(num_bytes);
 
     if (state->input == NULL || state->output == NULL) {
-        // fprintf(stderr, "init fft malloc failed\n");
+        fprintf(stderr, "init fft malloc failed\n");
         goto fail;
     }
 
@@ -39,7 +39,7 @@ fft_state_t * fft_new(size_t fft_len,
                                     forward ? FFTW_FORWARD : FFTW_BACKWARD,
                                     FFTW_MEASURE);
     if (state->plan == NULL) {
-        // fprintf(stderr, "failed to create fft plan\n");
+        fprintf(stderr, "failed to create fft plan\n");
         goto fail;
     }
 

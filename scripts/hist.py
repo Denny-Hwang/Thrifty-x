@@ -15,8 +15,8 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
-from thrifty import settings
-from thrifty.block_data import block_reader, complex_to_raw
+from thriftyx import settings
+from thriftyx.block_data import block_reader, complex_to_raw
 
 
 def _main():

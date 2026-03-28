@@ -38,6 +38,9 @@ fastcard_t* fastcard_new(fargs_t* args) {
 
     fastcard_t* fc = malloc(sizeof(fastcard_t));
     if (fc == NULL) {
+        if (in != NULL && in != stdin) {
+            fclose(in);
+        }
         return NULL;
     }
 

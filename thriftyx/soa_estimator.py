@@ -122,7 +122,7 @@ class SoaEstimator:
         # Subtract twice the peak power to compensate for both the correlation
         # peak's energy and the energy of the unmodulated carrier.
         peak_power = peak_mag**2
-        noise_power = (signal_corr_energy - peak_power) / len(fft)
+        noise_power = max(0, (signal_corr_energy - peak_power) / len(fft))
         noise_rms = np.sqrt(noise_power)
         return noise_rms
 

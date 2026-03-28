@@ -131,19 +131,19 @@ int fargs_parse_opt(fargs_t *fargs,
             break;
         case 'b':
             fargs->block_len = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->block_len < 1) {
+            if (*endptr != '\0' || fargs->block_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
             break;
         case 'h':
             fargs->history_len = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->history_len < 1) {
+            if (*endptr != '\0' || fargs->history_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
             break;
         case 'k':
             fargs->skip = strtoul(arg, &endptr, 10);
-            if (endptr == NULL || fargs->history_len < 1) {
+            if (*endptr != '\0' || fargs->skip < 1) {
                 return FARGS_INVALID_VALUE;
             }
             break;
@@ -161,7 +161,7 @@ int fargs_parse_opt(fargs_t *fargs,
             break;
         case 'd':
             fargs->sdr_dev_index = strtoul(arg, &endptr, 10);
-            if (endptr == NULL) {
+            if (*endptr != '\0') {
                 return FARGS_INVALID_VALUE;
             }
             break;

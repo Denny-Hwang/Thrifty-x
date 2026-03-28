@@ -15,6 +15,7 @@ Example:
 """
 
 
+import contextlib
 import logging
 import sys
 from collections import namedtuple
@@ -299,30 +300,29 @@ def load_args(parser, keys, argv=None, definitions=None):
     # Load config file
     config_file = None
     config_arg = args[CONFIG_DEST]
-    if config_arg is None:
-        try:
-            config_file = open(DEFAULT_CONFIG_PATH)
-            logging.info("Loaded default config file from %s",
-                         DEFAULT_CONFIG_PATH)
-        except IOError:
-            # Do not throw IOError if the config file has not been
-            # specified explicitly.
-            logging.warning("No config file found. Using default values.")
-    else:
-        config_file = open(config_arg)
-        logging.info("Loaded config file from %s", config_arg)
     args.pop(CONFIG_DEST)
 
-    try:
+    with contextlib.ExitStack() as stack:
+        if config_arg is None:
+            try:
+                config_file = stack.enter_context(
+                    open(DEFAULT_CONFIG_PATH))
+                logging.info("Loaded default config file from %s",
+                             DEFAULT_CONFIG_PATH)
+            except IOError:
+                # Do not throw IOError if the config file has not been
+                # specified explicitly.
+                logging.warning("No config file found. Using default values.")
+        else:
+            config_file = stack.enter_context(open(config_arg))
+            logging.info("Loaded config file from %s", config_arg)
+
         key_args = {k: v for k, v in args.items()
                     if k in keys and v is not None}
         extra_args = {k: v for k, v in args.items() if k not in keys}
 
         settings = load(key_args, config_file, definitions)
         subset = {k: v for k, v in settings.items() if k in keys}
-    finally:
-        if config_file is not None:
-            config_file.close()
 
     settings_obj = Namespace(subset)
     args_obj = Namespace(extra_args)

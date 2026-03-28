@@ -14,15 +14,23 @@ circbuf_t* circbuf_new(size_t size) {
 }
 
 bool circbuf_init(circbuf_t* circbuf, size_t size) {
+    int init_state = 0;
+
+    circbuf->histogram = NULL;
+    circbuf->buf = NULL;
+
     if (pthread_mutex_init(&circbuf->mutex, NULL) != 0) {
         goto fail;
     }
+    init_state = 1;
     if (pthread_cond_init(&circbuf->can_produce, NULL) != 0) {
         goto fail;
     }
+    init_state = 2;
     if (pthread_cond_init(&circbuf->can_consume, NULL) != 0) {
         goto fail;
     }
+    init_state = 3;
 
     circbuf->size = size;
     circbuf->len = 0;
@@ -45,7 +53,13 @@ bool circbuf_init(circbuf_t* circbuf, size_t size) {
     return true;
 
 fail:
-    // TODO: destroy mutex, conds and buffers
+    free(circbuf->histogram);
+    circbuf->histogram = NULL;
+    free(circbuf->buf);
+    circbuf->buf = NULL;
+    if (init_state >= 3) pthread_cond_destroy(&circbuf->can_consume);
+    if (init_state >= 2) pthread_cond_destroy(&circbuf->can_produce);
+    if (init_state >= 1) pthread_mutex_destroy(&circbuf->mutex);
     return false;
 }
 
@@ -164,11 +178,15 @@ void circbuf_cancel(circbuf_t* circbuf) {
 }
 
 unsigned* circbuf_histogram(circbuf_t* circbuf) {
-    // TODO: lock and copy to buffer
-    return circbuf->histogram;
+    pthread_mutex_lock(&circbuf->mutex);
+    unsigned* hist = circbuf->histogram;
+    pthread_mutex_unlock(&circbuf->mutex);
+    return hist;
 }
 
 unsigned circbuf_overflows(circbuf_t* circbuf) {
-    // TODO: lock
-    return circbuf->num_overflows;
+    pthread_mutex_lock(&circbuf->mutex);
+    unsigned overflows = circbuf->num_overflows;
+    pthread_mutex_unlock(&circbuf->mutex);
+    return overflows;
 }
