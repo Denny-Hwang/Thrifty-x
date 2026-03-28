@@ -71,9 +71,9 @@ fastcard_t* fastcard_new(fargs_t* args) {
         sdr_config.sample_rate = args->sdr_sample_rate;
         sdr_config.center_freq = args->sdr_freq;
         sdr_config.lna_gain = (uint8_t)args->sdr_gain;
-        sdr_config.mixer_gain = 0;
-        sdr_config.vga_gain = 0;
-        sdr_config.bias_tee = 0;
+        sdr_config.mixer_gain = args->sdr_mixer_gain;
+        sdr_config.vga_gain = args->sdr_vga_gain;
+        sdr_config.bias_tee = args->sdr_bias_tee;
 
         fc->reader = malloc(sizeof(reader_t));
         if (fc->reader == NULL) {

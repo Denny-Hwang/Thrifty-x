@@ -13,7 +13,8 @@ from thriftyx.exceptions import ConfigValidationError
 AIRSPY_MINI_RATES = frozenset({3_000_000, 6_000_000})
 AIRSPY_R2_RATES = frozenset({2_500_000, 10_000_000})
 DEVICE_FREQ_RANGE = (24_000_000, 1_800_000_000)
-GAIN_LIMITS = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
+GAIN_LIMITS_MINI = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
+GAIN_LIMITS_R2 = {'lna': (0, 15), 'mixer': (0, 15), 'vga': (0, 15)}
 
 # Legacy RTL-SDR default sample rate
 _RTLSDR_LEGACY_RATE = 2_400_000
@@ -117,7 +118,8 @@ def validate_config(config: dict) -> list[str]:
                     f"({block_size // 2}). Check carrier_window setting.")
 
     # 7. Gain values within device-specific ranges
-    for gain_type, (min_v, max_v) in GAIN_LIMITS.items():
+    gain_limits = GAIN_LIMITS_R2 if device_type == 'airspy_r2' else GAIN_LIMITS_MINI
+    for gain_type, (min_v, max_v) in gain_limits.items():
         val = config.get(f'{gain_type}_gain')
         if val is not None:
             val = int(val)
