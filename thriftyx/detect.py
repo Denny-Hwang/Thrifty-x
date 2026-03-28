@@ -63,7 +63,10 @@ class Detector:
 
     def detect(self, timestamp, block_idx, block):
         """Process the given block of data."""
-        assert len(block) == self.settings.block_len
+        if len(block) != self.settings.block_len:
+            raise ValueError(
+                f"Block length {len(block)} does not match expected "
+                f"{self.settings.block_len}")
         shifted_fft, carrier_info = self.sync(block)
 
         if shifted_fft is not None:  # detected

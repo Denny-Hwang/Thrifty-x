@@ -6,7 +6,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Calculate stats on data in .toads file.'"""
+"""Calculate stats on data in .toads file."""
 
 
 import argparse

@@ -290,10 +290,7 @@ def load_args(parser, keys, argv=None, definitions=None):
                         help="Config file to load settings from "
                              "[default: {}]".format(DEFAULT_CONFIG_PATH))
     add_argparse_arguments(parser, keys, definitions=definitions)
-    if argv is None:
-        args_namespace = parser.parse_args()
-    else:
-        args_namespace = parser.parse_args(argv)
+    args_namespace = parser.parse_args(argv)
     args = vars(args_namespace)
 
     if args['verbose']:

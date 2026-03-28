@@ -16,7 +16,7 @@ init:
 
 .PHONY: test
 test:
-	py.test tests
+	pytest tests
 
 .PHONY: lint
 lint:

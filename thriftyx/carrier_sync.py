@@ -187,7 +187,10 @@ def make_dirichlet_interpolator(block_len, carrier_len,
 
     def _interpolator(fft_mag, peak_idx):
         """Curve fitting of Dirichlet kernel to FFT."""
-        xdata = np.array(np.arange(-(width//2), width//2+1))
+        half = width // 2
+        if peak_idx < half or peak_idx + half >= len(fft_mag):
+            return (fft_mag[peak_idx], 0) if return_amplitude else 0
+        xdata = np.array(np.arange(-half, half+1))
         ydata = fft_mag[peak_idx + xdata]
         initial_guess = (fft_mag[peak_idx], 0)
         popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess)
@@ -203,8 +206,13 @@ def make_dirichlet_interpolator(block_len, carrier_len,
 def parabolic_interpolator(fft_mag, peak_idx):
     """Estimate sub-bin carrier frequency by fitting a parabola."""
     # pylint: disable=invalid-name
+    if peak_idx == 0 or peak_idx >= len(fft_mag) - 1:
+        return 0
     a, b, c = fft_mag[peak_idx-1], fft_mag[peak_idx], fft_mag[peak_idx+1]
-    offset = (c - a) / (4*b - 2*a - 2*c)
+    denom = 4*b - 2*a - 2*c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = (c - a) / denom
     return offset
 
 
@@ -213,9 +221,14 @@ def make_polyfit_interpolator(width):
     polyfit."""
 
     def _interpolator(fft_mag, peak_idx):
-        xdata = np.array(np.arange(-(width//2), width//2+1))
+        half = width // 2
+        if peak_idx < half or peak_idx + half >= len(fft_mag):
+            return 0
+        xdata = np.array(np.arange(-half, half+1))
         ydata = fft_mag[peak_idx + xdata]
         coeffs = np.polyfit(xdata, ydata, 2)
+        if abs(coeffs[0]) < 1e-12:
+            return 0
         offset = -coeffs[1] / coeffs[0] / 2
 
         return offset

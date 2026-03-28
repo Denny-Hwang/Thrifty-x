@@ -46,7 +46,9 @@ class TemplateShifts:
         self.num = num
 
     def get_nearest(self, shift):
-        assert shift >= -0.5 and shift <= 0.5
+        if shift is None:
+            shift = 0
+        shift = max(-0.5, min(0.5, shift))
         idx = int(np.round((shift + 0.5) * (self.num - 1)))
         return self.ffts[idx]
 

@@ -108,7 +108,7 @@ def _estimate_noise(fft_mag, peak_mag):
     # correlation peak's energy and the energy of the unmodulated carrier.
     peak_power = peak_mag**2
     noise_power = (fft_energy - 2*peak_power) / (len(fft_mag) - 1)
-    return np.sqrt(noise_power)
+    return np.sqrt(max(0, noise_power))
 
 
 def _calculate_threshold(fft_mag, thresh_coeffs, noise_rms):

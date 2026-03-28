@@ -765,8 +765,12 @@ def _main():
         for detection in detections:
             npz = "{}_{}.npz".format(args.save,
                                      detection.result.block)
-            carrier_info = dict(detection.result.carrier_info._asdict())
-            corr_info = dict(detection.result.corr_info._asdict())
+            carrier_info = (dict(detection.result.carrier_info._asdict())
+                            if detection.result.carrier_info is not None
+                            else {})
+            corr_info = (dict(detection.result.corr_info._asdict())
+                         if detection.result.corr_info is not None
+                         else {})
             np.savez(npz,
                      unsynced=detection.unsynced,
                      synced=detection.synced,

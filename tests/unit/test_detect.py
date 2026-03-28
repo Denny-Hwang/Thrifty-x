@@ -39,6 +39,10 @@ def test_detector_callable_returns_result(detector_settings):
     result_call = detector(0.0, 0, block)
     assert result_call is not None
     assert len(result_call) == 2  # (detected, result)
+    detected, result = result_call
+    assert isinstance(bool(detected), bool)
+    assert result is not None
+    assert hasattr(result, 'carrier_info')
 
 
 def test_detector_no_signal(detector_settings):

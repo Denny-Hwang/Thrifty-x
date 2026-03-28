@@ -41,25 +41,44 @@ def none(corr_mag, peak):
 
 
 def parabolic(corr_mag, peak):
+    if peak == 0 or peak >= len(corr_mag) - 1:
+        return 0
     a, b, c = corr_mag[peak-1], corr_mag[peak], corr_mag[peak+1]
-    offset = 0.5 * (c - a) / (2 * b - a - c)
+    denom = 2 * b - a - c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = 0.5 * (c - a) / denom
     return offset
 
 
 def gaussian(corr_mag, peak):
+    if peak == 0 or peak >= len(corr_mag) - 1:
+        return 0
     a, b, c = corr_mag[peak-1], corr_mag[peak], corr_mag[peak+1]
+    if a <= 0 or b <= 0 or c <= 0:
+        return 0
     a, b, c = np.log(a), np.log(b), np.log(c)
-    offset = 0.5 * (c - a) / (2 * b - a - c)
+    denom = 2 * b - a - c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = 0.5 * (c - a) / denom
     return offset
 
 
 def cosine(corr_mag, peak):
+    if peak == 0 or peak >= len(corr_mag) - 1:
+        return 0
     a, b, c = corr_mag[peak-1], corr_mag[peak], corr_mag[peak+1]
+    if abs(2*b) < 1e-12:
+        return 0
     cos_omega = (a + c) / (2*b)
-    if cos_omega > 1:
+    if cos_omega > 1 or cos_omega < -1:
         return 0
     omega = np.arccos(cos_omega)
-    theta = np.arctan((a - c) / (2*b*np.sin(omega)))
+    sin_omega = np.sin(omega)
+    if abs(sin_omega) < 1e-12 or abs(omega) < 1e-12:
+        return 0
+    theta = np.arctan((a - c) / (2*b*sin_omega))
     offset = -theta / omega
     return offset
 

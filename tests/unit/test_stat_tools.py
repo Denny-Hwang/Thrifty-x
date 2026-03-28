@@ -18,7 +18,7 @@ def test_is_outlier_with_outlier():
     """A far outlier should be detected."""
     data = np.array([1.0, 2.0, 3.0, 4.0, 100.0])
     outliers = is_outlier(data, thresh=3.5)
-    assert outliers[-1] == True
+    assert bool(outliers[-1]) is True
 
 
 def test_is_outlier_identical_values():
