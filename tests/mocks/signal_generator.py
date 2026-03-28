@@ -22,12 +22,12 @@ def generate_carrier(freq_hz: float, sample_rate: float,
     return (amplitude * np.exp(2j * np.pi * freq_hz * t)).astype(np.complex64)
 
 
-def add_noise(signal: np.ndarray, snr_db: float) -> np.ndarray:
+def add_noise(signal: np.ndarray, snr_db: float, seed: int = 42) -> np.ndarray:
     """Add Gaussian noise to achieve the given SNR in dB."""
     signal_power = np.mean(np.abs(signal) ** 2)
     snr_linear = 10 ** (snr_db / 10)
     noise_power = signal_power / snr_linear
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
     noise = rng.normal(0, np.sqrt(noise_power / 2), signal.shape) + \
             1j * rng.normal(0, np.sqrt(noise_power / 2), signal.shape)
     return (signal + noise).astype(np.complex64)

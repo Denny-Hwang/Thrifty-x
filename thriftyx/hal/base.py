@@ -118,7 +118,11 @@ class SDRDevice(ABC):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.is_capturing:
-            self.stop_capture()
-        self.close()
+        try:
+            if self.is_open:
+                if self.is_capturing:
+                    self.stop_capture()
+                self.close()
+        except Exception:
+            pass
         return False

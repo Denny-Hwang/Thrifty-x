@@ -199,6 +199,8 @@ def build_model_linear(detection_pairs, beacon_sdoa, nominal_sample_rate):
     timestamps = [p[0].timestamp for p in pairs]
 
     def evaluate(det0, det1):
+        if not timestamps:
+            return None
         high_idx = bisect_left(timestamps, det0.timestamp)
         if high_idx == len(timestamps):
             high_idx -= 1

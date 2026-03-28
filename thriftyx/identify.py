@@ -213,7 +213,6 @@ def load_freqmap(file_):
         for txid, range_ in tx_ranges.items():
             start, stop = range_
             freq_map[rxid][txid] = (start+offset, stop+offset)
-            print(rxid, txid, freq_map[rxid][txid])
 
     return freq_map
 
@@ -247,7 +246,7 @@ def _main():
                         help="toad file(s) from receivers [default: *.toad]")
     parser.add_argument('-o', '--output', type=argparse.FileType('w'),
                         default='data.toads',
-                        help="output file [default: *.taods]")
+                        help="output file [default: *.toads]")
     parser.add_argument('-m', '--map', type=argparse.FileType('r'),
                         help="schema for mapping DFT index to transmitter ID "
                              "[default: auto-detect]")

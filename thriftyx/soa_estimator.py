@@ -34,7 +34,10 @@ def calculate_window(block_len, history_len, template_len):
     detection to the range of values within the correlation block that are
     unique to that block to prevent duplicate detections.
     """
-    assert history_len >= template_len - 1
+    if history_len < template_len - 1:
+        raise ValueError(
+            f"history_len ({history_len}) must be >= template_len - 1 "
+            f"({template_len - 1})")
     corr_len = block_len - template_len + 1
     padding = history_len - template_len + 1
     left_pad = padding // 2
@@ -169,6 +172,14 @@ def gaussian_interpolation(corr_mag, peak_idx):
         return 0
 
     a, b, c = corr_mag[peak_idx-1], corr_mag[peak_idx], corr_mag[peak_idx+1]
+    if a <= 0 or b <= 0 or c <= 0:
+        logging.warning("Gaussian interpolation: non-positive correlation "
+                        "values (a=%.4g, b=%.4g, c=%.4g); falling back to 0",
+                        a, b, c)
+        return 0
     a, b, c = np.log(a), np.log(b), np.log(c)
-    offset = 0.5 * (c - a) / (2 * b - a - c)
+    denom = 2 * b - a - c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = 0.5 * (c - a) / denom
     return offset

@@ -48,17 +48,29 @@ def make_dirichlet(block_len, carrier_len, width=6):
 def parabolic(fft_mag, peak):
     """Estimate sub-bin carrier frequency by fitting a parabola."""
     # pylint: disable=invalid-name
+    if peak == 0 or peak >= len(fft_mag) - 1:
+        return 0
     a, b, c = fft_mag[peak-1], fft_mag[peak], fft_mag[peak+1]
-    offset = (c - a) / (4*b - 2*a - 2*c)
+    denom = 4*b - 2*a - 2*c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = (c - a) / denom
     return offset
 
 
 def gaussian(fft_mag, peak):
-    """Estimate sub-bin carrier frequency by fitting a parabola."""
+    """Estimate sub-bin carrier frequency by fitting a Gaussian."""
     # pylint: disable=invalid-name
+    if peak == 0 or peak >= len(fft_mag) - 1:
+        return 0
     a, b, c = fft_mag[peak-1], fft_mag[peak], fft_mag[peak+1]
+    if a <= 0 or b <= 0 or c <= 0:
+        return 0
     a, b, c = np.log(a), np.log(b), np.log(c)
-    offset = (c - a) / (4*b - 2*a - 2*c)
+    denom = 4*b - 2*a - 2*c
+    if abs(denom) < 1e-12:
+        return 0
+    offset = (c - a) / denom
     return offset
 
 
@@ -90,12 +102,19 @@ def make_corr_parabolic(corr_width, block_len, carrier_len):
 
 
 def cosine(fft_mag, peak):
+    if peak == 0 or peak >= len(fft_mag) - 1:
+        return 0
     a, b, c = fft_mag[peak-1], fft_mag[peak], fft_mag[peak+1]
+    if abs(2*b) < 1e-12:
+        return 0
     cos_omega = (a + c) / (2*b)
-    if cos_omega > 1:
+    if cos_omega > 1 or cos_omega < -1:
         return 0
     omega = np.arccos(cos_omega)
-    theta = np.arctan((a - c) / (2*b*np.sin(omega)))
+    sin_omega = np.sin(omega)
+    if abs(sin_omega) < 1e-12 or abs(omega) < 1e-12:
+        return 0
+    theta = np.arctan((a - c) / (2*b*sin_omega))
     offset = -theta / omega
     return offset
 

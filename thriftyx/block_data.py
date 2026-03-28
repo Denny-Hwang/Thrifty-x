@@ -172,7 +172,7 @@ def card_reader(stream, bit_depth=None):
             if detected_bit_depth is None and 'bit_depth' in metadata:
                 detected_bit_depth = int(metadata['bit_depth'])
             continue
-        if line[0] == '#' or line[0] == '\n':
+        if not line or line[0] == '#' or line[0] == '\n':
             continue
         if line.startswith('Using Volk machine:') or line.startswith('linux;'):
             continue
