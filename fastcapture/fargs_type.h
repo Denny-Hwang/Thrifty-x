@@ -27,7 +27,10 @@ typedef struct {
 
     uint32_t sdr_freq;
     uint32_t sdr_sample_rate;
-    int sdr_gain;
+    int sdr_gain;           /* LNA gain index (0-14 Mini, 0-15 R2) */
+    uint8_t sdr_mixer_gain; /* Mixer gain index (0-15) */
+    uint8_t sdr_vga_gain;   /* VGA/IF gain index (0-15) */
+    uint8_t sdr_bias_tee;   /* Bias tee enable (0/1) */
     uint32_t sdr_dev_index;
 
     bool silent;

@@ -57,8 +57,14 @@ const fargs_option_t fargs_options[] = {
         "Frequency to tune to [default: 433.83M]", 3},
     {"sample-rate", 's', "<sps>", 0,
         "Sample rate [default: 6M]", 3},
-    {"gain", 'g', "<db>", 0,
-        "LNA gain [default: 0]", 3},
+    {"gain", 'g', "<index>", 0,
+        "LNA gain index (0-14 Mini, 0-15 R2) [default: 0]", 3},
+    {"mixer-gain", 'M', "<index>", 0,
+        "Mixer gain index (0-15) [default: 0]", 3},
+    {"vga-gain", 'V', "<index>", 0,
+        "VGA/IF gain index (0-15) [default: 0]", 3},
+    {"bias-tee", 'B', 0, 0,
+        "Enable bias tee voltage on antenna port", 3},
     {"device-index", 'd', "<index>", 0,
         "Airspy device index [default: 0]", 3},
 
@@ -98,6 +104,9 @@ fargs_t* fargs_new() {
     fargs->sdr_freq = DEFAULT_SDR_FREQ;
     fargs->sdr_sample_rate = DEFAULT_SDR_SAMPLE_RATE;
     fargs->sdr_gain = DEFAULT_SDR_GAIN;
+    fargs->sdr_mixer_gain = 0;
+    fargs->sdr_vga_gain = 0;
+    fargs->sdr_bias_tee = 0;
     fargs->sdr_dev_index = DEFAULT_SDR_INDEX;
 
     fargs->silent = false;
@@ -155,7 +164,25 @@ int fargs_parse_opt(fargs_t *fargs,
             fargs->sdr_freq = (uint32_t)parse_si_float(arg);
             break;
         case 'g':
-            fargs->sdr_gain = (int)(atof(arg) * 10); // unit: tenths of a dB
+            fargs->sdr_gain = (int)strtoul(arg, &endptr, 10);
+            if (*endptr != '\0') {
+                return FARGS_INVALID_VALUE;
+            }
+            break;
+        case 'M':
+            fargs->sdr_mixer_gain = (uint8_t)strtoul(arg, &endptr, 10);
+            if (*endptr != '\0') {
+                return FARGS_INVALID_VALUE;
+            }
+            break;
+        case 'V':
+            fargs->sdr_vga_gain = (uint8_t)strtoul(arg, &endptr, 10);
+            if (*endptr != '\0') {
+                return FARGS_INVALID_VALUE;
+            }
+            break;
+        case 'B':
+            fargs->sdr_bias_tee = 1;
             break;
         case 's':
             fargs->sdr_sample_rate = (uint32_t)parse_si_float(arg);
@@ -185,10 +212,14 @@ void fargs_print_summary(fargs_t *fa, FILE* out, bool sdr) {
                 "tuner:\n"
                 "  center freq = %.06f MHz\n"
                 "  sample rate = %.06f Msps\n"
-                "  gain = %.02f dB\n\n",
+                "  LNA gain = %d, mixer gain = %u, VGA gain = %u\n"
+                "  bias tee = %s\n\n",
                 fa->sdr_freq / 1e6,
                 fa->sdr_sample_rate / 1e6,
-                fa->sdr_gain/10.0);
+                fa->sdr_gain,
+                (unsigned)fa->sdr_mixer_gain,
+                (unsigned)fa->sdr_vga_gain,
+                fa->sdr_bias_tee ? "on" : "off");
     }
 }
 
@@ -203,8 +234,13 @@ void fargs_print_card_header(fargs_t *fa,
             fa->threshold_const, fa->threshold_snr,
             fa->block_len, fa->history_len);
     if (sdr) {
-        fprintf(out, "# tuner: { freq: %u; sample_rate: %u; gain: %02f }\n",
-                fa->sdr_freq, fa->sdr_sample_rate, fa->sdr_gain/10.0);
+        fprintf(out, "# tuner: { freq: %u; sample_rate: %u; "
+                "lna_gain: %d; mixer_gain: %u; vga_gain: %u; bias_tee: %u }\n",
+                fa->sdr_freq, fa->sdr_sample_rate,
+                fa->sdr_gain,
+                (unsigned)fa->sdr_mixer_gain,
+                (unsigned)fa->sdr_vga_gain,
+                (unsigned)fa->sdr_bias_tee);
     }
     fprintf(out, "# tool: '%s'\n", tool);
 
