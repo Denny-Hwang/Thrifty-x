@@ -152,7 +152,13 @@ int airspy_reader_open(const airspy_reader_config_t *config,
 
     /* Initialize circular buffer (holds 4 * block_size samples) */
     size_t circbuf_size = (size_t)(reader->block_size) * 4 * 2 * sizeof(int16_t);
-    circbuf_init(&state->circbuf, circbuf_size);
+    if (!circbuf_init(&state->circbuf, circbuf_size)) {
+        fprintf(stderr, "circbuf_init failed: could not allocate %zu bytes\n",
+                circbuf_size);
+        airspy_close(state->device);
+        free(state);
+        return -1;
+    }
 
     atomic_store(&state->running, 1);
     state->reader          = reader;
