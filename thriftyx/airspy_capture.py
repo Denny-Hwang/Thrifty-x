@@ -46,14 +46,11 @@ def capture_cli(args=None):
     parser.add_argument('output', nargs='?', default=None,
                         help="Output .card file path ('-' for stdout, "
                              "default: stdout)")
-    parser.add_argument('--device-type', dest='device_type',
-                        default=None,
-                        help="SDR device type (airspy_mini or airspy_r2)")
     parser.add_argument('--duration', dest='duration',
                         type=float, default=None,
                         help="Capture duration in seconds (default: until Ctrl+C)")
 
-    setting_keys = ['sample_rate', 'tuner_freq', 'block_size', 'block_history',
+    setting_keys = ['device_type', 'sample_rate', 'tuner_freq', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'bit_depth', 'bias_tee',
                     'lna_gain', 'mixer_gain', 'vga_gain',

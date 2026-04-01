@@ -181,10 +181,10 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                         help="do not write anything to standard output")
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-o', '--output', dest='output',
-                       type=argparse.FileType('wb'),
+                       type=argparse.FileType('w'),
                        help="Output file (.toad) ('-' for stdout)")
     group.add_argument('-a', '--append', dest='append',
-                       type=argparse.FileType('ab'),
+                       type=argparse.FileType('a'),
                        help="Output file to append to (.toad)")
 
     setting_keys = ['sample_rate', 'block_size', 'block_history',
