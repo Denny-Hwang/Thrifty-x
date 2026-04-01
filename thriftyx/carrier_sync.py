@@ -90,7 +90,7 @@ class DefaultSynchronizer(Synchronizer):
      - Detector: Simple threshold detector, using the shape of the Dirichlet
                  kernel as matched filter.
      - Interpolator: Curve fitting of Dirichlet kernel to FFT.
-     - Shifter: Use shift theorem to shift frequency in the time-domain.
+     - Shifter: Integer frequency shift (fast) or time-domain shift (accurate).
 
     Parameters
     ----------
@@ -102,17 +102,26 @@ class DefaultSynchronizer(Synchronizer):
         Size of data blocks.
     carrier_len : int
         The length of the carrier transmission, in number of samples.
+    freq_shift_method : str
+        Frequency shift method: 'integer' (default, fast) or 'time_domain'.
+        Paper results show integer shift is ~2x faster with only 0.03m
+        RMSE difference (1.07m vs 1.04m).
     """
 
-    def __init__(self, thresh_coeffs, window, block_len, carrier_len):
+    def __init__(self, thresh_coeffs, window, block_len, carrier_len,
+                 freq_shift_method='integer'):
         self.thresh_coeffs = thresh_coeffs
         self.window = window
-        #filter_width = (int(block_len / carrier_len) - 1) * 2
-        #self.weights = dirichlet_weights(filter_width, block_len, carrier_len)
         self.weights = None
 
         interpolator = make_dirichlet_interpolator(block_len, carrier_len)
-        Synchronizer.__init__(self, self.detect, interpolator, freq_shift)
+
+        if freq_shift_method == 'time_domain':
+            shifter = freq_shift
+        else:
+            shifter = freq_shift_integer
+
+        Synchronizer.__init__(self, self.detect, interpolator, shifter)
 
     def detect(self, fft_mag):
         """Detect the presence of a carrier in a FFT."""

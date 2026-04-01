@@ -193,8 +193,8 @@ def card_reader(stream, bit_depth=None):
         yield float(timestamp), int(idx), Signal(data)
 
 
-def card_writer(stream, timestamp, block_idx, block, bit_depth=12,
-                sample_rate=6_000_000):
+def card_writer(stream, timestamp, block_idx, block, bit_depth=8,
+                sample_rate=2_400_000):
     """Write a single block to .card format.
 
     Parameters
@@ -204,7 +204,7 @@ def card_writer(stream, timestamp, block_idx, block, bit_depth=12,
     block_idx : int
     block : :class:`numpy.ndarray` of complex64
     bit_depth : int
-        12 for Airspy (default), 8 for RTL-SDR.
+        8 for RTL-SDR (default), 12 for Airspy.
     sample_rate : int
     """
     raw = complex_to_raw(block, bit_depth=bit_depth)
@@ -212,12 +212,15 @@ def card_writer(stream, timestamp, block_idx, block, bit_depth=12,
     stream.write(f"{timestamp:.6f} {block_idx} {encoded}\n")
 
 
-def write_card_header(stream, bit_depth=12, sample_rate=6_000_000):
+def write_card_header(stream, bit_depth=8, sample_rate=2_400_000):
     """Write v2 .card file header.
 
     Parameters
     ----------
     stream : file-like object (text mode)
+    bit_depth : int
+        8 for RTL-SDR (default), 12 for Airspy.
+    sample_rate : int
     """
     stream.write(f"{_V2_HEADER_PREFIX}bit_depth={bit_depth} "
                  f"sample_rate={sample_rate}\n")

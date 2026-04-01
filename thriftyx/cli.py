@@ -18,7 +18,7 @@ import importlib
 HELP = """usage: thriftyx <command> [<args>]
 
 Thrifty-X is proof-of-concept SDR software for TDOA positioning using
-Airspy Mini or Airspy R2 SDR hardware.
+RTL-SDR, Airspy Mini, or Airspy R2 SDR hardware.
 
 Thrifty-X is divided into several modules. Each module is accessible as a
 command and has its own arguments.
@@ -26,7 +26,7 @@ command and has its own arguments.
 Valid commands are:
 
     ~ Core functionality ~
-    capture           Capture carrier detections from Airspy SDR
+    capture           Capture positioning signals from SDR (RTL-SDR/Airspy)
     detect            Detect presence of positioning signals and estimate SoA
     identify          Identify transmitter IDs and filter duplicate detections
     match             Match detections from multiple receivers
