@@ -6,12 +6,14 @@
 #
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Live time-domain and frequency-domain plot using matplotlib.
+"""Live time-domain, frequency-domain, and histogram plot using matplotlib.
 
 Replaces the original GNU Radio / osmo-sdr-based scope with a
-matplotlib FuncAnimation implementation.
+matplotlib FuncAnimation implementation.  Supports RTL-SDR (via stdin
+pipe from ``rtl_sdr``) and Airspy devices (via HAL).
+
+Original 3-panel layout: time domain, frequency spectrum, sample histogram.
 """
-# pylint: skip-file
 
 import argparse
 import logging
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def scope_cli(args=None):
-    """Live signal scope using Airspy SDR and matplotlib."""
+    """Live signal scope for RTL-SDR and Airspy hardware."""
     try:
         import matplotlib.pyplot as plt
         from matplotlib.animation import FuncAnimation
@@ -53,35 +55,45 @@ def scope_cli(args=None):
     else:
         bit_depth = 8
 
-    from thriftyx.hal.device_factory import create_device
     from thriftyx.block_data import raw_to_complex
     from thriftyx.exceptions import DeviceNotFoundError
 
+    # --------------- data source setup ---------------
+    device = None
+    stdin_source = False
+
     if device_type == 'rtlsdr':
-        print("ERROR: Live scope requires Airspy hardware. "
-              "RTL-SDR does not support the HAL interface.", file=sys.stderr)
-        print("Use rtl_sdr to capture, then analyze with: "
-              "thriftyx analyze_detect", file=sys.stderr)
-        sys.exit(1)
+        # RTL-SDR: read raw uint8 I/Q from stdin (piped from rtl_sdr)
+        if sys.stdin.isatty():
+            print("RTL-SDR scope reads raw I/Q from stdin.\n"
+                  "Usage: rtl_sdr -f {freq} -s {rate} - | thriftyx scope"
+                  .format(freq=center_freq, rate=sample_rate),
+                  file=sys.stderr)
+            sys.exit(1)
+        stdin_source = True
+        logger.info("Reading RTL-SDR samples from stdin")
+    else:
+        from thriftyx.hal.device_factory import create_device
+        try:
+            device = create_device(device_type)
+            device.open()
+            device.set_sample_rate(sample_rate)
+            device.set_center_freq(center_freq)
+            device.set_gain('lna', int(config.get('lna_gain', 0)))
+            device.set_gain('mixer', int(config.get('mixer_gain', 0)))
+            device.set_gain('vga', int(config.get('vga_gain', 0)))
+            device.set_bias_tee(bool(config.get('bias_tee', False)))
+        except DeviceNotFoundError as e:
+            print("ERROR: {}".format(e), file=sys.stderr)
+            sys.exit(1)
 
-    try:
-        device = create_device(device_type)
-        device.open()
-        device.set_sample_rate(sample_rate)
-        device.set_center_freq(center_freq)
-        device.set_gain('lna', int(config.get('lna_gain', 0)))
-        device.set_gain('mixer', int(config.get('mixer_gain', 0)))
-        device.set_gain('vga', int(config.get('vga_gain', 0)))
-        device.set_bias_tee(bool(config.get('bias_tee', False)))
-    except DeviceNotFoundError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    # --------------- 3-panel figure ---------------
+    fig, (ax_time, ax_freq, ax_hist) = plt.subplots(
+        3, 1, figsize=(10, 8))
+    fig.suptitle("Thrifty-X Scope \u2014 {:.3f} MHz @ {:.1f} MSPS"
+                 .format(center_freq / 1e6, sample_rate / 1e6))
 
-    fig, (ax_time, ax_freq) = plt.subplots(2, 1, figsize=(10, 6))
-    fig.suptitle(f"Thrifty-X Scope — {center_freq / 1e6:.3f} MHz "
-                 f"@ {sample_rate / 1e6:.1f} MSPS")
-
-    # Time domain plot
+    # Panel 1: time domain (magnitude)
     t_line, = ax_time.plot([], [], 'b-', linewidth=0.5)
     ax_time.set_xlim(0, block_size // 2)
     ax_time.set_ylim(-1.2, 1.2)
@@ -90,7 +102,7 @@ def scope_cli(args=None):
     ax_time.set_title('Time domain (magnitude)')
     ax_time.grid(True, alpha=0.3)
 
-    # Frequency domain plot
+    # Panel 2: frequency spectrum
     freqs = np.fft.fftshift(np.fft.fftfreq(block_size, 1.0 / sample_rate))
     f_line, = ax_freq.plot(freqs / 1e6, np.zeros(block_size), 'r-',
                            linewidth=0.5)
@@ -101,32 +113,88 @@ def scope_cli(args=None):
     ax_freq.set_title('Frequency spectrum')
     ax_freq.grid(True, alpha=0.3)
 
-    _data = [np.zeros(block_size, dtype=np.complex64)]
+    # Panel 3: sample value histogram
+    if bit_depth == 8:
+        hist_bins = 256
+        hist_range = (0, 255)
+        h_x = np.arange(hist_bins)
+    else:
+        hist_bins = 256
+        hist_range = (-2048, 2047)
+        h_x = np.linspace(hist_range[0], hist_range[1], hist_bins)
 
-    def _update(frame):
-        raw = device.read_sync(block_size)
-        if len(raw) >= block_size * 2:
+    h_bars = ax_hist.bar(h_x, np.zeros(hist_bins), width=h_x[1] - h_x[0],
+                         color='green', alpha=0.7)
+    ax_hist.set_xlabel('Sample value')
+    ax_hist.set_ylabel('Count')
+    ax_hist.set_title('Sample value histogram')
+    ax_hist.grid(True, alpha=0.3)
+
+    _data = [np.zeros(block_size, dtype=np.complex64)]
+    _raw_data = [np.zeros(block_size * 2,
+                          dtype=np.uint8 if bit_depth == 8 else np.int16)]
+
+    # Number of bytes per read for stdin
+    bytes_per_sample = 1 if bit_depth == 8 else 2
+    read_bytes = block_size * 2 * bytes_per_sample
+
+    def _read_block():
+        """Read one block of complex samples from the configured source."""
+        if stdin_source:
+            raw_bytes = sys.stdin.buffer.read(read_bytes)
+            if len(raw_bytes) < read_bytes:
+                return False
+            dtype = np.uint8 if bit_depth == 8 else np.int16
+            raw = np.frombuffer(raw_bytes, dtype=dtype)
+            _raw_data[0] = raw
+            _data[0] = raw_to_complex(raw, bit_depth=bit_depth)
+        else:
+            raw = device.read_sync(block_size)
+            if len(raw) < block_size * 2:
+                return False
+            _raw_data[0] = raw
             _data[0] = raw_to_complex(raw[:block_size * 2],
                                        bit_depth=bit_depth)
+        return True
+
+    def _update(_frame):
+        if not _read_block():
+            return t_line, f_line
 
         block = _data[0]
+
+        # Time domain
         mag = np.abs(block[:block_size // 2])
         t_line.set_data(np.arange(len(mag)), mag)
 
+        # Frequency domain
         fft_mag = np.fft.fftshift(np.abs(np.fft.fft(block)))
-        fft_db = 20 * np.log10(fft_mag + 1e-12) - 20 * np.log10(block_size)
+        fft_db = (20 * np.log10(fft_mag + 1e-12)
+                  - 20 * np.log10(block_size))
         f_line.set_ydata(fft_db)
         ax_freq.set_ylim(np.max(fft_db) - 70, np.max(fft_db) + 5)
 
-        return t_line, f_line
+        # Histogram
+        raw = _raw_data[0]
+        if bit_depth == 8:
+            counts = np.bincount(raw.astype(np.int32), minlength=hist_bins)
+        else:
+            counts, _ = np.histogram(raw, bins=hist_bins, range=hist_range)
+        for bar, count in zip(h_bars, counts):
+            bar.set_height(count)
+        ax_hist.set_ylim(0, max(np.max(counts), 1) * 1.1)
 
-    ani = FuncAnimation(fig, _update, interval=100, blit=True, cache_frame_data=False)
+        return (t_line, f_line) + tuple(h_bars)
+
+    _ani = FuncAnimation(fig, _update, interval=100,
+                         blit=False, cache_frame_data=False)
 
     plt.tight_layout()
     try:
         plt.show()
     finally:
-        device.close()
+        if device is not None:
+            device.close()
 
 
 # Entry point alias
