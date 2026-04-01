@@ -157,11 +157,11 @@ def _main():
                                      formatter_class=formatter)
 
     parser.add_argument('toads', nargs='?',
-                        type=argparse.FileType('rb'), default='data.toads',
+                        type=argparse.FileType('r'), default='data.toads',
                         help="toads data (\"-\" streams from stdin)")
     parser.add_argument('matches', nargs='?',
-                        type=argparse.FileType('rb'), default='data.match',
-                        help="toads data (\"-\" streams from stdin)")
+                        type=argparse.FileType('r'), default='data.match',
+                        help="match data (\"-\" streams from stdin)")
     parser.add_argument('--beacon', type=int, default=0,
                         help="transmitter ID of beacon")
     parser.add_argument('--rx0', type=int, default=0,

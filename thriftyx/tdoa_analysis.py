@@ -43,6 +43,8 @@ def _main():
     parser.add_argument('--detidx', type=_parse_range, default=None,
                         help="limit the analysis to TDOAs within a specific "
                              "range of detection IDs")
+    parser.add_argument('--export', type=str, default=None,
+                        help="export plot with given prefix (PNG/PDF)")
     args = parser.parse_args()
 
     if args.rx0 > args.rx1:
@@ -74,9 +76,17 @@ def _main():
     print("TDOA RMS: %.3f m" % rms)
 
     plt.plot(timestamps, tdoa_meter, marker='.')
-    # TODO: plot histogram of residuals
-    # TODO: --export to save to a .PDF file
-    plt.show()
+    plt.xlabel('Timestamp')
+    plt.ylabel('TDOA (m)')
+    plt.title('TDOA: RX {} - RX {}, TX {}'.format(args.rx0, args.rx1, args.tx))
+    plt.grid()
+
+    if args.export:
+        filename = "{}.png".format(args.export)
+        plt.savefig(filename, dpi=150)
+        print("Exported plot to", filename)
+    else:
+        plt.show()
 
 if __name__ == '__main__':
     _main()
