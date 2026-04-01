@@ -44,7 +44,7 @@ def test_valid_airspy_r2_config():
 
 def test_invalid_device_type():
     config = _valid_mini_config()
-    config['device_type'] = 'rtlsdr'
+    config['device_type'] = 'hackrf'
     with pytest.raises(ConfigValidationError, match="device_type"):
         validate_config(config)
 
@@ -113,17 +113,57 @@ def test_invalid_bit_depth():
         validate_config(config)
 
 
-def test_legacy_rtlsdr_rate_rejected():
-    """Legacy RTL-SDR sample rate should be rejected with an error."""
+def test_rtlsdr_rate_accepted():
+    """RTL-SDR sample rate should be accepted for rtlsdr device."""
+    config = {
+        'device_type': 'rtlsdr',
+        'sample_rate': 2_400_000,
+        'tuner_freq': 162_000_000,
+        'block_size': 16384,
+        'block_history': 4920,
+        'bit_depth': 8,
+    }
+    warnings = validate_config(config)
+    assert isinstance(warnings, list)
+
+
+def test_rtlsdr_rate_rejected_on_airspy():
+    """RTL-SDR sample rate should be rejected for Airspy Mini."""
     config = _valid_mini_config()
-    config['sample_rate'] = 2_400_000  # RTL-SDR default
-    with pytest.raises(ConfigValidationError, match="RTL-SDR"):
+    config['sample_rate'] = 2_400_000  # Not valid for Airspy Mini
+    with pytest.raises(ConfigValidationError, match="sample_rate"):
         validate_config(config)
 
 
 def test_minimal_config():
     """Config with only device_type should pass."""
     warnings = validate_config({'device_type': 'airspy_mini'})
+    assert isinstance(warnings, list)
+
+
+def test_minimal_rtlsdr_config():
+    """RTL-SDR config with only device_type should pass."""
+    warnings = validate_config({'device_type': 'rtlsdr'})
+    assert isinstance(warnings, list)
+
+
+def test_rtlsdr_bit_depth_mismatch_warns():
+    """RTL-SDR with bit_depth=12 should warn."""
+    config = {
+        'device_type': 'rtlsdr',
+        'bit_depth': 12,
+    }
+    warnings = validate_config(config)
+    assert any('RTL-SDR' in w for w in warnings)
+
+
+def test_rtlsdr_gains_not_validated():
+    """RTL-SDR should not validate Airspy-specific gain ranges."""
+    config = {
+        'device_type': 'rtlsdr',
+        'lna_gain': 50,  # Would be invalid for Airspy
+    }
+    warnings = validate_config(config)
     assert isinstance(warnings, list)
 
 

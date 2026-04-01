@@ -398,7 +398,7 @@ def _main():
                              " used for estimating the TDOA of the mobile unit"
                              " transmission")
     parser.add_argument('-s', '--sample-rate', dest='sample_rate',
-                        type=float, default=6e6,
+                        type=float, default=2.4e6,
                         help="nominal sample rate of receivers")
     args = parser.parse_args()
 

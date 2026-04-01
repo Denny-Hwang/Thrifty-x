@@ -67,7 +67,8 @@ class SoaEstimator:
         next block.
     """
 
-    def __init__(self, template, thresh_coeffs, block_len, history_len):
+    def __init__(self, template, thresh_coeffs, block_len, history_len,
+                 interpolation_method='parabolic'):
         self.template = Signal(template)
         self.template_energy = np.sum(self.template.power)
 
@@ -78,7 +79,18 @@ class SoaEstimator:
         self.template_padded = Signal(self.template_padded)
         self.template_fft = self.template_padded.fft
 
-        self.interpolate = gaussian_interpolation
+        # Select interpolation method
+        # Paper results (Table 6.2): Parabolic, Gaussian, Cosine all give
+        # equivalent accuracy (~0.52m mean, 0.90 std dev).
+        # 'none' skips interpolation (0.58m mean).
+        if interpolation_method == 'gaussian':
+            self.interpolate = gaussian_interpolation
+        elif interpolation_method == 'none':
+            self.interpolate = _no_interpolation
+        else:
+            # Default: parabolic (simplest, equivalent accuracy)
+            self.interpolate = parabolic_interpolation
+
         self.window = calculate_window(block_len, history_len, template_len)
         self.thresh_coeffs = thresh_coeffs
 
@@ -148,6 +160,11 @@ def get_peak(corr, window):
     peak_idx = np.argmax(corr_mag[start:stop]) + start
     peak_mag = corr_mag[peak_idx]
     return peak_idx, peak_mag
+
+
+def _no_interpolation(corr_mag, peak_idx):
+    """No sub-sample interpolation; return offset 0."""
+    return 0
 
 
 def parabolic_interpolation(corr_mag, peak_idx):

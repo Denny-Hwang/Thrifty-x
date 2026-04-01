@@ -31,7 +31,7 @@ DEFINITIONS = {
     'sample_rate': Definition(
         ['--sample-rate', '-s'],
         setting_parsers.metric_float,
-        '6M',
+        '2.4M',
         "Sample rate (sps)"
     ),
 
@@ -117,15 +117,15 @@ DEFINITIONS = {
     'device_type': Definition(
         ['--device-type'],
         str,
-        'airspy_mini',
-        "SDR device type ('airspy_mini' or 'airspy_r2')"
+        'rtlsdr',
+        "SDR device type ('rtlsdr', 'airspy_mini', or 'airspy_r2')"
     ),
 
     'bit_depth': Definition(
         ['--bit-depth'],
         int,
-        '12',
-        "ADC bit depth (12 for Airspy, 8 for legacy RTL-SDR)"
+        '8',
+        "ADC bit depth (8 for RTL-SDR, 12 for Airspy)"
     ),
 
     'bias_tee': Definition(
@@ -154,6 +154,21 @@ DEFINITIONS = {
         int,
         '0',
         "VGA/IF gain stage index (Airspy: 0-15)"
+    ),
+
+    'freq_shift_method': Definition(
+        ['--freq-shift-method'],
+        str,
+        'integer',
+        "Frequency shift method: 'integer' (fast, ~1.07m RMSE) or "
+        "'time_domain' (slow, ~1.04m RMSE)"
+    ),
+
+    'soa_interpolation': Definition(
+        ['--soa-interpolation'],
+        str,
+        'parabolic',
+        "SOA interpolation method: 'parabolic', 'gaussian', or 'none'"
     ),
 }
 

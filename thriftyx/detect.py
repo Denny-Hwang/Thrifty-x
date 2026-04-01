@@ -32,7 +32,10 @@ DetectorSettings = namedtuple('DetectorSettings', [
     'carrier_thresh',
     'carrier_window',
     'template',
-    'corr_thresh'])
+    'corr_thresh',
+    'freq_shift_method',
+    'soa_interpolation'],
+    defaults=['integer', 'parabolic'])
 
 
 class Detector:
@@ -51,13 +54,15 @@ class Detector:
             thresh_coeffs=settings.carrier_thresh,
             window=settings.carrier_window,
             block_len=settings.block_len,
-            carrier_len=settings.carrier_len)
+            carrier_len=settings.carrier_len,
+            freq_shift_method=settings.freq_shift_method)
 
         self.soa_estimate = SoaEstimator(
             template=settings.template,
             thresh_coeffs=settings.corr_thresh,
             block_len=settings.block_len,
-            history_len=settings.history_len)
+            history_len=settings.history_len,
+            interpolation_method=settings.soa_interpolation)
 
         self.new_len = settings.block_len - settings.history_len
 
@@ -189,7 +194,8 @@ def detector_cli(detector_class, parser=None, extra_args=None):
 
     setting_keys = ['sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
-                    'corr_threshold', 'template', 'rxid']
+                    'corr_threshold', 'template', 'rxid',
+                    'bit_depth', 'freq_shift_method', 'soa_interpolation']
     config, args = load_args(parser, setting_keys)
 
     kwargs = {}
@@ -201,13 +207,18 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
 
+    bit_depth = int(config.get('bit_depth', 8))
+
     if args.raw:
         blocks = block_reader(args.input, config.block_size,
-                              config.block_history)
+                              config.block_history, bit_depth=bit_depth)
     else:
         blocks = card_reader(args.input)
 
     template = np.load(config.template)
+
+    freq_shift_method = config.get('freq_shift_method', 'integer')
+    soa_interpolation = config.get('soa_interpolation', 'parabolic')
 
     settings = DetectorSettings(block_len=config.block_size,
                                 history_len=config.block_history,
@@ -215,7 +226,9 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                                 carrier_thresh=config.carrier_threshold,
                                 carrier_window=window,
                                 template=template,
-                                corr_thresh=config.corr_threshold)
+                                corr_thresh=config.corr_threshold,
+                                freq_shift_method=freq_shift_method,
+                                soa_interpolation=soa_interpolation)
     detections = detector_class(settings, blocks, rxid=config.rxid, **kwargs)
     summary_liner = SummaryLineFormatter(config.sample_rate,
                                          config.block_size,

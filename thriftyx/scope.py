@@ -43,15 +43,26 @@ def scope_cli(args=None):
                     'bias_tee', 'bit_depth']
     config, _ = settings_module.load_args(parser, setting_keys, argv=args)
 
-    device_type = config.get('device_type', 'airspy_mini')
+    device_type = config.get('device_type', 'rtlsdr')
     sample_rate = int(config.sample_rate)
     center_freq = int(config.tuner_freq)
     block_size = int(config.block_size)
-    bit_depth = int(config.get('bit_depth', 12))
+
+    if device_type in ('airspy_mini', 'airspy_r2'):
+        bit_depth = 12
+    else:
+        bit_depth = 8
 
     from thriftyx.hal.device_factory import create_device
     from thriftyx.block_data import raw_to_complex
     from thriftyx.exceptions import DeviceNotFoundError
+
+    if device_type == 'rtlsdr':
+        print("ERROR: Live scope requires Airspy hardware. "
+              "RTL-SDR does not support the HAL interface.", file=sys.stderr)
+        print("Use rtl_sdr to capture, then analyze with: "
+              "thriftyx analyze_detect", file=sys.stderr)
+        sys.exit(1)
 
     try:
         device = create_device(device_type)
