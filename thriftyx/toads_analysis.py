@@ -12,8 +12,8 @@
 import argparse
 from collections import OrderedDict
 
+import matplotlib
 import numpy as np
-import matplotlib.pyplot as plt
 
 from thriftyx import toads_data
 from thriftyx import util
@@ -111,6 +111,20 @@ def _plot_column(ax, detections, column, **kwargs):
             marker='.', **kwargs)
     ax.set_xlabel('Timestamp')
     ax.set_ylabel(column)
+
+
+def _get_plt():
+    """Get matplotlib.pyplot with appropriate backend."""
+    try:
+        matplotlib.use('TkAgg', force=False)
+    except ImportError:
+        matplotlib.use('Agg', force=True)
+    import matplotlib.pyplot as plt
+    return plt
+
+
+# Module-level lazy reference; set on first call to _get_plt()
+plt = _get_plt()
 
 
 def _plot_per_rx(splits, func):
@@ -269,14 +283,13 @@ def _main():
     parser.add_argument('--toad', dest='toad', action='store_true',
                         help="input data is .toad data instead of .toads")
     parser.add_argument('-i', '--input',
-                        type=argparse.FileType('rb'), default='data.toads',
+                        type=argparse.FileType('r'), default='data.toads',
                         help=".toads data (\'-\' streams from stdin)")
     parser.add_argument('-m', '--match',
-                        type=argparse.FileType('rb'), default=None,
+                        type=argparse.FileType('r'), default=None,
                         help="exclude unmatched detections")
-    # TODO: --filter, e.g. txid == 2
-    # TODO: take plot/print commands as arguments, e.g. cmd1 [cmd2,...]
-    # TODO: tabbed Qt interface (like detect_analysis)
+    parser.add_argument('--export', type=str, default=None,
+                        help="export plots with given prefix (PNG/PDF)")
     args = parser.parse_args()
 
     if args.toad:
@@ -299,11 +312,15 @@ def _main():
 
     print_rxtx_stats(splits)
     plot_all(detections, splits)
-    plt.show()
 
-    # TODO:
-    # - plot per tx: freqs, corr_peaks, carrier_peaks, noise, snr
-    # - print count / mean amplitude / mean snr matrix
+    if args.export:
+        for i, fig_num in enumerate(plt.get_fignums()):
+            fig = plt.figure(fig_num)
+            fig.savefig("{}_{}.png".format(args.export, i), dpi=150)
+        print("Exported {} plot(s) to {}_*.png".format(
+            len(plt.get_fignums()), args.export))
+    else:
+        plt.show()
 
 
 if __name__ == '__main__':

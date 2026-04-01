@@ -14,8 +14,9 @@ import sys
 import re
 from collections import namedtuple
 
+import os
+
 import matplotlib
-import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -554,8 +555,25 @@ def _plot(fig, plotter, cmd):
         _FIGURE_COMMAND_STRINGS[cmd](plotter, fig)
 
 
+def _get_interactive_backend():
+    """Try TkAgg for interactive display, fall back to Agg."""
+    for backend in ('TkAgg', 'Agg'):
+        try:
+            matplotlib.use(backend, force=True)
+            import matplotlib.pyplot as _plt
+            return backend, _plt
+        except ImportError:
+            continue
+    matplotlib.use('Agg', force=True)
+    import matplotlib.pyplot as _plt
+    return 'Agg', _plt
+
+
 def show_detections(detections, cmds, settings, sample_rate):
     """Display detection plots interactively using matplotlib.pyplot."""
+    backend, plt = _get_interactive_backend()
+    interactive = (backend != 'Agg')
+
     summary_liner = detect.SummaryLineFormatter(sample_rate,
                                                 settings.block_len,
                                                 add_dt=False)
@@ -571,7 +589,11 @@ def show_detections(detections, cmds, settings, sample_rate):
             _plot(fig, plotter, cmd)
             fig.set_tight_layout(True)
 
+    if interactive:
         plt.show(block=True)
+    else:
+        print("No interactive backend available; "
+              "use --export to save plots to files.")
 
 
 def parse_range_list(string):
@@ -718,17 +740,18 @@ def _main():
 
     if args.export:
         for detection in detections:
+            block_dir = "{}_block{}".format(args.export,
+                                            detection.result.block)
+            os.makedirs(block_dir, exist_ok=True)
             plotter = Plotter(detection, settings, config.sample_rate)
             for cmd in cmds:
-                filename = "{}_{}_{}.pdf".format(args.export,
-                                                 detection.result.block,
-                                                 cmd)
+                filename = os.path.join(block_dir, "{}.png".format(cmd))
                 print("Exporting", filename)
                 fig = Figure()
                 FigureCanvas(fig)
                 _plot(fig, plotter, cmd)
                 fig.set_tight_layout(True)
-                fig.savefig(filename)
+                fig.savefig(filename, dpi=150)
 
     if not args.save and not args.export:
         show_detections(detections, cmds, settings, config.sample_rate)

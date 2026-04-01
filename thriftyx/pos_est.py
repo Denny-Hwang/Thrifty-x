@@ -56,11 +56,6 @@ def solve_1d(tdoa_array, rx_pos):
     return (position,), tdoa_array['snr'][0]
 
 
-def solve_analytically(tdoa_array, rx_pos):
-    # TODO
-    pass
-
-
 def solve_numerically(tdoa_array, rx_pos):
     """Solve position using the Levenberg-Marquardt minimization algorithm."""
     # TODO: use analytic solution or previous position as initial value
