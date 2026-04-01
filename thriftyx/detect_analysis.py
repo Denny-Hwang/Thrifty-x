@@ -14,26 +14,12 @@ import sys
 import re
 from collections import namedtuple
 
-from matplotlib.backend_bases import key_press_handler
+import matplotlib
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 
 import numpy as np
-
-try:
-    from PyQt5 import QtWidgets as qt
-    from PyQt5 import QtCore
-except ImportError:
-    try:
-        from PyQt6 import QtWidgets as qt
-        from PyQt6 import QtCore
-    except ImportError:
-        raise ImportError(
-            "Neither PyQt5 nor PyQt6 is installed. "
-            "Please install one of them: pip install PyQt5 or pip install PyQt6"
-        )
 
 from thriftyx.settings import load_args
 from thriftyx.signal_utils import Signal
@@ -568,73 +554,24 @@ def _plot(fig, plotter, cmd):
         _FIGURE_COMMAND_STRINGS[cmd](plotter, fig)
 
 
-class DetectionViewer(qt.QWidget):
-    def __init__(self, detections, cmds, settings, sample_rate, parent=None):
-        qt.QWidget.__init__(self, parent)
+def show_detections(detections, cmds, settings, sample_rate):
+    """Display detection plots interactively using matplotlib.pyplot."""
+    summary_liner = detect.SummaryLineFormatter(sample_rate,
+                                                settings.block_len,
+                                                add_dt=False)
 
-        self.plotters = [Plotter(detection, settings, sample_rate)
-                         for detection in detections]
-        self.detections = detections
+    for detection in detections:
+        plotter = Plotter(detection, settings, sample_rate)
+        summary_text = summary_liner(detection.detected, detection.result)
 
-        self.block_selector = qt.QTabBar()
-        for detection in detections:
-            title = str(detection.result.block)
-            self.block_selector.addTab(title)
-        self.cmds = cmds
-        self.cmd_selector = qt.QTabBar()
         for cmd in cmds:
-            self.cmd_selector.addTab(cmd)
+            fig = plt.figure(figsize=(12, 8))
+            fig.suptitle('Block #{} - {}'.format(
+                detection.result.block, summary_text))
+            _plot(fig, plotter, cmd)
+            fig.set_tight_layout(True)
 
-        self.block_selector.currentChanged.connect(self.plot)
-        self.cmd_selector.currentChanged.connect(self.plot)
-
-        self.fig = Figure(frameon=True)
-        self.canvas = FigureCanvasQTAgg(self.fig)
-        self.toolbar = NavigationToolbar2QT(self.canvas, parent)
-        self.canvas.mpl_connect('key_press_event', self.on_key_press)
-        self.canvas.setSizePolicy(qt.QSizePolicy.Expanding,
-                                  qt.QSizePolicy.Expanding)
-        self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
-
-        self.summary_liner = detect.SummaryLineFormatter(sample_rate,
-                                                         settings.block_len,
-                                                         add_dt=False)
-        self.summary_line = qt.QLabel()
-        self.summary_line.setAlignment(QtCore.Qt.AlignHCenter)
-
-        vbox = qt.QVBoxLayout()
-        vbox.addWidget(qt.QLabel('Detect Analysis'))
-        vbox.addWidget(self.block_selector)
-        vbox.addWidget(self.cmd_selector)
-        vbox.addWidget(self.summary_line)
-        vbox.addWidget(self.canvas)
-        vbox.addWidget(self.toolbar)
-        self.setLayout(vbox)
-
-        self.plot()
-        self.canvas.setFocus()
-
-    def plot(self):
-        detection_idx = self.block_selector.currentIndex()
-        if detection_idx == -1:
-            return
-        plotter = self.plotters[detection_idx]
-        detection = self.detections[detection_idx]
-
-        cmd = self.cmds[self.cmd_selector.currentIndex()]
-        self.fig.gca().cla()
-        self.fig.clf(keep_observers=False)
-        _plot(self.fig, plotter, cmd)
-        self.fig.set_facecolor('none')
-        self.canvas.draw()
-
-        summary_text = self.summary_liner(detection.detected, detection.result)
-        self.summary_line.setText(summary_text)
-
-    def on_key_press(self, event):
-        # implement the default mpl key press events described at
-        # http://matplotlib.org/users/navigation_toolbar.html
-        key_press_handler(event, self.canvas, self.toolbar)
+        plt.show(block=True)
 
 
 def parse_range_list(string):
@@ -794,10 +731,7 @@ def _main():
                 fig.savefig(filename)
 
     if not args.save and not args.export:
-        app = qt.QApplication(sys.argv)
-        ui = DetectionViewer(detections, cmds, settings, config.sample_rate)
-        ui.show()
-        app.exec_()
+        show_detections(detections, cmds, settings, config.sample_rate)
 
 
 if __name__ == '__main__':
