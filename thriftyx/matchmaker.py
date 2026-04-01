@@ -74,7 +74,7 @@ def match_toads(toads, window, min_match=2):
 
             rx_match[toads[j].rxid] = k
 
-        match = rx_match.values()
+        match = list(rx_match.values())
         if len(match) >= min_match:
             matches.append(match)
         else:
@@ -131,7 +131,7 @@ def _main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument('input', nargs='?',
-                        type=argparse.FileType('rb'), default='data.toads',
+                        type=argparse.FileType('r'), default='data.toads',
                         help=".toads data (\'-\' streams from stdin)")
     parser.add_argument('-o', '--output', dest='output',
                         type=argparse.FileType('w'), default='data.match',
