@@ -8,10 +8,12 @@
 
 """Airspy Mini SDR driver using ctypes binding to libairspy."""
 
+import collections
 import ctypes
 import ctypes.util
 import logging
 import threading
+import time
 import warnings
 from typing import Callable, Optional
 
@@ -104,7 +106,10 @@ class _AirspyTransfer(ctypes.Structure):
 _CALLBACK_TYPE = ctypes.CFUNCTYPE(ctypes.c_int,
                                    ctypes.POINTER(_AirspyTransfer))
 
-AIRSPY_SAMPLE_INT16_IQ = 0
+AIRSPY_SAMPLE_FLOAT32_IQ = 0
+AIRSPY_SAMPLE_FLOAT32_REAL = 1
+AIRSPY_SAMPLE_INT16_IQ = 2
+AIRSPY_SAMPLE_INT16_REAL = 3
 
 _DEVICE_NAME = "Airspy Mini"
 _SUPPORTED_SAMPLE_RATES = (3_000_000, 6_000_000)
@@ -121,6 +126,13 @@ class AirspyMiniDevice(SDRDevice):
         self._capturing = False
         self._callback_ref = None  # keep reference to prevent GC
         self._serial = "unknown"
+        # Persistent streaming state for read_sync()
+        self._stream_started = False
+        self._stream_chunks = collections.deque()
+        self._stream_total = 0  # total int16 values buffered
+        self._stream_lock = threading.Lock()
+        self._stream_event = threading.Event()
+        self._user_callback = None  # for start_capture() async mode
 
     def open(self) -> None:
         if _lib is None:
@@ -157,6 +169,7 @@ class AirspyMiniDevice(SDRDevice):
 
     def close(self) -> None:
         if self._open and _lib is not None:
+            self._stop_rx()
             _lib.airspy_close(self._handle)
             self._open = False
             logger.debug("Airspy Mini closed")
@@ -227,6 +240,22 @@ class AirspyMiniDevice(SDRDevice):
 
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:
         self._check_open()
+        if self._stream_started:
+            raise DeviceCaptureError(
+                "Cannot start_capture() while read_sync() streaming is active. "
+                "Call stop_capture() first.")
+        self._user_callback = callback
+        self._start_rx()
+
+    def stop_capture(self) -> None:
+        self._stop_rx()
+        self._user_callback = None
+
+    def _start_rx(self) -> None:
+        """Start the Airspy RX stream (called once, shared by both modes)."""
+        if self._capturing:
+            return
+        self._check_open()
 
         def _c_callback(transfer_ptr):
             t = transfer_ptr.contents
@@ -234,7 +263,14 @@ class AirspyMiniDevice(SDRDevice):
             buf = (ctypes.c_int16 * count).from_address(
                 ctypes.cast(t.samples, ctypes.c_void_p).value)
             arr = np.frombuffer(buf, dtype=np.int16).copy()
-            callback(arr)
+            # Route to user callback or internal stream buffer
+            if self._user_callback is not None:
+                self._user_callback(arr)
+            else:
+                with self._stream_lock:
+                    self._stream_chunks.append(arr)
+                    self._stream_total += len(arr)
+                    self._stream_event.set()
             return 0
 
         self._callback_ref = _CALLBACK_TYPE(_c_callback)
@@ -243,38 +279,72 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceCaptureError(f"airspy_start_rx() failed: {ret}")
         self._capturing = True
 
-    def stop_capture(self) -> None:
+    def _stop_rx(self) -> None:
+        """Stop the Airspy RX stream."""
         if self._capturing and _lib is not None:
             _lib.airspy_stop_rx(self._handle)
             self._capturing = False
+        self._stream_started = False
+        with self._stream_lock:
+            self._stream_chunks.clear()
+            self._stream_total = 0
+            self._stream_event.clear()
 
     def read_sync(self, num_samples: int) -> np.ndarray:
-        """Read samples synchronously using async capture internally."""
-        collected = []
-        total = [0]
-        lock = threading.Lock()
-        done = threading.Event()
+        """Read samples synchronously via persistent streaming.
 
-        def _cb(buf: np.ndarray):
-            with lock:
-                collected.append(buf)
-                total[0] += len(buf) // 2
-                if total[0] >= num_samples:
-                    done.set()
+        On the first call, ``airspy_start_rx()`` is invoked once.  Subsequent
+        calls drain samples from an internal ring buffer without restarting
+        the hardware stream.  This avoids the ``-1000`` error that occurs when
+        ``airspy_start_rx()`` is called repeatedly.
 
-        try:
-            self.start_capture(_cb)
-            if not done.wait(timeout=10.0):
+        Parameters
+        ----------
+        num_samples : int
+            Number of I/Q sample pairs to read.
+
+        Returns
+        -------
+        np.ndarray
+            Interleaved int16 I/Q array of length ``num_samples * 2``.
+        """
+        self._check_open()
+        if not self._stream_started:
+            self._user_callback = None  # use internal buffer mode
+            self._start_rx()
+            self._stream_started = True
+
+        needed = num_samples * 2  # int16 values (I + Q interleaved)
+        deadline = time.monotonic() + 10.0
+
+        while True:
+            with self._stream_lock:
+                if self._stream_total >= needed:
+                    parts = []
+                    remaining = needed
+                    while remaining > 0:
+                        chunk = self._stream_chunks[0]
+                        if len(chunk) <= remaining:
+                            parts.append(self._stream_chunks.popleft())
+                            self._stream_total -= len(chunk)
+                            remaining -= len(chunk)
+                        else:
+                            parts.append(chunk[:remaining])
+                            self._stream_chunks[0] = chunk[remaining:]
+                            self._stream_total -= remaining
+                            remaining = 0
+                    self._stream_event.clear()
+                    return np.concatenate(parts)
+
+            wait_time = deadline - time.monotonic()
+            if wait_time <= 0:
+                with self._stream_lock:
+                    have = self._stream_total // 2
                 raise DeviceCaptureError(
-                    f"read_sync timed out after 10 s: collected "
-                    f"{total[0]}/{num_samples} samples")
-        finally:
-            self.stop_capture()
-
-        with lock:
-            result = (np.concatenate(collected) if collected
-                      else np.array([], dtype=np.int16))
-        return result[:num_samples * 2]
+                    f"read_sync timed out after 10 s: "
+                    f"collected {have}/{num_samples} samples")
+            self._stream_event.wait(timeout=min(wait_time, 0.05))
+            self._stream_event.clear()
 
     @property
     def is_open(self) -> bool:

@@ -71,14 +71,13 @@ def _compute_threshold(fft_mag, thresh_coeffs, noise_rms):
     return np.sqrt(thresh)
 
 
-def _print_capture_header(config, window):
+def _print_capture_header(config, window, device_type='rtlsdr'):
     """Print fastcard-compatible capture configuration header to stderr."""
     block_size = int(config.block_size)
     block_history = int(config.block_history)
     constant, snr, _stddev = config.carrier_threshold
     sample_rate = int(config.sample_rate)
     center_freq = int(config.tuner_freq)
-    gain = float(config.tuner_gain)
 
     print("block size: {}; history length: {}".format(block_size, block_history),
           file=sys.stderr)
@@ -92,7 +91,16 @@ def _print_capture_header(config, window):
           file=sys.stderr)
     print("    sample rate = {:.6f} Msps".format(sample_rate / 1e6),
           file=sys.stderr)
-    print("    gain = {:.2f} dB".format(gain), file=sys.stderr)
+    if device_type in ('airspy_mini', 'airspy_r2'):
+        print("    gain: LNA={} Mixer={} VGA={} (bias_tee={})".format(
+            int(config.get('lna_gain', 0)),
+            int(config.get('mixer_gain', 0)),
+            int(config.get('vga_gain', 0)),
+            str(config.get('bias_tee', False)).lower()
+        ), file=sys.stderr)
+    else:
+        print("    gain = {:.2f} dB".format(float(config.tuner_gain)),
+              file=sys.stderr)
 
 
 def _print_detection_line(block_idx, peak_idx, peak_mag, threshold, noise_rms):
@@ -327,7 +335,7 @@ def _capture_airspy(config, extra_args, output_file):
                           sample_rate=sample_rate)
 
         # Print fastcard-compatible configuration header
-        _print_capture_header(config, window)
+        _print_capture_header(config, window, device_type=device_type)
 
         start_time = time.time()
         running = [True]
