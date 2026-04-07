@@ -180,6 +180,13 @@ def compute_block_params(sample_rate, chip_rate,
                          code_length=DEFAULT_CODE_LENGTH):
     """Compute appropriate block_history and block_size for given rates.
 
+    The returned ``block_size`` is guaranteed to satisfy
+    ``block_size >= 2 * block_history`` so that ``new_samples``
+    (``block_size - block_history``) is always at least as large as
+    ``block_history``.  This ensures that the history portion of a
+    newly read block can be obtained by slicing the previous raw
+    buffer without silent truncation.
+
     Parameters
     ----------
     sample_rate : float
@@ -199,7 +206,12 @@ def compute_block_params(sample_rate, chip_rate,
     sps = sample_rate / chip_rate
     template_len = int(sps * code_length)
     block_history = template_len * 2
-    min_block = template_len + block_history + 1
+    # block_size must be large enough for template + history, AND must
+    # ensure new_samples = block_size - block_history >= block_history
+    # so that the raw read buffer always contains enough data for the
+    # next history window.
+    min_block = max(template_len + block_history + 1,
+                    2 * block_history)
     block_size = 1
     while block_size < min_block:
         block_size *= 2
@@ -232,7 +244,8 @@ def _auto_adjust_block_params(values):
     block_history = values.get('block_history', rec_history)
     block_size = values.get('block_size')
     if block_size is not None:
-        min_block = template_len + block_history + 1
+        min_block = max(template_len + block_history + 1,
+                        2 * block_history)
         if block_size < min_block:
             new_size = 1
             while new_size < min_block:

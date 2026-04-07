@@ -319,7 +319,6 @@ def _capture_airspy(config, extra_args, output_file):
               file=sys.stderr)
         sys.exit(1)
 
-    block_idx = 0
     detected_count = 0
 
     try:
@@ -340,7 +339,15 @@ def _capture_airspy(config, extra_args, output_file):
         start_time = time.time()
         running = [True]
         new_samples = block_size - block_history
+
+        # Persistent history buffer: always exactly block_history * 2 int16
+        # values.  Initialised to zeros for the first block (no prior data).
         history_raw = np.zeros(block_history * 2, dtype=np.int16)
+
+        # Total IQ pairs received from the device (including skipped blocks
+        # and dropped samples reported by the hardware).  Used to compute
+        # a time-accurate block index instead of a simple counter.
+        total_samples_received = 0
 
         def _sigint_handler(_sig, _frame):
             running[0] = False
@@ -357,10 +364,15 @@ def _capture_airspy(config, extra_args, output_file):
                 raw = device.read_sync(new_samples)
                 if len(raw) < new_samples * 2:
                     break
-                history_raw = raw[-block_history * 2:]
+                total_samples_received += len(raw) // 2
+                # Update history from the tail of raw.  With correct
+                # block parameters new_samples >= block_history, so this
+                # slice always yields exactly block_history * 2 values.
+                history_raw = raw[-(block_history * 2):]
                 blocks_skipped += 1
             print(" done\n", file=sys.stderr)
 
+        blocks_processed = 0
         while running[0]:
             if duration is not None and (time.time() - start_time) >= duration:
                 break
@@ -368,6 +380,15 @@ def _capture_airspy(config, extra_args, output_file):
             raw = device.read_sync(new_samples)
             if len(raw) < new_samples * 2:
                 break
+
+            total_samples_received += len(raw) // 2
+
+            # Account for samples dropped by the hardware, if the HAL
+            # exposes a counter.  This ensures block_idx reflects real
+            # elapsed time rather than just processed-block count.
+            dropped = getattr(device, 'dropped_samples', 0)
+            block_idx = ((total_samples_received + dropped)
+                         // new_samples)
 
             block_raw = np.concatenate([history_raw, raw])
             block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
@@ -388,8 +409,9 @@ def _capture_airspy(config, extra_args, output_file):
                 output_file.flush()
                 detected_count += 1
 
-            history_raw = raw[-block_history * 2:]
-            block_idx += 1
+            # Update history from the tail of the raw read buffer.
+            history_raw = raw[-(block_history * 2):]
+            blocks_processed += 1
 
     except DeviceConfigError as e:
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
@@ -398,10 +420,11 @@ def _capture_airspy(config, extra_args, output_file):
         pass
     finally:
         device.close()
-        print("\nRead {} blocks.".format(block_idx), file=sys.stderr)
-        logger.info("Detected %d blocks out of %d", detected_count, block_idx)
+        print("\nRead {} blocks.".format(blocks_processed), file=sys.stderr)
+        logger.info("Detected %d blocks out of %d",
+                     detected_count, blocks_processed)
 
-    return block_idx
+    return blocks_processed
 
 
 # ---------------------------------------------------------------------------
