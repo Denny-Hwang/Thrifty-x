@@ -17,6 +17,7 @@ Example:
 
 import contextlib
 import logging
+import math
 import sys
 from collections import namedtuple
 
@@ -172,6 +173,79 @@ DEFINITIONS = {
     ),
 }
 
+DEFAULT_CODE_LENGTH = 1023  # 10-bit Gold code (2^10 - 1)
+
+
+def compute_block_params(sample_rate, chip_rate,
+                         code_length=DEFAULT_CODE_LENGTH):
+    """Compute appropriate block_history and block_size for given rates.
+
+    Parameters
+    ----------
+    sample_rate : float
+    chip_rate : float
+    code_length : int
+        Gold code length (default: 1023 for 10-bit register).
+
+    Returns
+    -------
+    block_size : int
+        Recommended block size (power of 2).
+    block_history : int
+        Recommended block history (~ 2x template length).
+    template_len : int
+        Expected template length in samples.
+    """
+    sps = sample_rate / chip_rate
+    template_len = int(sps * code_length)
+    block_history = template_len * 2
+    min_block = template_len + block_history + 1
+    block_size = 1
+    while block_size < min_block:
+        block_size *= 2
+    return block_size, block_history, template_len
+
+
+def _auto_adjust_block_params(values):
+    """Auto-adjust block_history and block_size when too small for sample rate.
+
+    Called after parsing all settings.  Only enlarges parameters that are
+    insufficient for the estimated template length; explicitly large values
+    set by the user are left untouched.
+    """
+    sample_rate = values.get('sample_rate')
+    chip_rate = values.get('chip_rate')
+    if sample_rate is None or chip_rate is None:
+        return values
+
+    _, rec_history, template_len = compute_block_params(sample_rate, chip_rate)
+
+    block_history = values.get('block_history')
+    if block_history is not None and block_history < template_len - 1:
+        old = block_history
+        values['block_history'] = rec_history
+        logging.info(
+            "Auto-adjusted block_history %d -> %d "
+            "(template_len=%d at %.1f Msps)",
+            old, rec_history, template_len, sample_rate / 1e6)
+
+    block_history = values.get('block_history', rec_history)
+    block_size = values.get('block_size')
+    if block_size is not None:
+        min_block = template_len + block_history + 1
+        if block_size < min_block:
+            new_size = 1
+            while new_size < min_block:
+                new_size *= 2
+            logging.info(
+                "Auto-adjusted block_size %d -> %d "
+                "(template_len=%d, block_history=%d)",
+                block_size, new_size, template_len, block_history)
+            values['block_size'] = new_size
+
+    return values
+
+
 DEFAULT_CONFIG_PATH = 'detector.cfg'
 CONFIG_COMMENT_CHAR = '#'
 CONFIG_DELIMITER = ':'
@@ -265,6 +339,9 @@ def load(args=None, config_file=None, definitions=None):
 
     # Parse
     values = {k: definitions[k].parser(v) for k, v in strings.items()}
+
+    # Auto-adjust block parameters for higher sample rates
+    values = _auto_adjust_block_params(values)
 
     return values
 

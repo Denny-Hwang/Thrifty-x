@@ -109,6 +109,23 @@ def validate_config(config: dict) -> list[str]:
                 f"block_history ({history}) must be less than "
                 f"block_size ({block_size})")
 
+    # 5b. block_history must accommodate the template for the given sample rate
+    chip_rate = config.get('chip_rate')
+    if sample_rate is not None and chip_rate is not None and history is not None:
+        sps = sample_rate / chip_rate
+        est_template_len = int(sps * 1023)  # 10-bit Gold code
+        if history < est_template_len - 1:
+            warnings.append(
+                f"block_history ({history}) is smaller than estimated "
+                f"template length ({est_template_len}) for sample_rate="
+                f"{sample_rate/1e6:.1f}M. Detection will fail. "
+                f"Recommended block_history >= {est_template_len * 2}.")
+        if block_size is not None and block_size <= est_template_len:
+            warnings.append(
+                f"block_size ({block_size}) is not larger than estimated "
+                f"template length ({est_template_len}) for sample_rate="
+                f"{sample_rate/1e6:.1f}M. Detection will fail.")
+
     # 6. carrier_window must fit within block_size/2 (Nyquist)
     carrier_window = config.get('carrier_window')
     if carrier_window is not None and block_size is not None:
