@@ -133,6 +133,11 @@ class AirspyMiniDevice(SDRDevice):
         self._stream_lock = threading.Lock()
         self._stream_event = threading.Event()
         self._user_callback = None  # for start_capture() async mode
+        # Cumulative count of IQ sample pairs that libairspy reported as
+        # dropped (e.g. due to USB overflow).  Exposed as a public
+        # attribute so that higher-level code (_capture_airspy) can
+        # adjust block indices to reflect real elapsed time.
+        self.dropped_samples = 0
 
     def open(self) -> None:
         if _lib is None:
@@ -263,6 +268,11 @@ class AirspyMiniDevice(SDRDevice):
             buf = (ctypes.c_int16 * count).from_address(
                 ctypes.cast(t.samples, ctypes.c_void_p).value)
             arr = np.frombuffer(buf, dtype=np.int16).copy()
+            # Track samples dropped by hardware (USB overflow, etc.)
+            if t.dropped_samples > 0:
+                self.dropped_samples += t.dropped_samples
+                logger.debug("Airspy dropped %d samples (total %d)",
+                             t.dropped_samples, self.dropped_samples)
             # Route to user callback or internal stream buffer
             if self._user_callback is not None:
                 self._user_callback(arr)
@@ -285,6 +295,7 @@ class AirspyMiniDevice(SDRDevice):
             _lib.airspy_stop_rx(self._handle)
             self._capturing = False
         self._stream_started = False
+        self.dropped_samples = 0
         with self._stream_lock:
             self._stream_chunks.clear()
             self._stream_total = 0
