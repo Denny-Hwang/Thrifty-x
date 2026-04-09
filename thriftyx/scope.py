@@ -120,7 +120,7 @@ def scope_cli(args=None):
         h_x = np.arange(hist_bins)
     else:
         hist_bins = 256
-        hist_range = (-2048, 2047)
+        hist_range = (-32768, 32767)
         h_x = np.linspace(hist_range[0], hist_range[1], hist_bins)
 
     h_bars = ax_hist.bar(h_x, np.zeros(hist_bins), width=h_x[1] - h_x[0],

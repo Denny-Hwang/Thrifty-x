@@ -120,8 +120,8 @@ class MockSDRDevice(SDRDevice):
             carrier_i = 0.0
             carrier_q = 0.0
 
-        i_samples = np.clip(noise_i + carrier_i, -2048, 2047).astype(np.int16)
-        q_samples = np.clip(noise_q + carrier_q, -2048, 2047).astype(np.int16)
+        i_samples = np.clip(noise_i + carrier_i, -32768, 32767).astype(np.int16)
+        q_samples = np.clip(noise_q + carrier_q, -32768, 32767).astype(np.int16)
 
         # Interleave I/Q
         result = np.empty(num_samples * 2, dtype=np.int16)

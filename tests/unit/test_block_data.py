@@ -50,15 +50,15 @@ class TestRawToComplex12bit:
         np.testing.assert_allclose(np.abs(result[0]), 0.0, atol=1e-6)
 
     def test_max_positive(self):
-        """2047 I, 0 Q → real ≈ 1.0, imag ≈ 0."""
-        data = np.array([2047, 0], dtype=np.int16)
+        """32767 I, 0 Q → real ≈ 1.0, imag ≈ 0."""
+        data = np.array([32767, 0], dtype=np.int16)
         result = raw_to_complex(data, bit_depth=12)
-        np.testing.assert_allclose(result[0].real, 2047/2048, rtol=1e-5)
+        np.testing.assert_allclose(result[0].real, 32767/32768, rtol=1e-5)
         np.testing.assert_allclose(result[0].imag, 0.0, atol=1e-5)
 
     def test_max_negative(self):
-        """-2048 I → real ≈ -1.0."""
-        data = np.array([-2048, 0], dtype=np.int16)
+        """-32768 I → real ≈ -1.0."""
+        data = np.array([-32768, 0], dtype=np.int16)
         result = raw_to_complex(data, bit_depth=12)
         np.testing.assert_allclose(result[0].real, -1.0, rtol=1e-5)
 

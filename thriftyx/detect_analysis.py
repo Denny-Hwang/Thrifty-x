@@ -99,13 +99,13 @@ class Plotter:
         """Plot sample value histogram."""
         raw = block_data.complex_to_raw(self.unsynced, bit_depth=self.bit_depth)
         if self.bit_depth == 12:
-            # 12-bit signed: range [-2048, 2047], bin into 256 buckets
+            # Airspy INT16: full int16 range, bin into 256 buckets
             nbins = 256
             hist, bin_edges = np.histogram(raw, bins=nbins,
-                                           range=(-2048, 2047))
+                                           range=(-32768, 32767))
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             ax.plot(bin_centers, np.array(hist) / len(self.unsynced) / 2 * 100)
-            ax.set_xlim(-2048, 2047)
+            ax.set_xlim(-32768, 32767)
             ax.set_xlabel('Raw sample value')
         else:
             hist = [0] * 256

@@ -44,7 +44,7 @@ static int _airspy_callback(airspy_transfer_t *transfer)
     if (!atomic_load(&state->running) || transfer->sample_count <= 0)
         return 0;
 
-    /* Samples are 12-bit signed, packed in int16 (lower 12 bits valid) */
+    /* Airspy 12-bit ADC samples, scaled to full int16 range by libairspy */
     int16_t *src = (int16_t *)transfer->samples;
     size_t   n   = (size_t)(transfer->sample_count) * 2; /* I and Q */
 
