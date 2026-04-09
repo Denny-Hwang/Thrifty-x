@@ -67,13 +67,14 @@ class ForcibleDetector:
 
 
 class Plotter:
-    def __init__(self, detection, settings, sample_rate):
+    def __init__(self, detection, settings, sample_rate, bit_depth=8):
         self.result = detection.result
         self.unsynced = detection.unsynced
         self.synced = detection.synced
         self.corr = detection.corr
         self.settings = settings
         self.sample_rate = sample_rate
+        self.bit_depth = bit_depth
         self.template = Signal(self.settings.template)
 
         filter_width = int(settings.block_len / settings.carrier_len) * 2
@@ -96,14 +97,24 @@ class Plotter:
 
     def plot_sample_histogram(self, ax):
         """Plot sample value histogram."""
-        raw = block_data.complex_to_raw(self.unsynced)
-        hist = [0] * 256
-        for value in raw:
-            hist[value] += 1
-        ax.plot(np.array(hist) / len(self.unsynced) / 2 * 100)
+        raw = block_data.complex_to_raw(self.unsynced, bit_depth=self.bit_depth)
+        if self.bit_depth == 12:
+            # 12-bit signed: range [-2048, 2047], bin into 256 buckets
+            nbins = 256
+            hist, bin_edges = np.histogram(raw, bins=nbins,
+                                           range=(-2048, 2047))
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+            ax.plot(bin_centers, np.array(hist) / len(self.unsynced) / 2 * 100)
+            ax.set_xlim(-2048, 2047)
+            ax.set_xlabel('Raw sample value')
+        else:
+            hist = [0] * 256
+            for value in raw:
+                hist[value] += 1
+            ax.plot(np.array(hist) / len(self.unsynced) / 2 * 100)
+            ax.set_xlim(0, 255)
+            ax.set_xlabel('Raw byte value')
         ax.set_ylim(0, 100)
-        ax.set_xlim(0, 255)
-        ax.set_xlabel('Raw byte value')
         ax.set_ylabel('Occurrence (%)')
         ax.set_title('Sample value histogram')
         ax.grid()
@@ -569,7 +580,7 @@ def _get_interactive_backend():
     return 'Agg', _plt
 
 
-def show_detections(detections, cmds, settings, sample_rate):
+def show_detections(detections, cmds, settings, sample_rate, bit_depth=8):
     """Display detection plots interactively using matplotlib.pyplot."""
     backend, plt = _get_interactive_backend()
     interactive = (backend != 'Agg')
@@ -579,7 +590,7 @@ def show_detections(detections, cmds, settings, sample_rate):
                                                 add_dt=False)
 
     for detection in detections:
-        plotter = Plotter(detection, settings, sample_rate)
+        plotter = Plotter(detection, settings, sample_rate, bit_depth=bit_depth)
         summary_text = summary_liner(detection.detected, detection.result)
 
         for cmd in cmds:
@@ -682,15 +693,18 @@ def _main():
 
     setting_keys = ['sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
-                    'corr_threshold', 'template']
+                    'corr_threshold', 'template', 'bit_depth']
     config, args = load_args(parser, setting_keys)
+
+    bit_depth = int(config.get('bit_depth', 8))
 
     window = normalize_freq_range(config.carrier_window,
                                   config.sample_rate / config.block_size)
 
     if args.raw:
         blocks = block_data.block_reader(args.input, config.block_size,
-                                         config.block_history)
+                                         config.block_history,
+                                         bit_depth=bit_depth)
     else:
         blocks = block_data.card_reader(args.input)
 
@@ -743,7 +757,8 @@ def _main():
             block_dir = "{}_block{}".format(args.export,
                                             detection.result.block)
             os.makedirs(block_dir, exist_ok=True)
-            plotter = Plotter(detection, settings, config.sample_rate)
+            plotter = Plotter(detection, settings, config.sample_rate,
+                              bit_depth=bit_depth)
             for cmd in cmds:
                 filename = os.path.join(block_dir, "{}.png".format(cmd))
                 print("Exporting", filename)
@@ -754,7 +769,8 @@ def _main():
                 fig.savefig(filename, dpi=150)
 
     if not args.save and not args.export:
-        show_detections(detections, cmds, settings, config.sample_rate)
+        show_detections(detections, cmds, settings, config.sample_rate,
+                        bit_depth=bit_depth)
 
 
 if __name__ == '__main__':
