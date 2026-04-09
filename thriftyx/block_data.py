@@ -67,9 +67,10 @@ def raw_to_complex(data, bit_depth=8):
     :class:`numpy.ndarray` of `numpy.complex64`
     """
     if bit_depth == 12:
-        # Airspy: 12-bit signed int16, range -2048 to +2047, no DC offset
+        # Airspy: 12-bit ADC, but libairspy INT16_IQ outputs full int16 range
+        # (-32768 to +32767) by left-shifting the 12-bit samples by 4 bits.
         values = data.astype(np.float32).view(np.complex64)
-        values = values / 2048.0
+        values = values / 32768.0
     elif bit_depth == 8:
         # RTL-SDR legacy: 8-bit unsigned uint8, DC offset at 127.4
         values = data.astype(np.float32).view(np.complex64)
@@ -94,8 +95,8 @@ def complex_to_raw(array, bit_depth=8):
     :class:`numpy.ndarray` of `numpy.int16` or `numpy.uint8`
     """
     if bit_depth == 12:
-        scaled = (array.astype(np.complex64) * 2048.0).view(np.float32)
-        return np.clip(scaled, -2048, 2047).astype(np.int16)
+        scaled = (array.astype(np.complex64) * 32768.0).view(np.float32)
+        return np.clip(scaled, -32768, 32767).astype(np.int16)
     elif bit_depth == 8:
         scaled = array.astype(np.complex64).view(np.float32) * 128 + 127.4
         return np.clip(scaled, 0, 255).astype(np.uint8)

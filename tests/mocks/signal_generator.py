@@ -34,17 +34,18 @@ def add_noise(signal: np.ndarray, snr_db: float, seed: int = 42) -> np.ndarray:
 
 
 def complex_to_int16(signal: np.ndarray) -> np.ndarray:
-    """Convert complex64 signal to interleaved int16 (12-bit range).
+    """Convert complex64 signal to interleaved int16 (full int16 range).
 
-    Scales signal so that amplitude 1.0 maps to ±2047.
+    Scales signal so that amplitude 1.0 maps to ±32767.
+    libairspy INT16_IQ format uses the full int16 range.
     """
     max_val = np.max(np.abs(signal))
     if max_val > 0:
-        scale = 2047.0 / max_val
+        scale = 32767.0 / max_val
     else:
         scale = 1.0
-    i_samples = np.clip(np.real(signal) * scale, -2048, 2047).astype(np.int16)
-    q_samples = np.clip(np.imag(signal) * scale, -2048, 2047).astype(np.int16)
+    i_samples = np.clip(np.real(signal) * scale, -32768, 32767).astype(np.int16)
+    q_samples = np.clip(np.imag(signal) * scale, -32768, 32767).astype(np.int16)
     result = np.empty(len(signal) * 2, dtype=np.int16)
     result[0::2] = i_samples
     result[1::2] = q_samples
