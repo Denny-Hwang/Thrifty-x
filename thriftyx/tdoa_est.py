@@ -398,9 +398,39 @@ def _main():
                              " used for estimating the TDOA of the mobile unit"
                              " transmission")
     parser.add_argument('-s', '--sample-rate', dest='sample_rate',
-                        type=float, default=2.4e6,
-                        help="nominal sample rate of receivers")
+                        type=float, default=None,
+                        help="nominal sample rate of receivers in Hz "
+                             "(e.g. 2.4e6 for RTL-SDR, 6e6 for Airspy Mini). "
+                             "If omitted, reads from detector.cfg; "
+                             "falls back to 2.4e6 with a warning.")
+    parser.add_argument('-c', '--config', dest='config', default=None,
+                        help="settings config file to read sample_rate from "
+                             "[default: detector.cfg]")
     args = parser.parse_args()
+
+    # Resolve sample_rate: CLI > detector.cfg > legacy default
+    sample_rate = args.sample_rate
+    if sample_rate is None:
+        config_path = args.config if args.config else 'detector.cfg'
+        try:
+            import contextlib
+            from thriftyx.setting_parsers import metric_float
+            with contextlib.suppress(IOError):
+                with open(config_path) as _cfg:
+                    cfg_vals = parse_kvconfig(_cfg)
+                    if 'sample_rate' in cfg_vals:
+                        sample_rate = metric_float(cfg_vals['sample_rate'])
+        except Exception:
+            pass
+    if sample_rate is None:
+        import logging as _logging
+        _logging.warning(
+            "--sample-rate not specified and not found in detector.cfg. "
+            "Defaulting to 2.4e6 Hz (RTL-SDR). "
+            "If using Airspy, pass the correct --sample-rate "
+            "(e.g. --sample-rate 6e6 for Airspy Mini). "
+            "TDOA and position estimates will be wrong otherwise.")
+        sample_rate = 2.4e6
 
     toads = toads_data.load_toads(args.toads)
     matches = matchmaker.load_matches(args.matches)
@@ -408,7 +438,7 @@ def _main():
     beacon_pos = load_pos_config(args.beacon_pos)
     tdoa_groups, failures = estimate_tdoas(toads, matches, args.window_size,
                                            beacon_pos, rx_pos,
-                                           args.sample_rate)
+                                           sample_rate)
 
     print("Number of TDOA estimations:", len(tdoa_groups))
     print("Number of TDOA estimation failures:", len(failures))

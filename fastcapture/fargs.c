@@ -227,6 +227,10 @@ void fargs_print_card_header(fargs_t *fa,
                              FILE* out,
                              bool sdr,
                              const char* tool) {
+    /* v2 machine-readable header: parsed by thriftyx/block_data.card_reader
+     * to select int16 (12-bit Airspy) sample decoding automatically. */
+    fprintf(out, "#v2 bit_depth=12 sample_rate=%u\n",
+            sdr ? fa->sdr_sample_rate : 0);
     fprintf(out,
             "# arguments: { carrier_bin: '%d-%d', threshold: '%gc+%gs', "
             "block_size: %zu, history_size: %zu }\n",
