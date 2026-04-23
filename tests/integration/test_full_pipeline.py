@@ -118,9 +118,13 @@ def test_signal_generator_carrier():
 
 
 def test_complex_to_int16_range():
-    """complex_to_int16 should produce values in 12-bit range."""
+    """complex_to_int16 should produce values in the full int16 range.
+
+    libairspy INT16_IQ left-shifts 12-bit ADC values into the full int16
+    range, so amplitude-1.0 signals correctly produce values up to ±32767.
+    """
     from tests.mocks.signal_generator import complex_to_int16
     signal = np.exp(1j * np.linspace(0, 2*np.pi, 64)).astype(np.complex64)
     raw = complex_to_int16(signal)
     assert raw.dtype == np.int16
-    assert np.max(np.abs(raw)) <= 2047 + 1  # slight tolerance
+    assert np.max(np.abs(raw)) <= 32767
