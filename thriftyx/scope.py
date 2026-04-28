@@ -40,10 +40,18 @@ def scope_cli(args=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
+    parser.add_argument('--trigger-level', dest='trigger_level',
+                        type=float, default=None,
+                        help="Hold time/frequency plots until the block peak "
+                             "magnitude exceeds this normalized threshold "
+                             "(0.0 - 1.0). Mimics the level trigger of the "
+                             "original GnuRadio scope. Default: free-running.")
+
     setting_keys = ['tuner_freq', 'sample_rate', 'block_size',
                     'device_type', 'lna_gain', 'mixer_gain', 'vga_gain',
                     'bias_tee', 'bit_depth']
-    config, _ = settings_module.load_args(parser, setting_keys, argv=args)
+    config, extra = settings_module.load_args(parser, setting_keys, argv=args)
+    trigger_level = extra.get('trigger_level')
 
     device_type = config.get('device_type', 'rtlsdr')
     sample_rate = int(config.sample_rate)
@@ -157,6 +165,11 @@ def scope_cli(args=None):
                                        bit_depth=bit_depth)
         return True
 
+    if trigger_level is not None:
+        ax_time.axhline(trigger_level, color='r', linestyle='--', linewidth=0.7,
+                        label='Trigger')
+        ax_time.legend(loc='upper right', fontsize=8)
+
     def _update(_frame):
         if not _read_block():
             return t_line, f_line
@@ -165,6 +178,9 @@ def scope_cli(args=None):
 
         # Time domain
         mag = np.abs(block[:block_size // 2])
+        if trigger_level is not None and np.max(mag) < trigger_level:
+            # Hold previous trace; no peak above the trigger threshold.
+            return (t_line, f_line) + tuple(h_bars)
         t_line.set_data(np.arange(len(mag)), mag)
 
         # Frequency domain

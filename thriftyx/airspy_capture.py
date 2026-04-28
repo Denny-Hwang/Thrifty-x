@@ -123,7 +123,7 @@ def _write_card_line(output_file, timestamp, block_idx, raw_array):
 def _capture_rtlsdr_fastcard(config, extra_args):
     """Capture from RTL-SDR by delegating to the ``fastcard`` binary.
 
-    This replicates the original Thrifty ``fastcard_capture.py`` behaviour:
+    This replicates the original Thrifty fastcard-based capture behaviour:
     fastcard performs carrier detection in C and writes only detected blocks
     to the .card file.
     """
