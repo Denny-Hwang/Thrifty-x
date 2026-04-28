@@ -34,6 +34,12 @@ class _FakeAirspyDevice:
     def set_bias_tee(self, _enabled):
         return None
 
+    def set_packing(self, _enabled):
+        return None
+
+    def apply_gain_mode(self, _mode, **_kwargs):
+        return None
+
     def read_sync(self, _num_samples):
         if not self._buffers:
             return np.array([], dtype=np.int16)
@@ -54,6 +60,12 @@ def _build_config(capture_skip=0):
         'mixer_gain': 0,
         'vga_gain': 0,
         'bias_tee': False,
+        'gain_mode': 'manual',
+        'combined_gain': 0,
+        'lna_agc': False,
+        'mixer_agc': False,
+        'ppm': 0.0,
+        'packing': False,
     })
 
 
@@ -71,7 +83,7 @@ def _capture_indices(monkeypatch, capture_skip):
 
     monkeypatch.setattr(
         'thriftyx.hal.device_factory.create_device',
-        lambda _device_type: fake,
+        lambda _device_type, **_kwargs: fake,
     )
     monkeypatch.setattr(
         'thriftyx.airspy_capture.carrier_detect_block',

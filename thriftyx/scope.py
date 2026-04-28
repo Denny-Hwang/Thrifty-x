@@ -49,7 +49,9 @@ def scope_cli(args=None):
 
     setting_keys = ['tuner_freq', 'sample_rate', 'block_size',
                     'device_type', 'lna_gain', 'mixer_gain', 'vga_gain',
-                    'bias_tee', 'bit_depth']
+                    'bias_tee', 'bit_depth',
+                    'airspy_serial', 'gain_mode', 'combined_gain',
+                    'lna_agc', 'mixer_agc', 'ppm', 'packing']
     config, extra = settings_module.load_args(parser, setting_keys, argv=args)
     trigger_level = extra.get('trigger_level')
 
@@ -83,13 +85,32 @@ def scope_cli(args=None):
     else:
         from thriftyx.hal.device_factory import create_device
         try:
-            device = create_device(device_type)
+            airspy_serial = config.get('airspy_serial', None)
+            ppm = float(config.get('ppm', 0.0))
+            create_kwargs = {'ppm': ppm} if ppm else {}
+            if airspy_serial:
+                create_kwargs['serial'] = airspy_serial
+            device = create_device(device_type, **create_kwargs)
             device.open()
             device.set_sample_rate(sample_rate)
+            if bool(config.get('packing', False)):
+                device.set_packing(True)
             device.set_center_freq(center_freq)
-            device.set_gain('lna', int(config.get('lna_gain', 0)))
-            device.set_gain('mixer', int(config.get('mixer_gain', 0)))
-            device.set_gain('vga', int(config.get('vga_gain', 0)))
+            gain_mode = str(config.get('gain_mode', 'manual'))
+            if gain_mode == 'manual':
+                device.apply_gain_mode(
+                    'manual',
+                    lna=int(config.get('lna_gain', 0)),
+                    mixer=int(config.get('mixer_gain', 0)),
+                    vga=int(config.get('vga_gain', 0)),
+                    lna_agc=bool(config.get('lna_agc', False)),
+                    mixer_agc=bool(config.get('mixer_agc', False)),
+                )
+            else:
+                device.apply_gain_mode(
+                    gain_mode,
+                    combined=int(config.get('combined_gain', 0)),
+                )
             device.set_bias_tee(bool(config.get('bias_tee', False)))
         except DeviceNotFoundError as e:
             print("ERROR: {}".format(e), file=sys.stderr)

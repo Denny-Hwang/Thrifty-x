@@ -213,3 +213,42 @@ def test_block_size_exactly_twice_block_history_ok():
     config['block_history'] = 8192
     # Sample-rate-related warnings are fine; this must not raise.
     validate_config(config)
+
+
+def test_gain_mode_invalid_value_rejected():
+    config = _valid_mini_config()
+    config['gain_mode'] = 'auto'
+    with pytest.raises(ConfigValidationError, match="gain_mode"):
+        validate_config(config)
+
+
+def test_gain_mode_linearity_requires_combined():
+    config = _valid_mini_config()
+    config['gain_mode'] = 'linearity'
+    # No combined_gain set
+    with pytest.raises(ConfigValidationError, match="combined_gain"):
+        validate_config(config)
+
+
+def test_gain_mode_linearity_with_combined_ok():
+    config = _valid_mini_config()
+    config['gain_mode'] = 'linearity'
+    config['combined_gain'] = 12
+    validate_config(config)
+
+
+def test_combined_gain_out_of_range():
+    config = _valid_mini_config()
+    config['gain_mode'] = 'sensitivity'
+    config['combined_gain'] = 22
+    with pytest.raises(ConfigValidationError, match="combined_gain"):
+        validate_config(config)
+
+
+def test_gain_mode_linearity_warns_when_agc_set():
+    config = _valid_mini_config()
+    config['gain_mode'] = 'linearity'
+    config['combined_gain'] = 5
+    config['lna_agc'] = True
+    warnings = validate_config(config)
+    assert any('ignores' in w for w in warnings)

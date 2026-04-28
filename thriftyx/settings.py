@@ -145,6 +145,53 @@ DEFINITIONS = {
         "--device-index."
     ),
 
+    'gain_mode': Definition(
+        ['--gain-mode'],
+        str,
+        'manual',
+        "Airspy gain mode: 'manual' (lna/mixer/vga indices), 'linearity' "
+        "(low-IMD profile), or 'sensitivity' (high-NF profile). "
+        "Linearity/sensitivity require --combined-gain."
+    ),
+
+    'combined_gain': Definition(
+        ['--combined-gain'],
+        int,
+        '0',
+        "Combined gain index (0-21) used when gain_mode is 'linearity' "
+        "or 'sensitivity'. Ignored in 'manual' mode."
+    ),
+
+    'lna_agc': Definition(
+        ['--lna-agc'],
+        setting_parsers.parse_bool,
+        'false',
+        "Engage Airspy LNA AGC loop (manual mode only)"
+    ),
+
+    'mixer_agc': Definition(
+        ['--mixer-agc'],
+        setting_parsers.parse_bool,
+        'false',
+        "Engage Airspy mixer AGC loop (manual mode only)"
+    ),
+
+    'ppm': Definition(
+        ['--ppm'],
+        float,
+        '0.0',
+        "Crystal frequency correction in parts-per-million applied to "
+        "Airspy LO requests. Positive = crystal runs fast."
+    ),
+
+    'packing': Definition(
+        ['--packing'],
+        setting_parsers.parse_bool,
+        'false',
+        "Enable libairspy 12-bit USB packing (saves ~33% bandwidth; "
+        "useful at the highest sample rates on USB 2.0 hosts)"
+    ),
+
     'lna_gain': Definition(
         ['--lna-gain'],
         int,

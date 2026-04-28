@@ -92,12 +92,25 @@ def _print_capture_header(config, window, device_type='rtlsdr'):
     print("    sample rate = {:.6f} Msps".format(sample_rate / 1e6),
           file=sys.stderr)
     if device_type in ('airspy_mini', 'airspy_r2'):
-        print("    gain: LNA={} Mixer={} VGA={} (bias_tee={})".format(
-            int(config.get('lna_gain', 0)),
-            int(config.get('mixer_gain', 0)),
-            int(config.get('vga_gain', 0)),
-            str(config.get('bias_tee', False)).lower()
-        ), file=sys.stderr)
+        gain_mode = str(config.get('gain_mode', 'manual'))
+        if gain_mode == 'manual':
+            print("    gain mode: manual; LNA={} Mixer={} VGA={} "
+                  "(lna_agc={}, mixer_agc={})".format(
+                      int(config.get('lna_gain', 0)),
+                      int(config.get('mixer_gain', 0)),
+                      int(config.get('vga_gain', 0)),
+                      str(config.get('lna_agc', False)).lower(),
+                      str(config.get('mixer_agc', False)).lower(),
+                  ), file=sys.stderr)
+        else:
+            print("    gain mode: {}; combined={}".format(
+                      gain_mode, int(config.get('combined_gain', 0))),
+                  file=sys.stderr)
+        print("    bias_tee={}, ppm={:+.2f}, packing={}".format(
+                  str(config.get('bias_tee', False)).lower(),
+                  float(config.get('ppm', 0.0)),
+                  str(config.get('packing', False)).lower(),
+              ), file=sys.stderr)
     else:
         print("    gain = {:.2f} dB".format(float(config.tuner_gain)),
               file=sys.stderr)
@@ -313,7 +326,8 @@ def _capture_airspy(config, extra_args, output_file):
     # precedence; otherwise ``--device-index`` selects by enumeration order.
     airspy_serial = config.get('airspy_serial', None)
     device_index = extra_args.get('device_index', 0)
-    create_kwargs = {}
+    ppm = float(config.get('ppm', 0.0))
+    create_kwargs = {'ppm': ppm} if ppm else {}
     if airspy_serial:
         create_kwargs['serial'] = airspy_serial
     elif device_index is not None and int(device_index) > 0:
@@ -342,10 +356,28 @@ def _capture_airspy(config, extra_args, output_file):
 
     try:
         device.set_sample_rate(sample_rate)
+        # Optional 12-bit USB packing (saves USB bandwidth at the highest
+        # sample rates).  Must be applied before set_center_freq /
+        # set_gain so the device is fully reconfigured before streaming.
+        if bool(config.get('packing', False)):
+            device.set_packing(True)
         device.set_center_freq(center_freq)
-        device.set_gain('lna', int(config.get('lna_gain', 0)))
-        device.set_gain('mixer', int(config.get('mixer_gain', 0)))
-        device.set_gain('vga', int(config.get('vga_gain', 0)))
+
+        gain_mode = str(config.get('gain_mode', 'manual'))
+        if gain_mode == 'manual':
+            device.apply_gain_mode(
+                'manual',
+                lna=int(config.get('lna_gain', 0)),
+                mixer=int(config.get('mixer_gain', 0)),
+                vga=int(config.get('vga_gain', 0)),
+                lna_agc=bool(config.get('lna_agc', False)),
+                mixer_agc=bool(config.get('mixer_agc', False)),
+            )
+        else:
+            device.apply_gain_mode(
+                gain_mode,
+                combined=int(config.get('combined_gain', 0)),
+            )
         device.set_bias_tee(bool(config.get('bias_tee', False)))
 
         # Write v2 .card header
@@ -498,7 +530,10 @@ def capture_cli(args=None):
                     'carrier_window', 'carrier_threshold',
                     'bit_depth', 'bias_tee',
                     'lna_gain', 'mixer_gain', 'vga_gain',
-                    'capture_skip']
+                    'capture_skip',
+                    # New Airspy options (P1 follow-ups):
+                    'airspy_serial', 'gain_mode', 'combined_gain',
+                    'lna_agc', 'mixer_agc', 'ppm', 'packing']
     config, extra_args = settings_module.load_args(parser, setting_keys,
                                                     argv=args)
 
