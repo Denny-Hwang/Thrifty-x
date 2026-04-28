@@ -366,6 +366,55 @@ def load_pos_config(file_):
     return txfreqs
 
 
+# Default sample rate per device type when sample_rate is missing from
+# detector.cfg.  Inferred from the canonical configurations shipped in
+# example/detector_*.cfg.
+_DEVICE_DEFAULT_RATES = {
+    'rtlsdr': 2_400_000,
+    'airspy_mini': 6_000_000,
+    'airspy_r2': 10_000_000,
+}
+
+
+def _resolve_sample_rate(cli_value, config_path):
+    """Resolve nominal sample rate for TDOA estimation.
+
+    Resolution order: CLI argument > detector.cfg ``sample_rate`` >
+    detector.cfg ``device_type`` default > 2.4e6 with warning.
+    """
+    if cli_value is not None:
+        return float(cli_value)
+
+    import contextlib
+    import logging as _logging
+    from thriftyx.setting_parsers import metric_float
+
+    cfg_path = config_path if config_path else 'detector.cfg'
+    cfg_vals = {}
+    with contextlib.suppress(IOError):
+        with open(cfg_path) as _cfg:
+            cfg_vals = parse_kvconfig(_cfg)
+
+    if 'sample_rate' in cfg_vals:
+        return metric_float(cfg_vals['sample_rate'])
+
+    device_type = cfg_vals.get('device_type', '').strip()
+    if device_type in _DEVICE_DEFAULT_RATES:
+        rate = _DEVICE_DEFAULT_RATES[device_type]
+        _logging.warning(
+            "--sample-rate not specified and detector.cfg has no sample_rate; "
+            "inferring %.1e Hz from device_type=%s.", rate, device_type)
+        return float(rate)
+
+    _logging.warning(
+        "--sample-rate not specified and not found in detector.cfg. "
+        "Defaulting to 2.4e6 Hz (RTL-SDR). "
+        "If using Airspy, pass the correct --sample-rate "
+        "(e.g. --sample-rate 6e6 for Airspy Mini). "
+        "TDOA and position estimates will be wrong otherwise.")
+    return 2.4e6
+
+
 def _main():
     import argparse
 
@@ -400,37 +449,15 @@ def _main():
     parser.add_argument('-s', '--sample-rate', dest='sample_rate',
                         type=float, default=None,
                         help="nominal sample rate of receivers in Hz "
-                             "(e.g. 2.4e6 for RTL-SDR, 6e6 for Airspy Mini). "
-                             "If omitted, reads from detector.cfg; "
-                             "falls back to 2.4e6 with a warning.")
+                             "(e.g. 2.4e6 for RTL-SDR, 6e6 for Airspy Mini, "
+                             "10e6 for Airspy R2). If omitted, reads from "
+                             "detector.cfg (sample_rate or device_type).")
     parser.add_argument('-c', '--config', dest='config', default=None,
                         help="settings config file to read sample_rate from "
                              "[default: detector.cfg]")
     args = parser.parse_args()
 
-    # Resolve sample_rate: CLI > detector.cfg > legacy default
-    sample_rate = args.sample_rate
-    if sample_rate is None:
-        config_path = args.config if args.config else 'detector.cfg'
-        try:
-            import contextlib
-            from thriftyx.setting_parsers import metric_float
-            with contextlib.suppress(IOError):
-                with open(config_path) as _cfg:
-                    cfg_vals = parse_kvconfig(_cfg)
-                    if 'sample_rate' in cfg_vals:
-                        sample_rate = metric_float(cfg_vals['sample_rate'])
-        except Exception:
-            pass
-    if sample_rate is None:
-        import logging as _logging
-        _logging.warning(
-            "--sample-rate not specified and not found in detector.cfg. "
-            "Defaulting to 2.4e6 Hz (RTL-SDR). "
-            "If using Airspy, pass the correct --sample-rate "
-            "(e.g. --sample-rate 6e6 for Airspy Mini). "
-            "TDOA and position estimates will be wrong otherwise.")
-        sample_rate = 2.4e6
+    sample_rate = _resolve_sample_rate(args.sample_rate, args.config)
 
     toads = toads_data.load_toads(args.toads)
     matches = matchmaker.load_matches(args.matches)

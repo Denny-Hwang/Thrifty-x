@@ -3,17 +3,18 @@
 """
 Calculate the histogram over multiple blocks of data.
 
-Example:
-    # rtl_sdr -f 433.83M -s 2.4M -g 55 data.bin
-    # python fft_analysis.py data.bin
-"""
+Examples:
+    # RTL-SDR (8-bit, default):
+    rtl_sdr -f 433.83M -s 2.4M -g 55 data.bin
+    hist.py data.bin
 
-from __future__ import print_function
+    # Airspy (12-bit) raw I/Q file:
+    hist.py --bit-depth 12 raw_int16.bin
+"""
 
 import argparse
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 from thriftyx import settings
 from thriftyx.block_data import block_reader, complex_to_raw
@@ -28,24 +29,32 @@ def _main():
                         help="input data ('-' streams from stdin)")
     parser.add_argument('-i', '--integrate', type=int, default=100,
                         help="Number of blocks to integrate over")
-    setting_keys = ['block_size', 'block_history']
+    setting_keys = ['block_size', 'block_history', 'bit_depth']
     config, args = settings.load_args(parser, setting_keys)
 
-    blocks = block_reader(args.input, config.block_size, config.block_history)
+    bit_depth = int(config.get('bit_depth', 8))
+    blocks = block_reader(args.input, config.block_size, config.block_history,
+                          bit_depth=bit_depth)
 
-    hist_sum = np.zeros(256)
+    if bit_depth == 12:
+        hist_nbins = 256
+        hist_range = (-32768, 32768)
+    else:
+        hist_nbins = 256
+        hist_range = (0, 256)
+    hist_sum = np.zeros(hist_nbins)
 
     cnt = 0
 
     for _, _, block in blocks:
-        samples = complex_to_raw(block)
-        for s in samples:
-            hist_sum[s] += 1
+        samples = complex_to_raw(block, bit_depth=bit_depth)
+        counts, _ = np.histogram(samples, bins=hist_nbins, range=hist_range)
+        hist_sum += counts
 
         cnt += 1
         if cnt == args.integrate:
             print(hist_sum)
-            hist_sum = np.zeros(256)
+            hist_sum = np.zeros(hist_nbins)
             cnt = 0
 
 
