@@ -344,9 +344,8 @@ def _capture_airspy(config, extra_args, output_file):
         # values.  Initialised to zeros for the first block (no prior data).
         history_raw = np.zeros(block_history * 2, dtype=np.int16)
 
-        # Total IQ pairs received from the device (including skipped blocks
-        # and dropped samples reported by the hardware).  Used to compute
-        # a time-accurate block index instead of a simple counter.
+        # Total IQ pairs received since the start of the *processed* capture
+        # window (i.e., after capture_skip).  Used to compute block indices.
         total_samples_received = 0
 
         def _sigint_handler(_sig, _frame):
@@ -371,6 +370,13 @@ def _capture_airspy(config, extra_args, output_file):
                 history_raw = raw[-(block_history * 2):]
                 blocks_skipped += 1
             print(" done\n", file=sys.stderr)
+            # Match RTL behaviour: first processed block starts at index 0
+            # regardless of the number of skipped blocks.
+            total_samples_received = 0
+
+        # Baseline dropped-sample counter at the start of the processed
+        # window.  AirspyMiniDevice exposes cumulative dropped samples.
+        dropped_base = getattr(device, 'dropped_samples', 0)
 
         blocks_processed = 0
         while running[0]:
@@ -386,9 +392,10 @@ def _capture_airspy(config, extra_args, output_file):
             # Account for samples dropped by the hardware, if the HAL
             # exposes a counter.  This ensures block_idx reflects real
             # elapsed time rather than just processed-block count.
-            dropped = getattr(device, 'dropped_samples', 0)
+            dropped = max(0, getattr(device, 'dropped_samples', 0)
+                          - dropped_base)
             block_idx = ((total_samples_received + dropped)
-                         // new_samples)
+                         // new_samples) - 1
 
             block_raw = np.concatenate([history_raw, raw])
             block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
