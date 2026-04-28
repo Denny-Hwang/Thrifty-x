@@ -52,6 +52,10 @@ set(FASTCAPTURE_SOURCES
 )
 
 add_library(fastcapture_lib STATIC ${FASTCAPTURE_SOURCES})
+# Output name on disk: libfastcapture.a so the pkg-config "-lfastcapture"
+# directive resolves correctly.  (The target *name* stays "fastcapture_lib"
+# to disambiguate from the executable target below.)
+set_target_properties(fastcapture_lib PROPERTIES OUTPUT_NAME fastcapture)
 target_link_libraries(fastcapture_lib
     ${AIRSPY_LIBRARIES}
     ${FFTW3F_LIBRARIES}
@@ -61,19 +65,20 @@ target_link_libraries(fastcapture_lib
 )
 
 # Main fastcapture binary
-add_executable(fastcapture fastcard_cli.c)
-target_link_libraries(fastcapture fastcapture_lib)
+add_executable(fastcapture_bin fastcard_cli.c)
+set_target_properties(fastcapture_bin PROPERTIES OUTPUT_NAME fastcapture)
+target_link_libraries(fastcapture_bin fastcapture_lib)
 
 # Installation
-install(TARGETS fastcapture DESTINATION bin)
+install(TARGETS fastcapture_bin DESTINATION bin)
 install(TARGETS fastcapture_lib DESTINATION lib)
 install(FILES fastcard.h DESTINATION include)
 
 # pkg-config file
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/fastcard.pc.in
-    ${CMAKE_CURRENT_BINARY_DIR}/fastcard.pc
+    ${CMAKE_CURRENT_BINARY_DIR}/fastcapture.pc
     @ONLY
 )
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fastcard.pc
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fastcapture.pc
         DESTINATION lib/pkgconfig)

@@ -45,7 +45,7 @@ block_t * reader_block_new(size_t len) {
     if (block == NULL) {
         return NULL;
     }
-    // allocate a few extra bytes just in case a reader terminates the string
+    // Allocate a few extra bytes in case a reader terminates the string
     // or base64 decoding writes extra bytes.
     block->raw_samples = malloc(len * 2 * sizeof(int16_t) + 5);
     if (block->raw_samples == NULL) {
@@ -53,9 +53,13 @@ block_t * reader_block_new(size_t len) {
         return NULL;
     }
 
-    // initial values
+    // Initial values: zero out the *entire* buffer (I and Q for every
+    // sample, len * 2 int16 values) so the first block read does not
+    // expose uninitialised memory through the history-overlap region.
     block->index = -1;
-    for (size_t i = 0; i < len; ++i) {
+    block->timestamp.tv_sec = 0;
+    block->timestamp.tv_usec = 0;
+    for (size_t i = 0; i < len * 2; ++i) {
         block->raw_samples[i] = 0;
     }
 

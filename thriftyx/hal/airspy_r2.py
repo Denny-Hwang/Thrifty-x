@@ -10,7 +10,8 @@
 
 import ctypes
 
-from thriftyx.hal.airspy_mini import AirspyMiniDevice, _lib, _lib_error
+from thriftyx.hal.airspy_mini import (AirspyMiniDevice, _lib, _lib_error,
+                                       _rate_is_supported)
 from thriftyx.hal.base import DeviceInfo, SampleFormat
 from thriftyx.exceptions import DeviceNotFoundError, DeviceConfigError
 
@@ -29,6 +30,7 @@ class AirspyR2Device(AirspyMiniDevice):
     gain stages, and frequency range with R2-specific values.
     """
 
+    _SUPPORTED_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
     VALID_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
     _GAIN_STAGES = _GAIN_STAGES
     _FREQUENCY_RANGE = _FREQUENCY_RANGE
@@ -43,7 +45,8 @@ class AirspyR2Device(AirspyMiniDevice):
         return DeviceInfo(
             name=_DEVICE_NAME,
             serial=serial,
-            supported_sample_rates=_SUPPORTED_SAMPLE_RATES,
+            supported_sample_rates=getattr(self, '_supported_sample_rates',
+                                            _SUPPORTED_SAMPLE_RATES),
             frequency_range=_FREQUENCY_RANGE,
             bit_depth=12,
             sample_format=SampleFormat.INT16,
@@ -51,10 +54,12 @@ class AirspyR2Device(AirspyMiniDevice):
         )
 
     def set_sample_rate(self, rate: int) -> None:
-        if rate not in _SUPPORTED_SAMPLE_RATES:
+        rates = getattr(self, '_supported_sample_rates',
+                         _SUPPORTED_SAMPLE_RATES)
+        if not _rate_is_supported(rate, rates):
             raise DeviceConfigError(
                 f"Sample rate {rate} not supported by Airspy R2. "
-                f"Valid rates: {_SUPPORTED_SAMPLE_RATES}")
+                f"Valid rates: {rates}")
         self._check_open()
         ret = _lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:

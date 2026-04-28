@@ -89,7 +89,11 @@ fastcard_t* fastcard_new(fargs_t* args) {
         fc->reader->block_size = args->block_len;
         fc->reader->raw_samples = fc->data.block->raw_samples;
 
-        if (airspy_reader_open(&sdr_config, fc->reader) != 0) {
+        /* airspy_reader needs the same reader_settings_t the file
+         * readers use so it can perform the history-overlap copy and
+         * stamp block index/timestamp on every read. */
+        if (airspy_reader_open(&sdr_config, &reader_settings,
+                               fc->reader) != 0) {
             free(fc->reader);
             fc->reader = NULL;
             goto fail;

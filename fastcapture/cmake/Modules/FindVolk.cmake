@@ -1,5 +1,5 @@
 find_package(PkgConfig)
-pkg_check_modules (PC_VOLK librtlsdr)
+pkg_check_modules (PC_VOLK volk)
 
 find_path(
     VOLK_INCLUDE_DIRS

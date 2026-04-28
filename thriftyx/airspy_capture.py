@@ -35,7 +35,7 @@ from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
 from thriftyx.carrier_detect import detect as carrier_detect_block
 from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
-                                  ConfigValidationError)
+                                  DeviceCaptureError, ConfigValidationError)
 
 logger = logging.getLogger(__name__)
 
@@ -309,17 +309,36 @@ def _capture_airspy(config, extra_args, output_file):
     window = setting_parsers.normalize_freq_range(
         config.carrier_window, bin_freq)
 
+    # Resolve device selector.  ``airspy_serial`` (hex/decimal) takes
+    # precedence; otherwise ``--device-index`` selects by enumeration order.
+    airspy_serial = config.get('airspy_serial', None)
+    device_index = extra_args.get('device_index', 0)
+    create_kwargs = {}
+    if airspy_serial:
+        create_kwargs['serial'] = airspy_serial
+    elif device_index is not None and int(device_index) > 0:
+        create_kwargs['device_index'] = int(device_index)
+
+    # Pre-define counters so the ``finally`` block always sees them, even
+    # when device configuration fails before the capture loop starts.
+    blocks_processed = 0
+    detected_count = 0
+
     try:
-        logger.info("Opening %s device", device_type)
-        device = create_device(device_type)
+        logger.info("Opening %s device (selector=%s)",
+                     device_type, create_kwargs or 'default')
+        device = create_device(device_type, **create_kwargs)
         device.open()
     except DeviceNotFoundError as e:
         print("ERROR: {}".format(e), file=sys.stderr)
-        print("Is the Airspy device connected? Is libairspy installed?",
+        print("Is the Airspy device connected? Is libairspy installed? "
+              "Check udev rules / 'plugdev' group membership.",
               file=sys.stderr)
         sys.exit(1)
-
-    detected_count = 0
+    except (TypeError, ValueError) as e:
+        # create_device received an unsupported kwarg or invalid serial.
+        print("ERROR: {}".format(e), file=sys.stderr)
+        sys.exit(1)
 
     try:
         device.set_sample_rate(sample_rate)
@@ -378,7 +397,6 @@ def _capture_airspy(config, extra_args, output_file):
         # window.  AirspyMiniDevice exposes cumulative dropped samples.
         dropped_base = getattr(device, 'dropped_samples', 0)
 
-        blocks_processed = 0
         while running[0]:
             if duration is not None and (time.time() - start_time) >= duration:
                 break
@@ -423,10 +441,16 @@ def _capture_airspy(config, extra_args, output_file):
     except DeviceConfigError as e:
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
         sys.exit(1)
+    except DeviceCaptureError as e:
+        print("ERROR during capture: {}".format(e), file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         pass
     finally:
-        device.close()
+        try:
+            device.close()
+        except Exception:
+            logger.debug("device.close() raised during cleanup", exc_info=True)
         print("\nRead {} blocks.".format(blocks_processed), file=sys.stderr)
         logger.info("Detected %d blocks out of %d",
                      detected_count, blocks_processed)

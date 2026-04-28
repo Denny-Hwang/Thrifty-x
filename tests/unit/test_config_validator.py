@@ -193,3 +193,23 @@ def test_r2_lna_gain_16_rejected():
     config['lna_gain'] = 16
     with pytest.raises(ConfigValidationError, match="lna_gain"):
         validate_config(config)
+
+
+def test_block_size_must_be_at_least_twice_block_history():
+    """Capture loop relies on ``block_size >= 2 * block_history`` so each
+    read fills the next history window.  Validator must reject otherwise."""
+    config = _valid_mini_config()
+    # 16384 < 2 * 9000 — invalid layout
+    config['block_size'] = 16384
+    config['block_history'] = 9000
+    with pytest.raises(ConfigValidationError, match="block_size"):
+        validate_config(config)
+
+
+def test_block_size_exactly_twice_block_history_ok():
+    """Boundary: block_size == 2 * block_history is acceptable."""
+    config = _valid_mini_config()
+    config['block_size'] = 16384
+    config['block_history'] = 8192
+    # Sample-rate-related warnings are fine; this must not raise.
+    validate_config(config)

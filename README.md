@@ -19,9 +19,16 @@ by Schalk Willem Krüger (North-West University), extended to support
 | Visualization | GnuRadio/osmosdr | matplotlib |
 | Packaging | setup.py only | pyproject.toml + setup.py |
 
-**All signal processing algorithms are preserved exactly** — carrier detection
-(Dirichlet kernel interpolation), SoA estimation (Gaussian interpolation),
-TDOA clock correction, and Levenberg-Marquardt position solving are unchanged.
+**Signal processing pipeline is preserved** — carrier detection
+(Dirichlet kernel interpolation), SoA estimation, TDOA clock correction,
+and Levenberg-Marquardt position solving use the same algorithms as the
+original Thrifty.  Two defaults differ for performance reasons and can be
+flipped on the command line:
+
+| Setting | Original Thrifty | Thrifty-X default | Override |
+|---|---|---|---|
+| Carrier frequency shift | time-domain (`exp(2πj·shift·t)`) | integer (`np.roll`) — ~2× faster, +0.03 m RMSE | `--freq-shift-method time_domain` |
+| SOA sub-sample interpolation | Gaussian | Parabolic (equivalent accuracy in paper) | `--soa-interpolation gaussian` |
 
 ## Requirements
 
@@ -61,8 +68,24 @@ The legacy `thrifty` command also works as an alias.
 
 ```bash
 thriftyx capture rx0.card --device-type airspy_mini \
-    --sample-rate 6M --center-freq 433.95M \
-    --lna-gain 5 --mixer-gain 5 --vga-gain 5 --bias-tee
+    --sample-rate 6M --freq 433.95M \
+    --lna-gain 5 --mixer-gain 5 --vga-gain 5 --bias-tee true
+```
+
+To select a specific Airspy when multiple are connected, pass either a
+0-based enumeration index or the 64-bit board serial:
+
+```bash
+# Enumerate connected Airspy boards
+python3 -c "from thriftyx.hal import list_airspy_serials; \
+            print([f'0x{s:016X}' for s in list_airspy_serials()])"
+
+# Select by index (default 0)
+thriftyx capture rx0.card --device-type airspy_mini -d 1
+
+# Select by serial (hex or decimal)
+thriftyx capture rx0.card --device-type airspy_mini \
+    --airspy-serial 0x6440EBC51DC01ED5
 ```
 
 ### Using Existing RTL-SDR Data
@@ -80,6 +103,35 @@ thriftyx detect old_rtlsdr_data.card -o detections.toad
 |--------|-------------|-----------------|-----|
 | Airspy Mini | 3 / 6 MSPS | 24 – 1800 MHz | 12-bit |
 | Airspy R2 | 2.5 / 10 MSPS | 24 – 1800 MHz | 12-bit |
+
+## Known Limitations
+
+- **PPM / frequency correction** is not exposed.  The Airspy crystal
+  oscillator is uncalibrated; absolute frequency error is typically
+  within ±2 ppm but no per-receiver compensation is currently applied.
+- **AGC** modes (`airspy_set_lna_agc`, `airspy_set_mixer_agc`,
+  linearity/sensitivity gain ladders) are not yet wired through.
+  Manual `lna_gain` / `mixer_gain` / `vga_gain` only.
+- **Hot-plug detection** is not handled; if a device is unplugged mid-capture
+  the reader times out after 10 s and exits.
+- The C `fastcapture` binary is provided for parity with the original
+  `fastcard` workflow.  The Python `thriftyx capture` path is the
+  recommended entry point.
+
+## Permissions / udev (Linux)
+
+Airspy devices appear as USB devices; ordinary users need permission to
+open them.  Install the official rules and add your user to `plugdev`:
+
+```bash
+# From the airspyone_host package, or place equivalent rules manually:
+sudo cp /usr/share/airspy/52-airspy.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+sudo usermod -aG plugdev "$USER"   # then log out / back in
+```
+
+If `airspy_open()` returns `-1000` after that, another process (often
+GNU Radio / SDR# / Gqrx) holds the device open.
 
 ## Testing
 

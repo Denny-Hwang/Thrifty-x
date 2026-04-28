@@ -3,10 +3,10 @@ exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
-Name: fastcard
-Description: Fast carrier detection using RTL-SDR
+Name: fastcapture
+Description: Fast carrier detection for Airspy SDR (Thrifty-X)
 Version: @VERSION_INFO_MAJOR_VERSION@.@VERSION_INFO_MINOR_VERSION@
 Cflags: -I${includedir}/ @FASTCARD_PC_CFLAGS@
-Requires.private: librtlsdr volk fftw3f
-Libs: -L${libdir} -lfastcard
+Requires.private: libairspy volk fftw3f
+Libs: -L${libdir} -lfastcapture
 Libs.private: @FASTCARD_PC_LIBS@
