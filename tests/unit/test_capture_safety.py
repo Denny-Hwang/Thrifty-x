@@ -51,6 +51,15 @@ class _FailingDevice:
     def set_bias_tee(self, _b):
         self._maybe_fail('set_bias_tee')
 
+    def set_packing(self, _e):
+        self._maybe_fail('set_packing')
+
+    def apply_gain_mode(self, _mode, **_kwargs):
+        # Funnel through set_gain so existing fail_in='set_gain' keeps
+        # working alongside the new gain_mode dispatcher.
+        self._maybe_fail('apply_gain_mode')
+        self._maybe_fail('set_gain')
+
     def read_sync(self, _n):
         self._maybe_fail('read_sync')
         # Returning empty buffer triggers the loop's "short read" exit.
@@ -72,6 +81,12 @@ def _config(**overrides):
         'mixer_gain': 0,
         'vga_gain': 0,
         'bias_tee': False,
+        'gain_mode': 'manual',
+        'combined_gain': 0,
+        'lna_agc': False,
+        'mixer_agc': False,
+        'ppm': 0.0,
+        'packing': False,
     }
     base.update(overrides)
     return Namespace(base)
@@ -106,3 +121,105 @@ def test_capture_airspy_capture_error_caught(monkeypatch):
         monkeypatch, 'read_sync', DeviceCaptureError)
     assert code == 1
     assert fake.closed is True
+
+
+# ---------------------------------------------------------------------------
+# gain_mode / ppm / packing wiring
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDevice:
+    """Records every set_* call so we can assert on the wiring."""
+
+    def __init__(self):
+        self.applied_gain_mode = None
+        self.applied_kwargs = None
+        self.bias_tee = None
+        self.packing = None
+        self.center_freq = None
+        self.sample_rate = None
+        self.dropped_samples = 0
+        self.closed = False
+        self._opened = False
+
+    def open(self):
+        self._opened = True
+
+    def close(self):
+        self.closed = True
+
+    def set_sample_rate(self, rate):
+        self.sample_rate = rate
+
+    def set_center_freq(self, freq):
+        self.center_freq = freq
+
+    def set_bias_tee(self, enabled):
+        self.bias_tee = bool(enabled)
+
+    def set_packing(self, enabled):
+        self.packing = bool(enabled)
+
+    def apply_gain_mode(self, mode, **kwargs):
+        self.applied_gain_mode = mode
+        self.applied_kwargs = kwargs
+
+    def read_sync(self, _n):
+        # End of capture immediately
+        import numpy as np
+        return np.array([], dtype=np.int16)
+
+
+def _run_capture(monkeypatch, config_overrides, captured_kwargs):
+    fake = _RecordingDevice()
+
+    def _fake_create(_device_type, **kwargs):
+        captured_kwargs.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(
+        'thriftyx.hal.device_factory.create_device', _fake_create)
+    output = io.StringIO()
+    _capture_airspy(_config(**config_overrides),
+                    Namespace({'duration': None}), output)
+    return fake
+
+
+def test_capture_airspy_manual_gain_mode_default(monkeypatch):
+    captured = {}
+    fake = _run_capture(monkeypatch, {}, captured)
+    assert fake.applied_gain_mode == 'manual'
+    assert fake.applied_kwargs['lna'] == 0
+    assert fake.applied_kwargs['mixer'] == 0
+    assert fake.applied_kwargs['vga'] == 0
+    assert fake.packing is None or fake.packing is False
+
+
+def test_capture_airspy_linearity_mode_passes_combined(monkeypatch):
+    captured = {}
+    fake = _run_capture(monkeypatch,
+                        {'gain_mode': 'linearity', 'combined_gain': 14},
+                        captured)
+    assert fake.applied_gain_mode == 'linearity'
+    assert fake.applied_kwargs == {'combined': 14}
+
+
+def test_capture_airspy_packing_enabled(monkeypatch):
+    captured = {}
+    fake = _run_capture(monkeypatch, {'packing': True}, captured)
+    assert fake.packing is True
+
+
+def test_capture_airspy_ppm_propagates_to_factory(monkeypatch):
+    captured = {}
+    _run_capture(monkeypatch, {'ppm': 7.5}, captured)
+    assert captured.get('ppm') == 7.5
+
+
+def test_capture_airspy_ppm_zero_omits_kwarg(monkeypatch):
+    captured = {}
+    _run_capture(monkeypatch, {'ppm': 0.0}, captured)
+    # When ppm == 0, _capture_airspy should not pass it to create_device,
+    # so backward compat with HAL implementations that don't accept ppm
+    # remains intact.
+    assert 'ppm' not in captured

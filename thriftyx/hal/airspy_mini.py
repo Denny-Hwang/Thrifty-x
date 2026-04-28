@@ -93,6 +93,31 @@ try:
     _lib.airspy_set_rf_bias.restype = ctypes.c_int
     _lib.airspy_set_rf_bias.argtypes = [ctypes.c_void_p, ctypes.c_uint8]
 
+    # AGC and combined-gain ladders.  All of these landed in libairspy
+    # before 1.0.9, but we still wrap them in try/except in case a vendor
+    # ships a stripped build.
+    for _fn, _argtypes in (
+        ('airspy_set_lna_agc',          [ctypes.c_void_p, ctypes.c_uint8]),
+        ('airspy_set_mixer_agc',        [ctypes.c_void_p, ctypes.c_uint8]),
+        ('airspy_set_linearity_gain',   [ctypes.c_void_p, ctypes.c_uint8]),
+        ('airspy_set_sensitivity_gain', [ctypes.c_void_p, ctypes.c_uint8]),
+        ('airspy_set_packing',          [ctypes.c_void_p, ctypes.c_uint8]),
+    ):
+        try:
+            getattr(_lib, _fn).restype = ctypes.c_int
+            getattr(_lib, _fn).argtypes = _argtypes
+        except AttributeError:
+            pass
+
+    # Library version string is useful for diagnostics.  Older libairspy
+    # builds use a struct; modern builds expose ``airspy_lib_version`` as
+    # well.  We bind the struct variant only when available.
+    try:
+        _lib.airspy_lib_version_string.restype = ctypes.c_char_p
+        _lib.airspy_lib_version_string.argtypes = []
+    except AttributeError:
+        pass
+
     _lib.airspy_start_rx.restype = ctypes.c_int
     _lib.airspy_start_rx.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
                                       ctypes.c_void_p]
@@ -151,11 +176,40 @@ _SUPPORTED_SAMPLE_RATES = (3_000_000, 6_000_000)
 _FREQUENCY_RANGE = (24_000_000, 1_800_000_000)
 _GAIN_STAGES = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
 
+# Combined-gain ladder range used by ``airspy_set_linearity_gain`` and
+# ``airspy_set_sensitivity_gain``.  These map a single 0–21 index to an
+# appropriate combination of LNA / Mixer / VGA gains tuned for either
+# linearity (low-IMD) or sensitivity (high-NF) operation.
+_COMBINED_GAIN_RANGE = (0, 21)
+
+# Valid values for ``gain_mode``.
+GAIN_MODES = ('manual', 'linearity', 'sensitivity')
+
 # Tolerance applied when validating a sample rate against the value(s)
 # returned by ``airspy_get_samplerates``.  Some libairspy builds return
 # slightly off values (e.g. 5_999_998 instead of 6_000_000), so a small
 # tolerance avoids false rejections.
 _SAMPLE_RATE_TOLERANCE_HZ = 100
+
+
+def libairspy_version() -> str:
+    """Return the runtime libairspy version string, or ``"unknown"``.
+
+    Useful in startup logs to disambiguate behaviour between distros that
+    ship different libairspy builds.
+    """
+    if _lib is None or not hasattr(_lib, 'airspy_lib_version_string'):
+        return "unknown"
+    try:
+        raw = _lib.airspy_lib_version_string()
+    except Exception:
+        return "unknown"
+    if raw is None:
+        return "unknown"
+    try:
+        return raw.decode('ascii', errors='replace')
+    except AttributeError:
+        return str(raw)
 
 
 def _rate_is_supported(rate: int, supported) -> bool:
@@ -232,7 +286,7 @@ class AirspyMiniDevice(SDRDevice):
 
     _SUPPORTED_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
 
-    def __init__(self, serial=None, device_index=None):
+    def __init__(self, serial=None, device_index=None, ppm=0.0):
         self._handle = ctypes.c_void_p(None)
         self._open = False
         self._capturing = False
@@ -243,6 +297,10 @@ class AirspyMiniDevice(SDRDevice):
         # Populated by ``open()``; defaults to the class-level fallback so
         # that ``set_sample_rate`` works even when called before open().
         self._supported_sample_rates = type(self)._SUPPORTED_SAMPLE_RATES
+        # Software PPM correction.  Airspy does not expose a hardware
+        # frequency-correction knob (unlike rtlsdr_set_freq_correction),
+        # so we instead pre-scale the requested LO frequency.
+        self._ppm = float(ppm)
         # Persistent streaming state for read_sync()
         self._stream_started = False
         self._stream_chunks = collections.deque()
@@ -323,8 +381,9 @@ class AirspyMiniDevice(SDRDevice):
         # are kept as a fallback for older libraries.
         self._supported_sample_rates = self._query_supported_sample_rates()
 
-        logger.debug("Airspy device opened (serial=%s, rates=%s)",
-                      self._serial, self._supported_sample_rates)
+        logger.info("Airspy device opened (serial=%s, libairspy=%s, rates=%s)",
+                     self._serial, libairspy_version(),
+                     self._supported_sample_rates)
 
     def _query_supported_sample_rates(self) -> tuple:
         """Query libairspy for the device's supported sample rates.
@@ -386,13 +445,29 @@ class AirspyMiniDevice(SDRDevice):
     def set_center_freq(self, freq: int) -> None:
         self._check_open()
         min_f, max_f = _FREQUENCY_RANGE
-        if not (min_f <= freq <= max_f):
+        if not (min_f <= int(freq) <= max_f):
             raise DeviceConfigError(
                 f"Frequency {freq} Hz out of range "
                 f"[{min_f}, {max_f}]")
-        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(freq))
+        # Apply software PPM correction.  ``ppm`` is the *measured* LO
+        # error in parts-per-million: positive values mean the crystal is
+        # running fast, so we ask for a slightly lower LO to compensate.
+        request = int(round(int(freq) / (1.0 + self._ppm * 1e-6)))
+        if request != int(freq):
+            logger.debug("PPM=%g shifts LO request %d -> %d",
+                          self._ppm, int(freq), request)
+        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_freq() failed: {ret}")
+
+    @property
+    def ppm(self) -> float:
+        """Current software PPM correction applied to ``set_center_freq``."""
+        return self._ppm
+
+    @ppm.setter
+    def ppm(self, value: float) -> None:
+        self._ppm = float(value)
 
     def set_gain(self, gain_type: str, value: int) -> None:
         self._check_open()
@@ -424,6 +499,138 @@ class AirspyMiniDevice(SDRDevice):
                                        ctypes.c_uint8(1 if enabled else 0))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_rf_bias() failed: {ret}")
+        if enabled:
+            # Bias tee feeds DC up the antenna lead.  If the antenna chain
+            # is not DC-isolated this can damage downstream LNAs.  Print
+            # to stderr (not just the logger) so it is visible in the
+            # default capture output.
+            logger.warning(
+                "Bias tee ENABLED: ~+4.5 V is now applied to the antenna "
+                "port. Verify the antenna / LNA chain is DC-isolated.")
+            import sys
+            print("WARNING: Airspy bias tee is enabled — verify the "
+                  "antenna chain is DC-isolated.", file=sys.stderr)
+
+    # -- AGC and combined-gain ladders -----------------------------------
+
+    def set_lna_agc(self, enabled: bool) -> None:
+        """Toggle the R820T2 LNA AGC loop.
+
+        Parameters
+        ----------
+        enabled : bool
+            ``True`` engages the LNA AGC; ``False`` reverts to the value
+            set by :meth:`set_gain` ('lna').
+        """
+        self._check_open()
+        if not hasattr(_lib, 'airspy_set_lna_agc'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_set_lna_agc")
+        ret = _lib.airspy_set_lna_agc(self._handle,
+                                       ctypes.c_uint8(1 if enabled else 0))
+        if ret != 0:
+            raise DeviceConfigError(f"airspy_set_lna_agc() failed: {ret}")
+
+    def set_mixer_agc(self, enabled: bool) -> None:
+        """Toggle the R820T2 mixer AGC loop."""
+        self._check_open()
+        if not hasattr(_lib, 'airspy_set_mixer_agc'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_set_mixer_agc")
+        ret = _lib.airspy_set_mixer_agc(self._handle,
+                                         ctypes.c_uint8(1 if enabled else 0))
+        if ret != 0:
+            raise DeviceConfigError(f"airspy_set_mixer_agc() failed: {ret}")
+
+    def set_linearity_gain(self, value: int) -> None:
+        """Apply the linearity gain ladder (low-IMD profile, 0–21)."""
+        self._check_combined_gain('linearity', value)
+        if not hasattr(_lib, 'airspy_set_linearity_gain'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_set_linearity_gain")
+        ret = _lib.airspy_set_linearity_gain(self._handle,
+                                              ctypes.c_uint8(value))
+        if ret != 0:
+            raise DeviceConfigError(
+                f"airspy_set_linearity_gain() failed: {ret}")
+
+    def set_sensitivity_gain(self, value: int) -> None:
+        """Apply the sensitivity gain ladder (high-NF profile, 0–21)."""
+        self._check_combined_gain('sensitivity', value)
+        if not hasattr(_lib, 'airspy_set_sensitivity_gain'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_set_sensitivity_gain")
+        ret = _lib.airspy_set_sensitivity_gain(self._handle,
+                                                ctypes.c_uint8(value))
+        if ret != 0:
+            raise DeviceConfigError(
+                f"airspy_set_sensitivity_gain() failed: {ret}")
+
+    def _check_combined_gain(self, name: str, value: int) -> None:
+        self._check_open()
+        lo, hi = _COMBINED_GAIN_RANGE
+        if not (lo <= int(value) <= hi):
+            raise DeviceConfigError(
+                f"{name} gain {value} out of range [{lo}, {hi}]")
+
+    def apply_gain_mode(self, mode: str, *, lna=None, mixer=None, vga=None,
+                         lna_agc=False, mixer_agc=False,
+                         combined=None) -> None:
+        """Apply one of the three top-level gain configurations.
+
+        Parameters
+        ----------
+        mode : str
+            One of ``'manual'``, ``'linearity'``, or ``'sensitivity'``.
+        lna, mixer, vga : int | None
+            Per-stage indices applied when ``mode == 'manual'``.
+            Ignored otherwise.
+        lna_agc, mixer_agc : bool
+            AGC engagement applied *after* the per-stage values when
+            ``mode == 'manual'``.
+        combined : int | None
+            0–21 ladder index for ``'linearity'`` / ``'sensitivity'``.
+            Required for those modes.
+        """
+        if mode not in GAIN_MODES:
+            raise DeviceConfigError(
+                f"Unknown gain_mode '{mode}'. Valid: {GAIN_MODES}")
+        if mode == 'manual':
+            if lna is not None:
+                self.set_gain('lna', int(lna))
+            if mixer is not None:
+                self.set_gain('mixer', int(mixer))
+            if vga is not None:
+                self.set_gain('vga', int(vga))
+            # AGC applied after manual values so per-stage settings act
+            # as a starting point when AGC is later disabled.
+            self.set_lna_agc(bool(lna_agc))
+            self.set_mixer_agc(bool(mixer_agc))
+            return
+        if combined is None:
+            raise DeviceConfigError(
+                f"gain_mode='{mode}' requires --combined-gain (0–21)")
+        if mode == 'linearity':
+            self.set_linearity_gain(int(combined))
+        else:  # 'sensitivity'
+            self.set_sensitivity_gain(int(combined))
+
+    def set_packing(self, enabled: bool) -> None:
+        """Enable libairspy's 12-bit USB packing (saves ~33% bandwidth).
+
+        Most useful at the highest Airspy R2 rate (10 MSPS) on USB 2.0
+        hosts.  Falls back to a no-op when the library lacks the API.
+        """
+        self._check_open()
+        if not hasattr(_lib, 'airspy_set_packing'):
+            if enabled:
+                logger.warning(
+                    "airspy_set_packing not available; packing ignored.")
+            return
+        ret = _lib.airspy_set_packing(self._handle,
+                                       ctypes.c_uint8(1 if enabled else 0))
+        if ret != 0:
+            raise DeviceConfigError(f"airspy_set_packing() failed: {ret}")
 
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:
         self._check_open()

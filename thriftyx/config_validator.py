@@ -170,6 +170,27 @@ def validate_config(config: dict) -> list[str]:
                     raise ConfigValidationError(
                         f"{gain_type}_gain {val} out of range [{min_v}, {max_v}]")
 
+        # gain_mode + combined_gain consistency
+        gain_mode = config.get('gain_mode', 'manual')
+        if gain_mode not in ('manual', 'linearity', 'sensitivity'):
+            raise ConfigValidationError(
+                f"gain_mode '{gain_mode}' invalid. "
+                f"Use 'manual', 'linearity', or 'sensitivity'.")
+        if gain_mode in ('linearity', 'sensitivity'):
+            combined = config.get('combined_gain')
+            if combined is None:
+                raise ConfigValidationError(
+                    f"gain_mode='{gain_mode}' requires combined_gain (0-21)")
+            combined = int(combined)
+            if not (0 <= combined <= 21):
+                raise ConfigValidationError(
+                    f"combined_gain {combined} out of range [0, 21]")
+            # AGC flags are ignored in non-manual modes; warn if set.
+            if config.get('lna_agc') or config.get('mixer_agc'):
+                warnings.append(
+                    f"gain_mode='{gain_mode}' ignores lna_agc / mixer_agc; "
+                    "use gain_mode='manual' to combine AGC with manual gains.")
+
     # 8. bit_depth must match device type
     bit_depth = config.get('bit_depth')
     if bit_depth is not None:

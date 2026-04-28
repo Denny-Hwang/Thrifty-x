@@ -104,19 +104,35 @@ thriftyx detect old_rtlsdr_data.card -o detections.toad
 | Airspy Mini | 3 / 6 MSPS | 24 – 1800 MHz | 12-bit |
 | Airspy R2 | 2.5 / 10 MSPS | 24 – 1800 MHz | 12-bit |
 
+## Repository Layout (`thrifty/` vs `thriftyx/`)
+
+| Tree | Status | Purpose |
+|---|---|---|
+| `thriftyx/`, `fastcapture/` | **Active** | Airspy-based pipeline. This is what `pip install` exposes. |
+| `thrifty/`, `fastcard/` | Reference only | Original Schalk-Krüger Thrifty (Python 2 + librtlsdr).  Kept for diff/comparison; not packaged, not tested.  Do not import. |
+
+If you only want the Airspy code path, you can ignore the legacy
+directories — they are excluded from the Python package and CMake build.
+
 ## Known Limitations
 
-- **PPM / frequency correction** is not exposed.  The Airspy crystal
-  oscillator is uncalibrated; absolute frequency error is typically
-  within ±2 ppm but no per-receiver compensation is currently applied.
-- **AGC** modes (`airspy_set_lna_agc`, `airspy_set_mixer_agc`,
-  linearity/sensitivity gain ladders) are not yet wired through.
-  Manual `lna_gain` / `mixer_gain` / `vga_gain` only.
-- **Hot-plug detection** is not handled; if a device is unplugged mid-capture
-  the reader times out after 10 s and exits.
+- **Hot-plug detection** is not handled; if a device is unplugged
+  mid-capture the reader times out after 10 s and exits.
 - The C `fastcapture` binary is provided for parity with the original
   `fastcard` workflow.  The Python `thriftyx capture` path is the
   recommended entry point.
+
+## Airspy-specific tuning options
+
+| Setting | Default | Notes |
+|---|---|---|
+| `--lna-gain N` / `--mixer-gain N` / `--vga-gain N` | 7 / 7 / 7 | Manual per-stage indices. Applied when `--gain-mode manual`. |
+| `--gain-mode {manual, linearity, sensitivity}` | `manual` | Linearity/sensitivity use `--combined-gain` (0–21) instead of per-stage values. |
+| `--combined-gain N` | 0 | Used by linearity/sensitivity modes. |
+| `--lna-agc` / `--mixer-agc` | false | Engage R820T2 AGC loops in manual mode. |
+| `--ppm F` | 0 | Software LO correction in parts-per-million.  Positive = crystal runs fast. |
+| `--packing` | false | Enable libairspy 12-bit USB packing.  Saves ~33 % bandwidth (helps Airspy R2 at 10 MSPS on USB 2.0). |
+| `--bias-tee` | false | Feeds DC up the antenna lead.  **Verify your antenna chain is DC-isolated** — a warning is printed when this is on. |
 
 ## Permissions / udev (Linux)
 

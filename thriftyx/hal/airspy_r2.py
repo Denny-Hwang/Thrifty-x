@@ -68,11 +68,13 @@ class AirspyR2Device(AirspyMiniDevice):
     def set_center_freq(self, freq: int) -> None:
         self._check_open()
         min_f, max_f = _FREQUENCY_RANGE
-        if not (min_f <= freq <= max_f):
+        if not (min_f <= int(freq) <= max_f):
             raise DeviceConfigError(
                 f"Frequency {freq} Hz out of range "
                 f"[{min_f}, {max_f}]")
-        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(freq))
+        # Apply software PPM correction (see AirspyMiniDevice.set_center_freq).
+        request = int(round(int(freq) / (1.0 + self._ppm * 1e-6)))
+        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_freq() failed: {ret}")
 

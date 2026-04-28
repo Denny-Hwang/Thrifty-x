@@ -48,7 +48,7 @@ help:
 .PHONY: api
 api:
 	mkdir -p $(GENDIR)
-	sphinx-apidoc -f -o $(GENDIR)/ ../thrifty/
+	sphinx-apidoc -f -o $(GENDIR)/ ../thriftyx/
 
 .PHONY: clean
 clean:
