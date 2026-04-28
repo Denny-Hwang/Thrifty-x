@@ -706,7 +706,11 @@ def _main():
                                          config.block_history,
                                          bit_depth=bit_depth)
     else:
-        blocks = block_data.card_reader(args.input)
+        # Pass bit_depth as a fallback for v1 .card files (no header):
+        # card_reader prefers the v2 ``#v2 bit_depth=…`` header when
+        # present, otherwise it falls back to this value.  Without this,
+        # Airspy v1-style files would decode as 8-bit.
+        blocks = block_data.card_reader(args.input, bit_depth=bit_depth)
 
     cmds = args.plot.split(',')
     template = np.load(config.template)

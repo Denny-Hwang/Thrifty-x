@@ -108,6 +108,18 @@ def validate_config(config: dict) -> list[str]:
             raise ConfigValidationError(
                 f"block_history ({history}) must be less than "
                 f"block_size ({block_size})")
+        # The capture loop slices ``raw[-(block_history * 2):]`` from each
+        # ``new_samples = block_size - block_history`` read, so the read
+        # buffer must be at least as large as the history portion.
+        # Equivalently: ``block_size >= 2 * block_history``.  Without this
+        # invariant, history slicing silently returns short buffers and
+        # carrier detection drifts.
+        if block_size < 2 * history:
+            raise ConfigValidationError(
+                f"block_size ({block_size}) must be >= 2 * block_history "
+                f"({2 * history}) so that each read fills the next "
+                f"history window. Increase block_size or decrease "
+                f"block_history.")
 
     # 5b. block_history must accommodate the template for the given sample rate
     chip_rate = config.get('chip_rate')

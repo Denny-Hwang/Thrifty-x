@@ -136,6 +136,15 @@ DEFINITIONS = {
         "Enable bias tee voltage on antenna port"
     ),
 
+    'airspy_serial': Definition(
+        ['--airspy-serial'],
+        str,
+        None,
+        "Airspy device serial (hex or decimal). Selects a specific Airspy "
+        "when multiple devices are connected. Takes precedence over "
+        "--device-index."
+    ),
+
     'lna_gain': Definition(
         ['--lna-gain'],
         int,

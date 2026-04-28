@@ -36,11 +36,16 @@ typedef struct {
 /**
  * Open an Airspy device and initialize the reader.
  *
- * @param config  Device configuration.
- * @param reader  Output: initialized reader_t instance.
+ * @param config    Device configuration.
+ * @param settings  Reader settings (block size, history size, output block).
+ *                  ``settings.output->raw_samples`` MUST be the same buffer
+ *                  as ``reader->raw_samples`` so that the history overlap
+ *                  copy works correctly.
+ * @param reader    Output: initialized reader_t instance.
  * @return 0 on success, negative on error.
  */
 int airspy_reader_open(const airspy_reader_config_t *config,
+                       const reader_settings_t *settings,
                        reader_t *reader);
 
 /**

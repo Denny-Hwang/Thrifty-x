@@ -37,8 +37,43 @@ try:
     _lib.airspy_open.restype = ctypes.c_int
     _lib.airspy_open.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 
+    # airspy_open_sn: open by 64-bit serial number.  Available since
+    # libairspy 1.0.9.
+    _lib.airspy_open_sn.restype = ctypes.c_int
+    _lib.airspy_open_sn.argtypes = [ctypes.POINTER(ctypes.c_void_p),
+                                     ctypes.c_uint64]
+
+    # airspy_list_devices: enumerate connected Airspy devices.
+    # Returns the number of devices; fills `serials` (uint64_t array) up
+    # to `count` entries.  Available since libairspy 1.0.9.
+    _lib.airspy_list_devices.restype = ctypes.c_int
+    _lib.airspy_list_devices.argtypes = [ctypes.POINTER(ctypes.c_uint64),
+                                          ctypes.c_int]
+
+    # Library lifecycle (no-op on modern libairspy but required on older
+    # builds).  Wrapped in try/except below since some distros omit them.
+    try:
+        _lib.airspy_init.restype = ctypes.c_int
+        _lib.airspy_init.argtypes = []
+        _lib.airspy_exit.restype = ctypes.c_int
+        _lib.airspy_exit.argtypes = []
+        _lib.airspy_init()
+    except AttributeError:
+        pass
+
     _lib.airspy_close.restype = ctypes.c_int
     _lib.airspy_close.argtypes = [ctypes.c_void_p]
+
+    # Optional: dynamic sample-rate enumeration.  Newer libairspy exposes
+    # ``airspy_get_samplerates(device, buffer, count)`` where buffer is
+    # NULL on the first call to obtain the rate count.
+    try:
+        _lib.airspy_get_samplerates.restype = ctypes.c_int
+        _lib.airspy_get_samplerates.argtypes = [ctypes.c_void_p,
+                                                 ctypes.POINTER(ctypes.c_uint32),
+                                                 ctypes.c_uint32]
+    except AttributeError:
+        pass
 
     _lib.airspy_set_samplerate.restype = ctypes.c_int
     _lib.airspy_set_samplerate.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
@@ -116,16 +151,98 @@ _SUPPORTED_SAMPLE_RATES = (3_000_000, 6_000_000)
 _FREQUENCY_RANGE = (24_000_000, 1_800_000_000)
 _GAIN_STAGES = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
 
+# Tolerance applied when validating a sample rate against the value(s)
+# returned by ``airspy_get_samplerates``.  Some libairspy builds return
+# slightly off values (e.g. 5_999_998 instead of 6_000_000), so a small
+# tolerance avoids false rejections.
+_SAMPLE_RATE_TOLERANCE_HZ = 100
+
+
+def _rate_is_supported(rate: int, supported) -> bool:
+    """Return True when ``rate`` matches one of the supported rates within
+    the small tolerance that absorbs libairspy rounding noise."""
+    rate = int(rate)
+    return any(abs(rate - int(s)) <= _SAMPLE_RATE_TOLERANCE_HZ
+               for s in supported)
+
+
+def list_airspy_serials() -> list[int]:
+    """Enumerate connected Airspy devices and return their 64-bit serials.
+
+    Returns an empty list when libairspy is unavailable or the API is not
+    present (older library builds).
+    """
+    if _lib is None or not hasattr(_lib, 'airspy_list_devices'):
+        return []
+    # First call: NULL buffer to obtain the device count.
+    count = _lib.airspy_list_devices(None, 0)
+    if count <= 0:
+        return []
+    buf = (ctypes.c_uint64 * count)()
+    got = _lib.airspy_list_devices(buf, count)
+    return [int(buf[i]) for i in range(min(got, count))]
+
+
+def parse_airspy_serial(value) -> int:
+    """Convert a CLI serial argument to ``uint64`` for ``airspy_open_sn``.
+
+    Accepts:
+      - int           (returned as-is)
+      - hex string    e.g. ``"0x1234ABCD..."`` or ``"1234ABCDDEADBEEF"``
+      - decimal str   e.g. ``"123456789"``
+    """
+    if isinstance(value, int):
+        return int(value) & 0xFFFFFFFFFFFFFFFF
+    if value is None:
+        raise ValueError("Airspy serial value is None")
+    text = str(value).strip().lower().replace('_', '')
+    if text.startswith('0x'):
+        text = text[2:]
+    # Heuristic: if string contains any non-decimal digit, treat as hex.
+    if any(c in 'abcdef' for c in text):
+        return int(text, 16) & 0xFFFFFFFFFFFFFFFF
+    # If purely numeric and exactly 16 chars, treat as hex (e.g. board ID
+    # printed by `airspy_info`).
+    if len(text) == 16 and all(c in '0123456789abcdef' for c in text):
+        return int(text, 16) & 0xFFFFFFFFFFFFFFFF
+    return int(text) & 0xFFFFFFFFFFFFFFFF
+
 
 class AirspyMiniDevice(SDRDevice):
-    """Airspy Mini SDR driver."""
+    """Airspy Mini SDR driver.
 
-    def __init__(self):
+    Class attributes
+    ----------------
+    _SUPPORTED_SAMPLE_RATES : tuple of int
+        Hardcoded fallback rates used when libairspy does not expose
+        ``airspy_get_samplerates``.  The dynamic query result, when
+        available, is stored on the *instance* during ``open()``.
+
+    Parameters
+    ----------
+    serial : int | str | None
+        Optional 64-bit Airspy serial number to open by.  Accepts a hex
+        string, decimal string, or integer.  When ``None`` (default) and
+        ``device_index`` is also ``None``, the first available device is
+        opened.
+    device_index : int | None
+        When ``serial`` is not given, select a device by its index in
+        ``airspy_list_devices``.  ``0`` is the first connected device.
+    """
+
+    _SUPPORTED_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
+
+    def __init__(self, serial=None, device_index=None):
         self._handle = ctypes.c_void_p(None)
         self._open = False
         self._capturing = False
         self._callback_ref = None  # keep reference to prevent GC
         self._serial = "unknown"
+        self._requested_serial = serial
+        self._requested_index = device_index
+        # Populated by ``open()``; defaults to the class-level fallback so
+        # that ``set_sample_rate`` works even when called before open().
+        self._supported_sample_rates = type(self)._SUPPORTED_SAMPLE_RATES
         # Persistent streaming state for read_sync()
         self._stream_started = False
         self._stream_chunks = collections.deque()
@@ -139,15 +256,47 @@ class AirspyMiniDevice(SDRDevice):
         # adjust block indices to reflect real elapsed time.
         self.dropped_samples = 0
 
+    def _resolve_open_serial(self):
+        """Return a uint64 serial to open with, or ``None`` for default open."""
+        if self._requested_serial is not None:
+            return parse_airspy_serial(self._requested_serial)
+        if self._requested_index is not None:
+            serials = list_airspy_serials()
+            if not serials:
+                raise DeviceNotFoundError(
+                    "No Airspy devices found while resolving "
+                    f"device_index={self._requested_index}.")
+            if not (0 <= int(self._requested_index) < len(serials)):
+                raise DeviceNotFoundError(
+                    f"device_index {self._requested_index} out of range; "
+                    f"{len(serials)} Airspy device(s) connected.")
+            return serials[int(self._requested_index)]
+        return None
+
     def open(self) -> None:
         if _lib is None:
             raise DeviceNotFoundError(
                 f"libairspy not available: {_lib_error}")
-        ret = _lib.airspy_open(ctypes.byref(self._handle))
-        if ret != 0:
-            raise DeviceNotFoundError(
-                f"airspy_open() failed with code {ret}. "
-                "Is the Airspy Mini connected?")
+
+        sn = self._resolve_open_serial()
+        if sn is not None and hasattr(_lib, 'airspy_open_sn'):
+            ret = _lib.airspy_open_sn(ctypes.byref(self._handle),
+                                       ctypes.c_uint64(sn))
+            if ret != 0:
+                raise DeviceNotFoundError(
+                    f"airspy_open_sn(0x{sn:016X}) failed with code {ret}. "
+                    "Is the requested Airspy device connected?")
+        else:
+            if sn is not None:
+                logger.warning(
+                    "airspy_open_sn unavailable in this libairspy build; "
+                    "falling back to airspy_open() — serial selector ignored.")
+            ret = _lib.airspy_open(ctypes.byref(self._handle))
+            if ret != 0:
+                raise DeviceNotFoundError(
+                    f"airspy_open() failed with code {ret}. "
+                    "Is the Airspy device connected? "
+                    "Check udev rules / user group membership.")
         self._open = True
 
         # Set sample type to INT16 IQ (matches fastcapture/airspy_reader.c)
@@ -169,8 +318,39 @@ class AirspyMiniDevice(SDRDevice):
         except Exception:
             logger.debug("Failed to read device serial number", exc_info=True)
 
-        logger.debug("Airspy Mini opened successfully (serial=%s)",
-                      self._serial)
+        # Refresh supported sample-rate set from the device when the
+        # libairspy build exposes the enumeration API.  Hardcoded values
+        # are kept as a fallback for older libraries.
+        self._supported_sample_rates = self._query_supported_sample_rates()
+
+        logger.debug("Airspy device opened (serial=%s, rates=%s)",
+                      self._serial, self._supported_sample_rates)
+
+    def _query_supported_sample_rates(self) -> tuple:
+        """Query libairspy for the device's supported sample rates.
+
+        Falls back to the class-level ``_SUPPORTED_SAMPLE_RATES`` constant
+        when the API is unavailable or returns nothing.
+        """
+        default = type(self)._SUPPORTED_SAMPLE_RATES if hasattr(
+            type(self), '_SUPPORTED_SAMPLE_RATES') else _SUPPORTED_SAMPLE_RATES
+        if _lib is None or not hasattr(_lib, 'airspy_get_samplerates'):
+            return default
+        try:
+            count = ctypes.c_uint32(0)
+            ret = _lib.airspy_get_samplerates(
+                self._handle, ctypes.byref(count), ctypes.c_uint32(0))
+            if ret != 0 or count.value == 0:
+                return default
+            buf = (ctypes.c_uint32 * count.value)()
+            ret = _lib.airspy_get_samplerates(self._handle, buf, count.value)
+            if ret != 0:
+                return default
+            rates = tuple(int(buf[i]) for i in range(count.value))
+            return rates if rates else default
+        except Exception:
+            logger.debug("airspy_get_samplerates() failed", exc_info=True)
+            return default
 
     def close(self) -> None:
         if self._open and _lib is not None:
@@ -184,7 +364,8 @@ class AirspyMiniDevice(SDRDevice):
         return DeviceInfo(
             name=_DEVICE_NAME,
             serial=serial,
-            supported_sample_rates=_SUPPORTED_SAMPLE_RATES,
+            supported_sample_rates=getattr(self, '_supported_sample_rates',
+                                            _SUPPORTED_SAMPLE_RATES),
             frequency_range=_FREQUENCY_RANGE,
             bit_depth=12,
             sample_format=SampleFormat.INT16,
@@ -192,10 +373,11 @@ class AirspyMiniDevice(SDRDevice):
         )
 
     def set_sample_rate(self, rate: int) -> None:
-        if rate not in _SUPPORTED_SAMPLE_RATES:
+        rates = self._supported_sample_rates
+        if not _rate_is_supported(rate, rates):
             raise DeviceConfigError(
                 f"Sample rate {rate} not supported. "
-                f"Valid rates: {_SUPPORTED_SAMPLE_RATES}")
+                f"Valid rates: {rates}")
         self._check_open()
         ret = _lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
@@ -320,6 +502,14 @@ class AirspyMiniDevice(SDRDevice):
             Interleaved int16 I/Q array of length ``num_samples * 2``.
         """
         self._check_open()
+        # If start_capture() is already running with a user callback, the
+        # internal stream queue would never receive data — and silently
+        # clobbering the user callback (the previous behaviour) hides the
+        # mistake.  Refuse the call instead.
+        if self._capturing and self._user_callback is not None:
+            raise DeviceCaptureError(
+                "read_sync() cannot be used while start_capture() is "
+                "active with a user callback. Call stop_capture() first.")
         if not self._stream_started:
             self._user_callback = None  # use internal buffer mode
             self._start_rx()
