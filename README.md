@@ -7,6 +7,15 @@ by Schalk Willem Krüger (North-West University), extended to support
 [Airspy Mini](https://airspy.com/airspy-mini/) and
 [Airspy R2](https://airspy.com/airspy-r2/) SDR hardware.
 
+## Documentation
+
+- **User Guide:** [docs/user_guide.md](docs/user_guide.md)
+- **사용자 가이드 (한국어):** [docs/user_guide_ko.md](docs/user_guide_ko.md)
+
+The user guide covers installation, hardware specs, gain tuning,
+template extraction, configuration reference, command reference, and
+troubleshooting.
+
 ## What's Changed from Original Thrifty
 
 | Aspect | Original Thrifty | Thrifty-X |
