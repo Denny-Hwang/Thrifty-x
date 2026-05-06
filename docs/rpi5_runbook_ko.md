@@ -61,6 +61,26 @@ python3 -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list
 
 ## 3. 24시간 soak 테스트 절차
 
+자동화 스크립트(`rpi/soak_test.sh`)를 권장한다 — 24h 캡처 + 1분 단위
+헬스 샘플링(CSV) + 자동 PASS/FAIL 판정.
+
+```bash
+sudo systemctl stop thriftyx-capture@rx0
+~/thrifty-x/rpi/soak_test.sh
+# → /var/lib/thriftyx/soak/<timestamp>/{summary.txt,samples.csv,capture.card,...}
+echo "exit=$?"   # 0=PASS, 1=FAIL, 2=setup error
+```
+
+자동 판정 기준 (환경변수로 재정의 가능):
+- 캡처 종료 코드 == 0
+- `vcgencmd get_throttled` 가 전 구간 `0x0`
+- 피크 CPU 온도 ≤ 80°C (`MAX_TEMP_C`)
+- RSS 메모리 증가율 ≤ 10% (초반 vs 종반 중앙값, `MAX_MEM_GROWTH_PCT`)
+- 디스크 free ≥ 10% (`MIN_DISK_FREE_PCT`)
+- `.card` 파일 헤더 무결성
+
+수동으로 돌리고 싶을 때:
+
 ```bash
 sudo systemctl stop thriftyx-capture@rx0
 source ~/thrifty-x/.venv/bin/activate
@@ -131,19 +151,38 @@ journalctl -t thriftyx-heartbeat -f
 
 ---
 
-## 6. 업데이트 절차 (수동)
+## 6. 업데이트 절차
+
+권장: `rpi/update_node.sh` (멱등 wrapper, 자동 롤백).
+
+```bash
+sudo install -m 755 ~/thrifty-x/rpi/update_node.sh /usr/local/bin/
+ssh rx0 'sudo /usr/local/bin/update_node.sh'
+```
+
+동작:
+1. `git fetch` 후 변경 없음 → 종료 0 (no-op)
+2. `git merge --ff-only` 실패 → 서비스 무손상 종료
+3. `pip install` / `restart` / 30초 후 `is-active` 검증
+4. 어느 단계든 실패 → 직전 SHA로 자동 롤백 + 재설치 + 재시작
+5. 성공 시 새 SHA를 `~/thrifty-x/.last_known_good_sha` 에 기록
+
+종료 코드:
+- `0` 최신 또는 업데이트 성공
+- `1` 업데이트 실패하나 롤백 성공 (구버전으로 운영 중)
+- `2` 업데이트와 롤백 모두 실패 (즉시 사람 개입 필요)
+- `3` 셋업 에러 (working tree dirty, venv 없음 등)
+
+수동 절차 (참고):
 
 ```bash
 ssh rx0
 cd ~/thrifty-x
 git fetch origin
-git log --oneline HEAD..origin/master    # 변경 확인
+git log --oneline HEAD..origin/master
 git pull --ff-only
 source .venv/bin/activate
 pip install -e ".[analysis,fft]"
 sudo systemctl restart thriftyx-capture@rx0
 journalctl -u thriftyx-capture@rx0 -f
 ```
-
-롤백: `git checkout <previous-sha>` 후 `pip install -e ...` 재실행
-및 서비스 재시작.

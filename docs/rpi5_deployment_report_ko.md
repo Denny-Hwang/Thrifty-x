@@ -149,11 +149,17 @@ PR #25에서 이미 머지됨.
   (`thriftyx-heartbeat.{service,timer}`). 60초 주기 JSON 1줄을
   journald에 emit하고, `THRIFTYX_HEARTBEAT_URL` 설정 시 POST.
 
-남은 P1 (후속 PR):
+- [x] **24시간 soak test 자동화 스크립트** — `rpi/soak_test.sh`.
+  24h 캡처 + 1분 단위 CSV 샘플링(RSS, 온도, throttled, 디스크,
+  card 크기) + 자동 PASS/FAIL 판정 + summary.txt 생성.
+- [x] **멱등 원격 업데이트 wrapper** — `rpi/update_node.sh`.
+  fetch → ff-only → pip install → restart → 30s 후 `is-active`
+  검증, 어느 단계든 실패 시 직전 SHA로 자동 롤백.
+  `~/thrifty-x/.last_known_good_sha` 기록.
 
-1. **24시간 soak test 자동화 스크립트** — duration 24h 캡처 + 로그
-   회전 + 종료 코드 수집. (런북에 수동 절차는 있음)
-2. **원격 업데이트** — `git pull && systemctl restart` 의 멱등 wrapper.
+남은 P1 (선택, 후속 PR 가능):
+
+- 헬스체크 수신 엔드포인트 (서버측, Nginx + sink). 노드 측은 완료.
 
 ---
 
