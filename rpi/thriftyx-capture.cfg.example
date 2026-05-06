@@ -1,0 +1,38 @@
+# Thrifty-X capture configuration — Raspberry Pi 5 (Airspy Mini/R2)
+# Place at /var/lib/thriftyx/capture.cfg and edit per receiver.
+# Format: key: value  (hash = comment, ms/k/M unit suffixes allowed)
+
+# --- Receiver identity ---
+rxid:               0
+
+# --- Hardware selection ---
+# device_type:      airspy_mini   (or airspy_r2)
+device_type:        airspy_mini
+# airspy_serial:    0xABCDEF0123456789      # optional, when multiple devices
+
+# --- RF / sampling ---
+tuner_freq:         433.83M
+sample_rate:        3M           # Mini: 3M or 6M ; R2: 2.5M or 10M
+chip_rate:          0.999707M
+
+# --- Block layout (auto-adjusted from chip/sample rate if omitted) ---
+block_size:         16384
+block_history:      4920
+capture_skip:       100
+
+# --- Carrier detection ---
+carrier_window:     7 - 110
+carrier_threshold:  14 * snr
+
+# --- Gain (defaults from PR #19 — avoids ADC saturation) ---
+gain_mode:          manual
+lna_gain:           7
+mixer_gain:         7
+vga_gain:           7
+lna_agc:            false
+mixer_agc:          false
+
+# --- Other Airspy options (PR #22, #23) ---
+bias_tee:           false
+ppm:                0.0          # site-specific; measure per node
+packing:            true         # 12-bit USB packing — recommended for 6M/10M
