@@ -1,6 +1,6 @@
 [project]
 name = "thriftyx"
-version = "0.1.0"  # canonical version; also in thriftyx/__init__.py and setup.py
+dynamic = ["version"]
 description = "Airspy-based TDOA positioning system for wildlife tracking — fork of Thrifty by SW Krüger"
 readme = "README.md"
 requires-python = ">= 3.10"
@@ -30,6 +30,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["thriftyx*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "thriftyx.__version__"}
 
 [tool.ruff]
 target-version = "py310"

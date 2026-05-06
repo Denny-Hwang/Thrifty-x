@@ -87,7 +87,17 @@ def _main():
         # pylint: disable=protected-access
         sys.argv[0] += ' ' + command
         module_name = MODULES[command]
-        module = importlib.import_module(module_name)
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            print(
+                "thriftyx: failed to load command '{}': {}\n"
+                "Hint: ensure optional dependencies are installed and that "
+                "your environment is activated.\n"
+                "Try: pip install -e \".[all]\"".format(command, exc),
+                file=sys.stderr
+            )
+            sys.exit(2)
         module._main()
     else:
         print("thriftyx: {} is not a thriftyx command. See 'thriftyx --help'."
