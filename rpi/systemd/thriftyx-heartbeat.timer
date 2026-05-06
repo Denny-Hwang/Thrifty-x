@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Thrifty-X heartbeat every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=thriftyx-heartbeat.service
+
+[Install]
+WantedBy=timers.target

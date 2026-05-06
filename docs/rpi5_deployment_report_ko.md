@@ -135,18 +135,25 @@ PR #25에서 이미 머지됨.
 
 ---
 
-## 4) 잔여 권장 작업 (P1 — 후속 PR)
+## 4) 잔여 권장 작업 (P1)
 
-1. **캡처 루프 FFT 가속** — `airspy_capture.py`에서 `np.fft.fft`를
-   `signal_utils.compute_fft`로 교체하거나 pyfftw plan 재사용.
-   (§1.2)
-2. **flush 주기화** — 탐지마다 flush 대신 N블록/N초 단위 flush.
-   (§1.3)
-3. **헬스체크/하트비트** — 노드 → 서버 1분 주기 ping (디스크 사용률,
-   드롭 샘플 수, 마지막 탐지 시각). 최소 스키마는 런북 부록 참조.
-4. **24시간 soak test 자동화 스크립트** — duration 24h 캡처 + 로그
-   회전 + 종료 코드 수집.
-5. **원격 업데이트** — `git pull && systemctl restart` 의 멱등 wrapper.
+본 PR 후속 커밋에서 다음 P1 항목이 반영됨:
+
+- [x] **캡처 루프 FFT 가속** — `airspy_capture.py`의 두 캡처 경로에서
+  `np.fft.fft` → `signal_utils.compute_fft` 로 교체. pyfftw 설치 시
+  자동 plan 캐싱 활용. (§1.2)
+- [x] **flush 주기화** — 탐지마다 `flush()` 대신 `FLUSH_BLOCKS=32`
+  또는 `FLUSH_INTERVAL_S=1.0` 도달 시 flush. 캡처 종료 시 잔여
+  flush. (§1.3)
+- [x] **헬스체크/하트비트** — `rpi/heartbeat.py` + systemd timer
+  (`thriftyx-heartbeat.{service,timer}`). 60초 주기 JSON 1줄을
+  journald에 emit하고, `THRIFTYX_HEARTBEAT_URL` 설정 시 POST.
+
+남은 P1 (후속 PR):
+
+1. **24시간 soak test 자동화 스크립트** — duration 24h 캡처 + 로그
+   회전 + 종료 코드 수집. (런북에 수동 절차는 있음)
+2. **원격 업데이트** — `git pull && systemctl restart` 의 멱등 wrapper.
 
 ---
 

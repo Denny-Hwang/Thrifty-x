@@ -84,9 +84,25 @@ echo $! > "$OUT/pid"
 
 ---
 
-## 4. 헬스체크 / 하트비트 (P1 권장 — 후속 PR)
+## 4. 헬스체크 / 하트비트
 
-최소 스키마 제안 (HTTP POST JSON, 60초 주기):
+`rpi/heartbeat.py` + systemd timer로 60초 주기 JSON 한 줄을 emit
+한다. 기본은 journald 로깅, `THRIFTYX_HEARTBEAT_URL` 설정 시 추가
+POST.
+
+설치:
+
+```bash
+sudo cp ~/thrifty-x/rpi/systemd/thriftyx-heartbeat.service /etc/systemd/system/
+sudo cp ~/thrifty-x/rpi/systemd/thriftyx-heartbeat.timer   /etc/systemd/system/
+sudo cp ~/thrifty-x/rpi/systemd/thriftyx-heartbeat.env.example /etc/default/thriftyx-heartbeat
+sudo $EDITOR /etc/default/thriftyx-heartbeat   # RXID, OUT, optional URL
+sudo systemctl daemon-reload
+sudo systemctl enable --now thriftyx-heartbeat.timer
+journalctl -t thriftyx-heartbeat -f
+```
+
+페이로드 스키마 (HTTP POST JSON, 60초 주기):
 
 ```json
 {
@@ -103,8 +119,8 @@ echo $! > "$OUT/pid"
 }
 ```
 
-서버에서 60초 내 미수신 시 알림. 본 PR에서는 스키마만 정의.
-구현은 별도 PR.
+서버에서 60초 내 미수신 시 알림. 수신 엔드포인트는 별도 인프라
+(Nginx + 간단한 sink)로 구성한다.
 
 ---
 
