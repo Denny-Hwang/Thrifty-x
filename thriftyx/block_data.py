@@ -55,6 +55,9 @@ def _raw_block_reader(stream, block_size, bit_depth=12):
 def raw_to_complex(data, bit_depth=8):
     """Convert raw I/Q interleaved samples to array of complex values.
 
+    Input must be a 1D array of interleaved samples ``[I0, Q0, I1, Q1, ...]``.
+    Output is a contiguous 1D ``complex64`` array ``[I0+jQ0, I1+jQ1, ...]``.
+
     Parameters
     ----------
     data : :class:`numpy.ndarray`
@@ -66,23 +69,35 @@ def raw_to_complex(data, bit_depth=8):
     -------
     :class:`numpy.ndarray` of `numpy.complex64`
     """
-    if bit_depth == 12:
-        # Airspy: 12-bit ADC, but libairspy INT16_IQ outputs full int16 range
-        # (-32768 to +32767) by left-shifting the 12-bit samples by 4 bits.
-        values = data.astype(np.float32).view(np.complex64)
-        values = values / 32768.0
-    elif bit_depth == 8:
-        # RTL-SDR legacy: 8-bit unsigned uint8, DC offset at 127.4
-        values = data.astype(np.float32).view(np.complex64)
-        values -= (127.4 + 127.4j)
-        values /= 128.0
-    else:
+    if bit_depth not in (8, 12):
         raise ValueError(f"Unsupported bit depth: {bit_depth}. Use 8 or 12.")
+    if data.ndim != 1:
+        raise ValueError(
+            f"raw_to_complex expects a 1D array, got shape {data.shape}")
+    if data.size % 2 != 0:
+        raise ValueError(
+            f"RTL-SDR raw I/Q data must have even length, got {data.size}")
+
+    floats = data.astype(np.float32, copy=False)
+    if bit_depth == 12:
+        # Airspy INT16_IQ: signed int16 left-shifted from 12-bit ADC.
+        floats = floats / 32768.0
+    else:
+        # RTL-SDR legacy: 8-bit unsigned, DC offset at 127.4.
+        floats = (floats - 127.4) / 128.0
+
+    pairs = floats.reshape(-1, 2)
+    values = np.empty(pairs.shape[0], dtype=np.complex64)
+    values.real = pairs[:, 0]
+    values.imag = pairs[:, 1]
     return values
 
 
 def complex_to_raw(array, bit_depth=8):
     """Convert complex array back to I/Q interleaved samples.
+
+    Inverse of :func:`raw_to_complex`. Output is a 1D interleaved
+    ``[I0, Q0, I1, Q1, ...]`` array.
 
     Parameters
     ----------
@@ -94,14 +109,23 @@ def complex_to_raw(array, bit_depth=8):
     -------
     :class:`numpy.ndarray` of `numpy.int16` or `numpy.uint8`
     """
-    if bit_depth == 12:
-        scaled = (array.astype(np.complex64) * 32768.0).view(np.float32)
-        return np.clip(scaled, -32768, 32767).astype(np.int16)
-    elif bit_depth == 8:
-        scaled = array.astype(np.complex64).view(np.float32) * 128 + 127.4
-        return np.clip(scaled, 0, 255).astype(np.uint8)
-    else:
+    if bit_depth not in (8, 12):
         raise ValueError(f"Unsupported bit depth: {bit_depth}. Use 8 or 12.")
+
+    array = np.asarray(array, dtype=np.complex64)
+    if array.ndim != 1:
+        raise ValueError(
+            f"complex_to_raw expects a 1D array, got shape {array.shape}")
+
+    interleaved = np.empty(array.size * 2, dtype=np.float32)
+    interleaved[0::2] = array.real
+    interleaved[1::2] = array.imag
+
+    if bit_depth == 12:
+        scaled = interleaved * 32768.0
+        return np.clip(scaled, -32768, 32767).astype(np.int16)
+    scaled = interleaved * 128.0 + 127.4
+    return np.clip(scaled, 0, 255).astype(np.uint8)
 
 
 def block_reader(stream, size, history, bit_depth=8):

@@ -6,6 +6,7 @@ import io
 
 import numpy as np
 import numpy.testing as npt
+import pytest
 
 from thriftyx import block_data
 
@@ -54,6 +55,70 @@ def test_block_reader():
 
     assert raw == expected_raw
     assert indices == list(range(len(data)))
+
+
+def test_raw_to_complex_8bit_basic():
+    """8-bit interleaved I/Q is paired and DC-offset is removed."""
+    raw = np.array([127, 127, 130, 124, 100, 150], dtype=np.uint8)
+    expected = np.array([
+        (-0.4 - 0.4j) / 128.0,
+        (2.6 - 3.4j) / 128.0,
+        (-27.4 + 22.6j) / 128.0,
+    ], dtype=np.complex64)
+    result = block_data.raw_to_complex(raw, bit_depth=8)
+    assert result.dtype == np.complex64
+    assert result.shape == (3,)
+    assert result.flags['C_CONTIGUOUS']
+    npt.assert_allclose(result, expected, rtol=1e-5, atol=1e-7)
+
+
+def test_raw_to_complex_12bit_basic():
+    """12-bit int16 interleaved I/Q is paired and normalized by 32768."""
+    raw = np.array([0, 0, 32768 // 2, -32768 // 2, -32768, 32767],
+                   dtype=np.int16)
+    expected = np.array([
+        0.0 + 0.0j,
+        0.5 - 0.5j,
+        -1.0 + (32767 / 32768.0) * 1j,
+    ], dtype=np.complex64)
+    result = block_data.raw_to_complex(raw, bit_depth=12)
+    assert result.dtype == np.complex64
+    assert result.shape == (3,)
+    npt.assert_allclose(result, expected, rtol=1e-6, atol=1e-7)
+
+
+def test_raw_to_complex_8bit_odd_length_raises():
+    """Odd-length input must raise ValueError instead of silently misaligning."""
+    raw = np.array([0, 1, 2], dtype=np.uint8)
+    with pytest.raises(ValueError):
+        block_data.raw_to_complex(raw, bit_depth=8)
+
+
+def test_raw_to_complex_12bit_odd_length_raises():
+    """Odd-length input must raise ValueError for 12-bit too."""
+    raw = np.array([0, 1, 2], dtype=np.int16)
+    with pytest.raises(ValueError):
+        block_data.raw_to_complex(raw, bit_depth=12)
+
+
+def test_raw_to_complex_round_trip_8bit():
+    """Random uint8 length-2N array round-trips within ±1 LSB."""
+    rng = np.random.default_rng(seed=12345)
+    raw = rng.integers(0, 256, size=2048, dtype=np.uint8)
+    recovered = block_data.complex_to_raw(
+        block_data.raw_to_complex(raw, bit_depth=8), bit_depth=8)
+    diff = recovered.astype(np.int16) - raw.astype(np.int16)
+    assert np.max(np.abs(diff)) <= 1
+
+
+def test_raw_to_complex_round_trip_12bit():
+    """Random int16 length-2N array round-trips within ±1 LSB."""
+    rng = np.random.default_rng(seed=12345)
+    raw = rng.integers(-32768, 32768, size=2048, dtype=np.int16)
+    recovered = block_data.complex_to_raw(
+        block_data.raw_to_complex(raw, bit_depth=12), bit_depth=12)
+    diff = recovered.astype(np.int32) - raw.astype(np.int32)
+    assert np.max(np.abs(diff)) <= 1
 
 
 def test_card_reader():
