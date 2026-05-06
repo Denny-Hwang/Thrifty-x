@@ -12,6 +12,8 @@ by Schalk Willem Krüger (North-West University), extended to support
 - **User Guide:** [docs/user_guide.md](docs/user_guide.md)
 - **사용자 가이드 (한국어):** [docs/user_guide_ko.md](docs/user_guide_ko.md)
 - **Raspberry Pi 5 배포 분석 리포트 (한국어):** [docs/rpi5_deployment_report_ko.md](docs/rpi5_deployment_report_ko.md)
+- **Raspberry Pi 5 설치 가이드 (한국어):** [rpi/installation_pi5.md](rpi/installation_pi5.md)
+- **Raspberry Pi 5 운영 런북 (한국어):** [docs/rpi5_runbook_ko.md](docs/rpi5_runbook_ko.md)
 - **Raspberry Pi 5 배포 검증 체크리스트 (한국어):** [docs/rpi5_validation_checklist_ko.md](docs/rpi5_validation_checklist_ko.md)
 
 The user guide covers installation, hardware specs, gain tuning,

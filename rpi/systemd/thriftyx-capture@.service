@@ -1,0 +1,40 @@
+[Unit]
+Description=Thrifty-X capture service for receiver %i
+Documentation=https://github.com/Denny-Hwang/thrifty-x
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/thriftyx-capture@%i
+User=${THRIFTYX_USER}
+Group=plugdev
+WorkingDirectory=${THRIFTYX_HOME}
+
+# Activate the project venv and run capture.
+# THRIFTYX_OUT should point to a USB SSD path, NOT the SD card.
+ExecStart=/bin/bash -lc '\
+    source "${THRIFTYX_HOME}/.venv/bin/activate" && \
+    exec thriftyx capture "${THRIFTYX_OUT}/card/%i_$(date +%%Y%%m%%dT%%H%%M%%S).card" \
+        --config "${THRIFTYX_CONFIG}" \
+    '
+
+# Restart on any failure (incl. USB enumeration races at boot).
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Hardening — relax if blocking your setup.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectHome=read-only
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=thriftyx-capture-%i
+
+[Install]
+WantedBy=multi-user.target
