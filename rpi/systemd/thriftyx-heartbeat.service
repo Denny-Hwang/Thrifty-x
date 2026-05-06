@@ -1,0 +1,18 @@
+[Unit]
+Description=Thrifty-X heartbeat (RX node liveness JSON to journald + optional POST)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/thriftyx-heartbeat
+# Resolve the project venv via THRIFTYX_HOME (falls back to system python).
+ExecStart=/bin/bash -lc '\
+    if [ -x "${THRIFTYX_HOME:-/home/pi/thrifty-x}/.venv/bin/python" ]; then \
+        PY="${THRIFTYX_HOME}/.venv/bin/python"; \
+    else \
+        PY=python3; \
+    fi; \
+    exec "$PY" "${THRIFTYX_HOME:-/home/pi/thrifty-x}/rpi/heartbeat.py" \
+    '
+NoNewPrivileges=true
+SyslogIdentifier=thriftyx-heartbeat

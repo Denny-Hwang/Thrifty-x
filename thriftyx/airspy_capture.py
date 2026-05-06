@@ -36,6 +36,14 @@ from thriftyx import config_validator
 from thriftyx.carrier_detect import detect as carrier_detect_block
 from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
                                   DeviceCaptureError, ConfigValidationError)
+from thriftyx.signal_utils import compute_fft
+
+
+# Per-detection fsync is microSD-hostile on Pi-class deployments.
+# Flush at most once per FLUSH_INTERVAL_S seconds, or every
+# FLUSH_BLOCKS detections — whichever comes first.
+FLUSH_INTERVAL_S = 1.0
+FLUSH_BLOCKS = 32
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +265,9 @@ def _capture_rtlsdr(config, extra_args, output_file):
     # History buffer for block overlap
     history_raw = np.zeros(block_history * 2, dtype=np.uint8)
 
+    last_flush_t = time.time()
+    pending_writes = 0
+
     while running[0]:
         if duration is not None and (time.time() - start_time) >= duration:
             break
@@ -271,8 +282,8 @@ def _capture_rtlsdr(config, extra_args, output_file):
         block_raw = np.concatenate([history_raw, new_raw])
         block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
 
-        # Carrier detection via FFT
-        fft_mag = np.abs(np.fft.fft(block_complex))
+        # Carrier detection via FFT (pyfftw when available)
+        fft_mag = np.abs(compute_fft(block_complex))
         detected, peak_idx, peak_mag, noise_rms = carrier_detect_block(
             fft_mag, thresh_coeffs, window=window)
 
@@ -282,11 +293,23 @@ def _capture_rtlsdr(config, extra_args, output_file):
                                   threshold, noise_rms)
             # Write v1 format line (raw uint8 bytes, no conversion loss)
             _write_card_line(output_file, time.time(), block_idx, block_raw)
-            output_file.flush()
             detected_count += 1
+            pending_writes += 1
+            now = time.time()
+            if (pending_writes >= FLUSH_BLOCKS
+                    or (now - last_flush_t) >= FLUSH_INTERVAL_S):
+                output_file.flush()
+                pending_writes = 0
+                last_flush_t = now
 
         history_raw = new_raw[-block_history * 2:]
         block_idx += 1
+
+    if pending_writes:
+        try:
+            output_file.flush()
+        except Exception:
+            pass
 
     if input_stream not in (sys.stdin, sys.stdin.buffer):
         input_stream.close()
@@ -429,6 +452,9 @@ def _capture_airspy(config, extra_args, output_file):
         # window.  AirspyMiniDevice exposes cumulative dropped samples.
         dropped_base = getattr(device, 'dropped_samples', 0)
 
+        last_flush_t = time.time()
+        pending_writes = 0
+
         while running[0]:
             if duration is not None and (time.time() - start_time) >= duration:
                 break
@@ -450,8 +476,8 @@ def _capture_airspy(config, extra_args, output_file):
             block_raw = np.concatenate([history_raw, raw])
             block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
 
-            # Carrier detection via FFT
-            fft_mag = np.abs(np.fft.fft(block_complex))
+            # Carrier detection via FFT (pyfftw when available)
+            fft_mag = np.abs(compute_fft(block_complex))
             detected, peak_idx, peak_mag, noise_rms = carrier_detect_block(
                 fft_mag, thresh_coeffs, window=window)
 
@@ -463,12 +489,24 @@ def _capture_airspy(config, extra_args, output_file):
                 # Write v2 format line (raw int16 bytes)
                 _write_card_line(output_file, time.time(), block_idx,
                                  block_raw)
-                output_file.flush()
                 detected_count += 1
+                pending_writes += 1
+                now = time.time()
+                if (pending_writes >= FLUSH_BLOCKS
+                        or (now - last_flush_t) >= FLUSH_INTERVAL_S):
+                    output_file.flush()
+                    pending_writes = 0
+                    last_flush_t = now
 
             # Update history from the tail of the raw read buffer.
             history_raw = raw[-(block_history * 2):]
             blocks_processed += 1
+
+        if pending_writes:
+            try:
+                output_file.flush()
+            except Exception:
+                pass
 
     except DeviceConfigError as e:
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
