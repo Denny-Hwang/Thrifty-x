@@ -742,7 +742,13 @@ de-duplicates per-receiver detections.
 
 `thriftyx analyze_detect <file.card> -m <N> -p <plots>` runs the
 detector again on the first `N` blocks and renders one or more of the
-following plot families. Use `-p overview` first.
+following plot families.  By default it opens a single **unified Qt
+viewer** with two tab bars — one for the block index, one for the plot
+type — so every detection × every plot lives in one window (the same
+layout as the original thrifty).  Install the `gui` extra
+(`pip install -e ".[gui]"`) to enable it; without it, or with
+`--no-gui`, each (block, plot) opens its own matplotlib figure.
+Use `-p overview` first.
 
 1. **overview** — 4-panel: sample histogram + frequency-compensated
    magnitude over time + FFT (carrier search) + correlation output.

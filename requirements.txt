@@ -5,6 +5,9 @@ scipy>=1.9
 # Analysis
 matplotlib>=3.6
 
+# Unified Qt detect-analysis viewer (optional, pip extra: `thriftyx[gui]`)
+PyQt5>=5.15
+
 # Dev
 pytest>=7.0
 pytest-cov
