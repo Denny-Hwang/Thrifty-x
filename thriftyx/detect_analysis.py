@@ -10,11 +10,11 @@
 
 
 import argparse
-import sys
-import re
-from collections import namedtuple
-
+import importlib
 import os
+import re
+import sys
+from collections import namedtuple
 
 import matplotlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
@@ -566,24 +566,184 @@ def _plot(fig, plotter, cmd):
         _FIGURE_COMMAND_STRINGS[cmd](plotter, fig)
 
 
-def _get_interactive_backend():
-    """Try TkAgg for interactive display, fall back to Agg."""
-    for backend in ('TkAgg', 'Agg'):
+def _try_qt_modules():
+    """Probe for a usable Qt binding + matplotlib Qt backend.
+
+    Returns a dict of the modules/classes needed to build the unified
+    DetectionViewer, or ``None`` if no Qt stack is available.  PyQt5 is
+    tried first (it is what the original thrifty used, via PyQt4, and
+    matplotlib's ``qtagg`` backend auto-selects it before PySide).
+    """
+    # PyQt5 is preferred (matches the original thrifty closest, and is
+    # what matplotlib's QtAgg auto-selects).  PySide6 also exposes the
+    # un-scoped Qt enum aliases used below.  PyQt6 is intentionally
+    # excluded — it dropped those aliases (e.g. ``Qt.StrongFocus`` →
+    # ``Qt.FocusPolicy.StrongFocus``) and would need a separate path.
+    candidates = (
+        ("PyQt5", "pyqt5"),
+        ("PySide6", "pyside6"),
+    )
+    for qt_pkg, qt_api in candidates:
+        try:
+            qt_widgets = importlib.import_module(qt_pkg + ".QtWidgets")
+            qt_core = importlib.import_module(qt_pkg + ".QtCore")
+        except ImportError:
+            continue
+        try:
+            os.environ.setdefault("QT_API", qt_api)
+            matplotlib.use("QtAgg", force=True)
+            backend = importlib.import_module(
+                "matplotlib.backends.backend_qtagg")
+            key_handler_mod = importlib.import_module(
+                "matplotlib.backend_bases")
+        except (ImportError, ValueError):
+            continue
+        return {
+            "QtWidgets": qt_widgets,
+            "QtCore": qt_core,
+            "FigureCanvasQTAgg": backend.FigureCanvasQTAgg,
+            "NavigationToolbar2QT": backend.NavigationToolbar2QT,
+            "key_press_handler": key_handler_mod.key_press_handler,
+            "qt_pkg": qt_pkg,
+        }
+    return None
+
+
+def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
+    """Run the unified DetectionViewer Qt application.
+
+    Mirrors the original ``thrifty.detect_analysis.DetectionViewer`` UI:
+    a vertical stack of two ``QTabBar``s (block index, plot type) above a
+    matplotlib canvas with the standard navigation toolbar.  Switching
+    either tab redraws the figure in place — no per-block, per-plot
+    pop-up windows.
+    """
+    QtWidgets = qt["QtWidgets"]
+    QtCore = qt["QtCore"]
+    FigureCanvasQTAgg = qt["FigureCanvasQTAgg"]
+    NavigationToolbar2QT = qt["NavigationToolbar2QT"]
+    key_press_handler = qt["key_press_handler"]
+
+    summary_liner = detect.SummaryLineFormatter(sample_rate,
+                                                settings.block_len,
+                                                add_dt=False)
+    plotters = [Plotter(d, settings, sample_rate, bit_depth=bit_depth)
+                for d in detections]
+
+    class DetectionViewer(QtWidgets.QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Thrifty-X — Detect Analysis")
+
+            self.block_selector = QtWidgets.QTabBar()
+            self.block_selector.setExpanding(False)
+            self.block_selector.setDrawBase(False)
+            for detection in detections:
+                self.block_selector.addTab(str(detection.result.block))
+
+            self.cmd_selector = QtWidgets.QTabBar()
+            self.cmd_selector.setExpanding(False)
+            self.cmd_selector.setDrawBase(False)
+            for cmd in cmds:
+                self.cmd_selector.addTab(cmd)
+
+            self.block_selector.currentChanged.connect(self.plot)
+            self.cmd_selector.currentChanged.connect(self.plot)
+
+            self.fig = Figure(frameon=True)
+            self.canvas = FigureCanvasQTAgg(self.fig)
+            self.toolbar = NavigationToolbar2QT(self.canvas, self)
+            self.canvas.mpl_connect("key_press_event", self._on_key_press)
+            self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                      QtWidgets.QSizePolicy.Expanding)
+            self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
+
+            self.header = QtWidgets.QLabel("Detect Analysis")
+            self.header.setAlignment(QtCore.Qt.AlignHCenter)
+            self.summary_line = QtWidgets.QLabel()
+            self.summary_line.setAlignment(QtCore.Qt.AlignHCenter)
+            self.summary_line.setTextInteractionFlags(
+                QtCore.Qt.TextSelectableByMouse)
+
+            vbox = QtWidgets.QVBoxLayout()
+            vbox.addWidget(self.header)
+            vbox.addWidget(self.block_selector)
+            vbox.addWidget(self.cmd_selector)
+            vbox.addWidget(self.summary_line)
+            vbox.addWidget(self.canvas, stretch=1)
+            vbox.addWidget(self.toolbar)
+            self.setLayout(vbox)
+
+            self.resize(1100, 800)
+            self.plot()
+            self.canvas.setFocus()
+
+        def plot(self):
+            block_idx = self.block_selector.currentIndex()
+            cmd_idx = self.cmd_selector.currentIndex()
+            if block_idx < 0 or cmd_idx < 0:
+                return
+
+            plotter = plotters[block_idx]
+            detection = detections[block_idx]
+            cmd = cmds[cmd_idx]
+
+            self.fig.clf(keep_observers=False)
+            _plot(self.fig, plotter, cmd)
+            self.fig.set_facecolor("none")
+            try:
+                self.fig.set_tight_layout(True)
+            except Exception:  # pragma: no cover - matplotlib version drift
+                pass
+            self.canvas.draw_idle()
+
+            summary_text = summary_liner(detection.detected, detection.result)
+            self.summary_line.setText(
+                "blk={}; {}".format(detection.result.block, summary_text))
+
+        def _on_key_press(self, event):
+            key_press_handler(event, self.canvas, self.toolbar)
+
+    app = QtWidgets.QApplication.instance()
+    owns_app = app is None
+    if owns_app:
+        app = QtWidgets.QApplication(sys.argv)
+
+    viewer = DetectionViewer()
+    viewer.show()
+    try:
+        exec_fn = getattr(app, "exec", None) or app.exec_
+        exec_fn()
+    finally:
+        # Drop the strong reference so Qt can finalize the widget tree.
+        del viewer
+        if owns_app:
+            del app
+
+
+def _get_pyplot_backend():
+    """Fallback when no Qt stack is available: try TkAgg, then Agg."""
+    for backend in ("TkAgg", "Agg"):
         try:
             matplotlib.use(backend, force=True)
             import matplotlib.pyplot as _plt
             return backend, _plt
         except ImportError:
             continue
-    matplotlib.use('Agg', force=True)
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as _plt
-    return 'Agg', _plt
+    return "Agg", _plt
 
 
-def show_detections(detections, cmds, settings, sample_rate, bit_depth=8):
-    """Display detection plots interactively using matplotlib.pyplot."""
-    backend, plt = _get_interactive_backend()
-    interactive = (backend != 'Agg')
+def _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth):
+    """Fallback display when no Qt binding is installed.
+
+    Opens one figure per ``(block, plot)`` combination using
+    ``matplotlib.pyplot`` — same behaviour as before the Qt viewer
+    was added.
+    """
+    backend, plt = _get_pyplot_backend()
+    interactive = (backend != "Agg")
 
     summary_liner = detect.SummaryLineFormatter(sample_rate,
                                                 settings.block_len,
@@ -592,10 +752,9 @@ def show_detections(detections, cmds, settings, sample_rate, bit_depth=8):
     for detection in detections:
         plotter = Plotter(detection, settings, sample_rate, bit_depth=bit_depth)
         summary_text = summary_liner(detection.detected, detection.result)
-
         for cmd in cmds:
             fig = plt.figure(figsize=(12, 8))
-            fig.suptitle('Block #{} - {}'.format(
+            fig.suptitle("Block #{} - {}".format(
                 detection.result.block, summary_text))
             _plot(fig, plotter, cmd)
             fig.set_tight_layout(True)
@@ -605,6 +764,34 @@ def show_detections(detections, cmds, settings, sample_rate, bit_depth=8):
     else:
         print("No interactive backend available; "
               "use --export to save plots to files.")
+
+
+def show_detections(detections, cmds, settings, sample_rate, bit_depth=8,
+                    prefer_qt=True):
+    """Display detection plots interactively.
+
+    Uses a unified Qt window with two tab bars (block index + plot type)
+    when a Qt binding is available — the same layout as the original
+    thrifty ``DetectionViewer``.  Falls back to one matplotlib figure
+    per (block, plot) combination if no Qt stack is installed or if
+    ``prefer_qt`` is False.
+    """
+    if not detections:
+        print("No detections to show.")
+        return
+
+    if prefer_qt:
+        qt = _try_qt_modules()
+        if qt is not None:
+            try:
+                _show_detections_qt(qt, detections, cmds, settings,
+                                    sample_rate, bit_depth)
+                return
+            except Exception as exc:  # pragma: no cover - depends on env
+                print("Qt viewer failed ({}); falling back to pyplot windows."
+                      .format(exc))
+
+    _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth)
 
 
 def parse_range_list(string):
@@ -690,6 +877,9 @@ def _main():
     parser.add_argument('--save', type=str, nargs='?', const='signals',
                         help="save detection signals to .npz"
                              "files with the given prefix")
+    parser.add_argument('--no-gui', dest='no_gui', action='store_true',
+                        help="skip the unified Qt viewer and open one "
+                             "matplotlib figure per (block, plot)")
 
     setting_keys = ['sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
@@ -712,7 +902,13 @@ def _main():
         # Airspy v1-style files would decode as 8-bit.
         blocks = block_data.card_reader(args.input, bit_depth=bit_depth)
 
-    cmds = args.plot.split(',')
+    cmds = [c.strip() for c in args.plot.split(',') if c.strip()]
+    known = set(_PLOT_COMMAND_STRINGS) | set(_FIGURE_COMMAND_STRINGS)
+    unknown = [c for c in cmds if c not in known]
+    if unknown:
+        parser.error("unknown plot command(s): {} (run with --help for "
+                     "the list)".format(', '.join(unknown)))
+
     template = np.load(config.template)
     settings = detect.DetectorSettings(block_len=config.block_size,
                                        history_len=config.block_history,
@@ -774,7 +970,7 @@ def _main():
 
     if not args.save and not args.export:
         show_detections(detections, cmds, settings, config.sample_rate,
-                        bit_depth=bit_depth)
+                        bit_depth=bit_depth, prefer_qt=not args.no_gui)
 
 
 if __name__ == '__main__':

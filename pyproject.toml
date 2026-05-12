@@ -17,8 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 fft = ["pyfftw>=0.13"]
 analysis = ["matplotlib>=3.6"]
+gui = ["matplotlib>=3.6", "PyQt5>=5.15"]
 dev = ["pytest>=7.0", "pytest-cov", "mypy", "ruff"]
-all = ["thriftyx[fft,analysis,dev]"]
+all = ["thriftyx[fft,analysis,gui,dev]"]
 
 [project.scripts]
 thriftyx = "thriftyx.cli:_main"

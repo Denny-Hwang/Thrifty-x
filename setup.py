@@ -22,6 +22,7 @@ setup(
     install_requires=['numpy>=1.23', 'scipy>=1.9'],
     extras_require={
         'analysis': ['matplotlib>=3.6'],
+        'gui': ['matplotlib>=3.6', 'PyQt5>=5.15'],
         'fft': ['pyfftw>=0.13'],
         'dev': ['pytest>=7.0', 'pytest-cov', 'mypy', 'ruff'],
     },
