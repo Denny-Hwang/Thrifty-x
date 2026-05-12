@@ -584,7 +584,9 @@ def capture_cli(args=None):
         print("ERROR: Invalid configuration: {}".format(e), file=sys.stderr)
         sys.exit(1)
 
-    device_type = config.get('device_type', 'rtlsdr')
+    # device_type is always populated by load_args (DEFINITIONS default
+    # is 'airspy_mini'), so a plain attribute access is safe.
+    device_type = config.device_type
 
     try:
         if device_type == 'rtlsdr':
