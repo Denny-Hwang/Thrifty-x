@@ -13,6 +13,7 @@ import argparse
 import importlib
 import os
 import re
+import subprocess
 import sys
 from collections import namedtuple
 
@@ -566,6 +567,68 @@ def _plot(fig, plotter, cmd):
         _FIGURE_COMMAND_STRINGS[cmd](plotter, fig)
 
 
+def _is_wsl():
+    """Detect WSL / WSLg by env vars and /proc/version."""
+    if sys.platform != "linux":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        with open("/proc/version", "r", encoding="utf-8",
+                  errors="replace") as fh:
+            text = fh.read().lower()
+    except OSError:
+        return False
+    return "microsoft" in text or "wsl" in text
+
+
+def _has_display():
+    """Return True if either an X11 DISPLAY or a Wayland socket is set."""
+    return bool(os.environ.get("DISPLAY") or
+                os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _probe_qt_runtime(qt_pkg, platform=None, timeout=10):
+    """Subprocess-test whether the chosen Qt binding can actually open a
+    window with the given platform plugin.
+
+    On WSLg the pip-installed PyQt5 frequently fails plugin loading with a
+    ``qFatal`` abort that cannot be caught from Python — by the time the
+    error is observable, the process is already gone.  Running the probe
+    out-of-process means a plugin abort just shows up as a non-zero exit
+    code, which we can recover from.
+
+    Returns ``(ok, stderr_tail)``.
+    """
+    code = (
+        "import sys\n"
+        "from {pkg}.QtWidgets import QApplication, QWidget\n"
+        "app = QApplication.instance() or QApplication([])\n"
+        "w = QWidget()\n"
+        "w.resize(1, 1)\n"
+        "sys.exit(0)\n"
+    ).format(pkg=qt_pkg)
+    env = os.environ.copy()
+    if platform is not None:
+        env["QT_QPA_PLATFORM"] = platform
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env, capture_output=True, timeout=timeout, check=False)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, str(exc)
+    if proc.returncode == 0:
+        return True, ""
+    err = proc.stderr.decode("utf-8", errors="replace").strip()
+    return False, err
+
+
+def _last_line(text):
+    """Return the last non-empty line of ``text`` for compact diagnostics."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else "no diagnostic output"
+
+
 def _try_qt_modules():
     """Probe for a usable Qt binding + matplotlib Qt backend.
 
@@ -573,6 +636,13 @@ def _try_qt_modules():
     DetectionViewer, or ``None`` if no Qt stack is available.  PyQt5 is
     tried first (it is what the original thrifty used, via PyQt4, and
     matplotlib's ``qtagg`` backend auto-selects it before PySide).
+
+    On WSL/WSLg the probe additionally subprocess-tests whether
+    ``QApplication`` can actually load a Qt platform plugin — pip-installed
+    PyQt5 routinely aborts on WSLg's XWayland+Wayland combo, and that
+    failure is not catchable in-process.  When ``QT_QPA_PLATFORM`` is not
+    pre-set, the probe tries ``xcb`` then ``wayland`` and records the
+    first one that works in ``os.environ`` so the real viewer inherits it.
     """
     # PyQt5 is preferred (matches the original thrifty closest, and is
     # what matplotlib's QtAgg auto-selects).  PySide6 also exposes the
@@ -583,6 +653,10 @@ def _try_qt_modules():
         ("PyQt5", "pyqt5"),
         ("PySide6", "pyside6"),
     )
+
+    is_wsl = _is_wsl()
+    on_display = _has_display()
+
     for qt_pkg, qt_api in candidates:
         try:
             qt_widgets = importlib.import_module(qt_pkg + ".QtWidgets")
@@ -598,6 +672,49 @@ def _try_qt_modules():
                 "matplotlib.backend_bases")
         except (ImportError, ValueError):
             continue
+
+        chosen_platform = None
+        if on_display and is_wsl:
+            if "QT_QPA_PLATFORM" in os.environ:
+                # Caller pinned a platform — verify it works once before
+                # we hand off to the real (uncatchable-abort) GUI.
+                probed, err = _probe_qt_runtime(qt_pkg)
+                if not probed:
+                    sys.stderr.write(
+                        "thriftyx: {} cannot initialise Qt with "
+                        "QT_QPA_PLATFORM={} ({}); trying next binding.\n"
+                        .format(qt_pkg,
+                                os.environ.get("QT_QPA_PLATFORM"),
+                                _last_line(err)))
+                    continue
+            else:
+                # WSLg: try xcb (works through XWayland), then native
+                # wayland, then let Qt auto-pick.  Record the choice in
+                # the environment so the in-process QApplication picks
+                # the same plugin.
+                attempts = ("xcb", "wayland", None)
+                ok = False
+                last_err = ""
+                for platform in attempts:
+                    probed, err = _probe_qt_runtime(qt_pkg, platform)
+                    if probed:
+                        chosen_platform = platform
+                        ok = True
+                        break
+                    last_err = err
+                if not ok:
+                    sys.stderr.write(
+                        "thriftyx: {} cannot initialise Qt on WSL "
+                        "(last error: {}); trying next binding.\n"
+                        .format(qt_pkg, _last_line(last_err)))
+                    continue
+
+        if chosen_platform is not None:
+            os.environ["QT_QPA_PLATFORM"] = chosen_platform
+            sys.stderr.write(
+                "thriftyx: selected QT_QPA_PLATFORM={} for {}.\n"
+                .format(chosen_platform, qt_pkg))
+
         return {
             "QtWidgets": qt_widgets,
             "QtCore": qt_core,
@@ -732,66 +849,187 @@ def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
             del app
 
 
-def _get_pyplot_backend():
-    """Fallback when no Qt stack is available: try TkAgg, then Agg."""
-    for backend in ("TkAgg", "Agg"):
+def _get_pyplot_backend(preferred=None):
+    """Pick an interactive matplotlib backend.
+
+    ``preferred`` lets callers force a specific backend by name (e.g.
+    ``'TkAgg'`` for ``--backend tk``).  Otherwise TkAgg is tried first
+    (universally available with the system ``python3-tk`` package and
+    works under WSLg), then platform-native fallbacks, and finally the
+    headless ``Agg`` backend as a last resort.
+
+    Returns ``(backend_name, pyplot_module)``.
+    """
+    if preferred:
+        candidates = (preferred, "TkAgg", "Agg")
+    else:
+        candidates = ("TkAgg", "MacOSX", "GTK3Agg", "Agg")
+    for backend in candidates:
         try:
             matplotlib.use(backend, force=True)
             import matplotlib.pyplot as _plt
             return backend, _plt
-        except ImportError:
+        except (ImportError, ValueError):
             continue
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as _plt
     return "Agg", _plt
 
 
-def _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth):
-    """Fallback display when no Qt binding is installed.
+def _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth,
+                            preferred_backend=None):
+    """Fallback display when no Qt binding is usable.
 
-    Opens one figure per ``(block, plot)`` combination using
-    ``matplotlib.pyplot`` — same behaviour as before the Qt viewer
-    was added.
+    Opens a *single* matplotlib figure and switches the current
+    (block, plot) selection via keyboard navigation — same one-window
+    UX as the Qt viewer but without the Qt dependency.
+
+    Key bindings:
+        Left / Right  — previous / next detection block
+        Up / Down     — previous / next plot command
+        q / Esc       — close the window
+
+    With TkAgg (the preferred fallback) this works out of the box on
+    Linux, macOS, Windows, and WSLg.  When matplotlib can only initialise
+    the headless ``Agg`` backend the function prints a hint and returns
+    without opening anything — the caller is expected to use
+    ``--export`` for non-interactive runs.
     """
-    backend, plt = _get_pyplot_backend()
+    backend, plt = _get_pyplot_backend(preferred_backend)
     interactive = (backend != "Agg")
+    if not interactive:
+        print("No interactive backend available; "
+              "use --export to save plots to files.")
+        return
 
     summary_liner = detect.SummaryLineFormatter(sample_rate,
                                                 settings.block_len,
                                                 add_dt=False)
 
-    for detection in detections:
-        plotter = Plotter(detection, settings, sample_rate, bit_depth=bit_depth)
-        summary_text = summary_liner(detection.detected, detection.result)
-        for cmd in cmds:
-            fig = plt.figure(figsize=(12, 8))
-            fig.suptitle("Block #{} - {}".format(
-                detection.result.block, summary_text))
-            _plot(fig, plotter, cmd)
-            fig.set_tight_layout(True)
+    # Match the Qt viewer: build each Plotter lazily so the first frame
+    # paints before paying O(N) FFT/threshold cost for every block.
+    plotter_cache = {}
 
-    if interactive:
-        plt.show(block=True)
-    else:
-        print("No interactive backend available; "
-              "use --export to save plots to files.")
+    def get_plotter(idx):
+        plotter = plotter_cache.get(idx)
+        if plotter is None:
+            plotter = Plotter(detections[idx], settings, sample_rate,
+                              bit_depth=bit_depth)
+            plotter_cache[idx] = plotter
+        return plotter
+
+    state = {"block": 0, "cmd": 0}
+    fig = plt.figure(figsize=(12, 8))
+
+    def redraw():
+        b = state["block"]
+        c = state["cmd"]
+        detection = detections[b]
+        plotter = get_plotter(b)
+
+        fig.clf()
+        _plot(fig, plotter, cmds[c])
+        try:
+            fig.set_tight_layout(True)
+        except Exception:  # pragma: no cover - matplotlib version drift
+            pass
+
+        summary_text = summary_liner(detection.detected, detection.result)
+        fig.suptitle("blk={} ({}/{}) - {} ({}/{}) - {}".format(
+            detection.result.block, b + 1, len(detections),
+            cmds[c], c + 1, len(cmds), summary_text))
+
+        window_title = "Thrifty-X - blk={} - {}".format(
+            detection.result.block, cmds[c])
+        try:
+            fig.canvas.manager.set_window_title(window_title)
+        except Exception:  # pragma: no cover - matplotlib version drift
+            pass
+
+        fig.canvas.draw_idle()
+
+    def on_key(event):
+        key = event.key
+        if key == "right":
+            state["block"] = (state["block"] + 1) % len(detections)
+        elif key == "left":
+            state["block"] = (state["block"] - 1) % len(detections)
+        elif key == "down":
+            state["cmd"] = (state["cmd"] + 1) % len(cmds)
+        elif key == "up":
+            state["cmd"] = (state["cmd"] - 1) % len(cmds)
+        elif key in ("q", "escape"):
+            plt.close(fig)
+            return
+        else:
+            return
+        redraw()
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    redraw()
+
+    print("Pyplot viewer ({}): Left/Right blocks, Up/Down plots, q to quit "
+          "({} block(s), {} plot(s)).".format(
+              backend, len(detections), len(cmds)))
+    plt.show(block=True)
+
+
+def _print_env_info():
+    """Verbose startup banner: Python, matplotlib, Qt bindings, display."""
+    print("thriftyx env info:")
+    print("  python         : {}".format(sys.version.split()[0]))
+    print("  platform       : {} ({})".format(
+        sys.platform, "WSL" if _is_wsl() else "native"))
+    print("  DISPLAY        : {!r}".format(os.environ.get("DISPLAY")))
+    print("  WAYLAND_DISPLAY: {!r}".format(
+        os.environ.get("WAYLAND_DISPLAY")))
+    print("  QT_QPA_PLATFORM: {!r}".format(
+        os.environ.get("QT_QPA_PLATFORM")))
+    print("  matplotlib     : {} (backend={})".format(
+        matplotlib.__version__, matplotlib.get_backend()))
+    for qt_pkg in ("PyQt5", "PySide6"):
+        try:
+            importlib.import_module(qt_pkg + ".QtCore")
+            status = "importable"
+        except ImportError as exc:
+            status = "not available ({})".format(exc)
+        print("  {:15s}: {}".format(qt_pkg, status))
 
 
 def show_detections(detections, cmds, settings, sample_rate, bit_depth=8,
-                    prefer_qt=True):
+                    prefer_qt=True, backend="auto", verbose=False):
     """Display detection plots interactively.
 
     Uses a unified Qt window with two tab bars (block index + plot type)
     when a Qt binding is available — the same layout as the original
-    thrifty ``DetectionViewer``.  Falls back to one matplotlib figure
-    per (block, plot) combination if no Qt stack is installed or if
-    ``prefer_qt`` is False.
+    thrifty ``DetectionViewer``.  Falls back to the single-window pyplot
+    viewer (Left/Right blocks, Up/Down plots) when Qt is not usable.
+
+    Parameters
+    ----------
+    backend : {'auto', 'qt', 'tk', 'pyplot'}
+        ``'auto'`` (default) preserves the historic preference: try Qt
+        first, then TkAgg.  ``'qt'`` forces the Qt viewer and falls back
+        to pyplot only if Qt is unusable.  ``'tk'`` pins matplotlib to
+        TkAgg and skips the Qt probe.  ``'pyplot'`` skips both the Qt
+        probe and the TkAgg preference, letting matplotlib pick whatever
+        interactive backend it can find.
+    prefer_qt : bool
+        Retained for backwards compatibility with the ``--no-gui`` flag:
+        ``prefer_qt=False`` together with ``backend='auto'`` is treated
+        as ``backend='tk'``.
     """
     if not detections:
         print("No detections to show.")
         return
 
-    if prefer_qt:
+    effective_backend = backend
+    if effective_backend == "auto" and not prefer_qt:
+        effective_backend = "tk"
+
+    try_qt = effective_backend in ("auto", "qt")
+
+    if try_qt:
         qt = _try_qt_modules()
         if qt is not None:
             try:
@@ -799,10 +1037,18 @@ def show_detections(detections, cmds, settings, sample_rate, bit_depth=8,
                                     sample_rate, bit_depth)
                 return
             except Exception as exc:  # pragma: no cover - depends on env
-                print("Qt viewer failed ({}); falling back to pyplot windows."
+                print("Qt viewer failed ({}); falling back to pyplot."
                       .format(exc))
+        elif effective_backend == "qt":
+            print("Qt viewer requested but no Qt binding is usable; "
+                  "falling back to the pyplot viewer.")
 
-    _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth)
+    if effective_backend in ("auto", "tk"):
+        preferred = "TkAgg"
+    else:
+        preferred = None
+    _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth,
+                            preferred_backend=preferred)
 
 
 def parse_range_list(string):
@@ -889,8 +1135,18 @@ def _main():
                         help="save detection signals to .npz files "
                              "with the given prefix")
     parser.add_argument('--no-gui', dest='no_gui', action='store_true',
-                        help="skip the unified Qt viewer and open one "
-                             "matplotlib figure per (block, plot)")
+                        help="skip the unified Qt viewer and use the "
+                             "single-window pyplot/TkAgg viewer instead")
+    parser.add_argument('--backend',
+                        choices=('auto', 'qt', 'tk', 'pyplot'),
+                        default='auto',
+                        help="select the GUI backend: 'qt' forces the "
+                             "unified Qt viewer; 'tk' uses TkAgg with "
+                             "the single-window pyplot viewer; 'pyplot' "
+                             "uses matplotlib's auto-picked backend; "
+                             "'auto' (default) prefers Qt and falls back")
+    # Note: -v/--verbose is registered by settings.load_args; reusing it
+    # to enable the env-info banner here.
 
     setting_keys = ['sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
@@ -980,8 +1236,13 @@ def _main():
                 fig.savefig(filename, dpi=150)
 
     if not args.save and not args.export:
+        if args.verbose:
+            _print_env_info()
         show_detections(detections, cmds, settings, config.sample_rate,
-                        bit_depth=bit_depth, prefer_qt=not args.no_gui)
+                        bit_depth=bit_depth,
+                        prefer_qt=not args.no_gui,
+                        backend=args.backend,
+                        verbose=args.verbose)
 
 
 if __name__ == '__main__':
