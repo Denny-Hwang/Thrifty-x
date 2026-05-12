@@ -3,54 +3,106 @@
 **Airspy-based TDOA positioning system for wildlife tracking.**
 
 Thrifty-X is a derivative of [Thrifty](https://github.com/swkrueger/Thrifty)
-by Schalk Willem Krüger (North-West University), extended to support
-[Airspy Mini](https://airspy.com/airspy-mini/) and
-[Airspy R2](https://airspy.com/airspy-r2/) SDR hardware.
+by Schalk Willem Krüger (North-West University, 2016) — the original work
+targets RTL-SDR.  Thrifty-X keeps the signal-processing pipeline intact and
+extends the hardware support to [Airspy Mini](https://airspy.com/airspy-mini/)
+and [Airspy R2](https://airspy.com/airspy-r2/), modernises the codebase for
+Python 3.10+, and adds a unified Qt-based detection viewer plus a
+Raspberry Pi 5 deployment story.
+
+Version: see `thriftyx/__init__.py` (`__version__`).
+
+## Table of Contents
+
+1. [Documentation](#documentation)
+2. [What's Changed from Original Thrifty](#whats-changed-from-original-thrifty)
+3. [Supported Hardware](#supported-hardware)
+4. [Requirements](#requirements)
+5. [Installation](#installation)
+6. [CLI Overview](#cli-overview)
+7. [Typical Workflow](#typical-workflow)
+8. [Capture Reference](#capture-reference)
+9. [Inspecting a Capture (`analyze_detect`)](#inspecting-a-capture-analyze_detect)
+10. [Detector & Signal-Processing Defaults](#detector--signal-processing-defaults)
+11. [Using Existing RTL-SDR Data](#using-existing-rtl-sdr-data)
+12. [Permissions / udev (Linux)](#permissions--udev-linux)
+13. [Repository Layout](#repository-layout)
+14. [Raspberry Pi 5 Deployment](#raspberry-pi-5-deployment)
+15. [Testing](#testing)
+16. [Known Limitations](#known-limitations)
+17. [Publications & Attribution](#publications--attribution)
+18. [License](#license)
 
 ## Documentation
 
-- **User Guide:** [docs/user_guide.md](docs/user_guide.md)
-- **사용자 가이드 (한국어):** [docs/user_guide_ko.md](docs/user_guide_ko.md)
-- **Raspberry Pi 5 배포 분석 리포트 (한국어):** [docs/rpi5_deployment_report_ko.md](docs/rpi5_deployment_report_ko.md)
-- **Raspberry Pi 5 설치 가이드 (한국어):** [rpi/installation_pi5.md](rpi/installation_pi5.md)
-- **Raspberry Pi 5 운영 런북 (한국어):** [docs/rpi5_runbook_ko.md](docs/rpi5_runbook_ko.md)
-- **Raspberry Pi 5 배포 검증 체크리스트 (한국어):** [docs/rpi5_validation_checklist_ko.md](docs/rpi5_validation_checklist_ko.md)
-
-The user guide covers installation, hardware specs, gain tuning,
-template extraction, configuration reference, command reference, and
-troubleshooting.
+| Document | Audience | Language |
+|----------|----------|----------|
+| [docs/user_guide.md](docs/user_guide.md) | End users — install, hardware, gain tuning, template extraction, config reference, command reference, troubleshooting | English |
+| [docs/user_guide_ko.md](docs/user_guide_ko.md) | End users (Korean) | 한국어 |
+| [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation | 한국어 |
+| [docs/rpi5_deployment_report_ko.md](docs/rpi5_deployment_report_ko.md) | Pi 5 deployment analysis report | 한국어 |
+| [docs/rpi5_runbook_ko.md](docs/rpi5_runbook_ko.md) | Pi 5 operational runbook | 한국어 |
+| [docs/rpi5_validation_checklist_ko.md](docs/rpi5_validation_checklist_ko.md) | Pi 5 acceptance/validation checklist | 한국어 |
 
 ## What's Changed from Original Thrifty
 
 | Aspect | Original Thrifty | Thrifty-X |
-|--------|-----------------|-----------|
-| SDR Hardware | RTL-SDR (8-bit, 2.4 MSPS) | Airspy Mini (12-bit, 3/6 MSPS), Airspy R2 (12-bit, 2.5/10 MSPS) |
-| Python Version | 2.7 / early 3 | 3.10+ with type hints |
-| ADC Resolution | 8-bit unsigned | 12-bit signed |
-| Gain Control | Single tuner_gain | LNA + Mixer + VGA (3-stage) |
-| C Library | fastcard (librtlsdr) | fastcapture (libairspy) |
-| Visualization | GnuRadio/osmosdr | matplotlib |
-| Packaging | setup.py only | pyproject.toml + setup.py |
+|--------|------------------|-----------|
+| SDR hardware | RTL-SDR only (8-bit, 2.4 MSPS) | RTL-SDR + Airspy Mini (12-bit, 3/6 MSPS) + Airspy R2 (12-bit, 2.5/10 MSPS) |
+| Python version | 2.7 / early 3 | 3.10+ with type hints |
+| ADC resolution | 8-bit unsigned | 12-bit signed (Airspy) / 8-bit unsigned (RTL-SDR, auto-detected) |
+| Gain control | Single `tuner_gain` | LNA + Mixer + VGA (3-stage) or combined `linearity`/`sensitivity` presets |
+| AGC | n/a | Optional `--lna-agc` / `--mixer-agc` for R820T2 |
+| LO correction | n/a | Software `--ppm` |
+| C capture binary | `fastcard` (librtlsdr) | `fastcapture` (libairspy) |
+| Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
+| Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
+| Packaging | `setup.py` only | `pyproject.toml` + `setup.py`; dynamic version |
+| Tests | Minimal | 20 unit + integration test modules under `tests/` |
+| Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
-**Signal processing pipeline is preserved** — carrier detection
-(Dirichlet kernel interpolation), SoA estimation, TDOA clock correction,
-and Levenberg-Marquardt position solving use the same algorithms as the
-original Thrifty.  Two defaults differ for performance reasons and can be
-flipped on the command line:
+**Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
+kernel interpolation), SoA estimation, TDOA clock correction, and
+Levenberg-Marquardt position solving use the same algorithms as the
+original Thrifty.  Two implementation defaults were changed for
+performance reasons and can be flipped from the command line:
 
 | Setting | Original Thrifty | Thrifty-X default | Override |
-|---|---|---|---|
-| Carrier frequency shift | time-domain (`exp(2πj·shift·t)`) | integer (`np.roll`) — ~2× faster, +0.03 m RMSE | `--freq-shift-method time_domain` |
-| SOA sub-sample interpolation | Gaussian | Parabolic (equivalent accuracy in paper) | `--soa-interpolation gaussian` |
+|---------|------------------|-------------------|----------|
+| Carrier frequency shift | time-domain (`exp(2πj·Δf·t)`) | **`integer`** — `np.roll` in the frequency domain; ~2× faster, ~+0.03 m RMSE | `--freq-shift-method time_domain` |
+| SoA sub-sample interpolation | Gaussian | **`parabolic`** — equivalent accuracy per the original paper, cheaper | `--soa-interpolation gaussian` |
+
+## Supported Hardware
+
+| Device | Sample Rates | Frequency Range | ADC | 12-bit USB packing |
+|--------|--------------|-----------------|-----|---------------------|
+| **RTL-SDR (R820T/2)** | 2.4 MSPS (typical) | ~24–1700 MHz | 8-bit unsigned | n/a |
+| **Airspy Mini** | 3 MSPS / 6 MSPS | 24–1800 MHz | 12-bit signed | Optional (`--packing`) |
+| **Airspy R2** | 2.5 MSPS / 10 MSPS | 24–1800 MHz | 12-bit signed | Optional — useful at 10 MSPS on USB 2.0 |
+
+The Airspy HAL lives in `thriftyx/hal/` and talks to `libairspy` via
+`ctypes`.  Device selection (index or 64-bit serial) is handled by
+`thriftyx/hal/device_factory.py`.
 
 ## Requirements
 
-- [Python](https://www.python.org/) 3.10+
-- [NumPy](https://numpy.org/) >= 1.23
-- [SciPy](https://scipy.org/) >= 1.9
-- [Optional] [matplotlib](https://matplotlib.org/) for analysis and visualization (`pip install -e ".[analysis]"`)
-- [Optional] [PyQt5](https://pypi.org/project/PyQt5/) for the unified `analyze_detect` viewer (`pip install -e ".[gui]"`).  PySide6 is also accepted at runtime.
-- [Optional] [libairspy](https://github.com/airspy/airspyone_host) for live capture
+- [Python](https://www.python.org/) **3.10+**
+- [NumPy](https://numpy.org/) **>= 1.23**
+- [SciPy](https://scipy.org/) **>= 1.9**
+- [libairspy](https://github.com/airspy/airspyone_host) — required for live
+  Airspy capture (not needed to process existing `.card` files)
+- [librtlsdr](https://github.com/osmocom/rtl-sdr) — required for live
+  RTL-SDR capture
+
+Optional Python extras (defined in `pyproject.toml`):
+
+| Extra | Adds | Use when… |
+|-------|------|-----------|
+| `analysis` | `matplotlib>=3.6` | You want `scope`, `analyze_toads`, `analyze_beacon`, `analyze_tdoa`, or the matplotlib fallback of `analyze_detect` |
+| `gui` | `matplotlib>=3.6` + `PyQt5>=5.15` | You want the **unified Qt viewer** for `analyze_detect` (PySide6 is also accepted at runtime if installed separately) |
+| `fft` | `pyfftw>=0.13` | Faster FFT in the capture loop (notably on Raspberry Pi 5) |
+| `dev` | `pytest>=7.0`, `pytest-cov`, `mypy`, `ruff` | Running the test suite and linters |
+| `all` | All of the above | Full developer install |
 
 ## Installation
 
@@ -60,114 +112,231 @@ source .venv/bin/activate
 pip install -e ".[all]"
 ```
 
-## Usage
-
-The CLI workflow is identical to the original Thrifty:
+For a minimal end-user install (live capture + headless detect, no plots):
 
 ```bash
-# On each receiver:
-thriftyx capture rx0.card
+pip install -e .
+```
+
+For a headless field receiver with fast FFT but no GUI:
+
+```bash
+pip install -e ".[fft]"
+```
+
+For a workstation that only inspects data:
+
+```bash
+pip install -e ".[gui]"
+```
+
+The package exposes two equivalent console scripts — `thriftyx` and the
+legacy alias `thrifty`.
+
+## CLI Overview
+
+All commands are dispatched via `thriftyx <command> [args]` (see
+`thriftyx/cli.py`).
+
+### Core pipeline
+
+| Command | Purpose |
+|---------|---------|
+| `capture` | Capture positioning signals from an SDR (RTL-SDR / Airspy Mini / Airspy R2) into a `.card` file |
+| `detect` | Detect carrier presence and estimate SoA per block; writes `.toad` files |
+| `identify` | Identify transmitter IDs and filter duplicate detections |
+| `match` | Match detections from multiple receivers |
+| `tdoa` | Estimate TDOA by synchronising with beacon transmissions |
+| `pos` | Estimate transmitter position from TDOA estimates (Levenberg-Marquardt) |
+
+### Analysis tools
+
+| Command | Purpose |
+|---------|---------|
+| `analyze_detect` | Re-run the detector on a `.card` and plot signals (unified Qt viewer with block + plot tabs, or matplotlib fallback) |
+| `analyze_toads`  | Compute statistics on `.toads` data |
+| `analyze_beacon` | Analyse the difference in SoA of a beacon between two receivers |
+| `analyze_tdoa`   | Compute statistics on slices of TDOA data |
+| `scope`          | Live time-domain + frequency-domain plot (matplotlib) |
+
+### Utilities
+
+| Command | Purpose |
+|---------|---------|
+| `template_generate` | Generate an ideal (synthetic) template |
+| `template_extract`  | Extract a template from captured data |
+| `gold`              | Print or analyse a Gold-code sequence |
+
+Run `thriftyx help <command>` (or `thriftyx <command> --help`) for the
+full argument list of any command.
+
+## Typical Workflow
+
+```bash
+# 1. On each receiver — capture + detect in one step (or split into two):
+thriftyx capture rx0.card --device-type airspy_mini \
+    --sample-rate 6M --freq 433.83M \
+    --lna-gain 5 --mixer-gain 5 --vga-gain 5
 thriftyx detect rx0.card -o rx0.toad
 
-# On server:
-thriftyx identify rx0.toad rx1.toad
+# 2. On the central server, combine .toad files from all receivers:
+thriftyx identify rx0.toad rx1.toad rx2.toad
 thriftyx match
 thriftyx tdoa
 thriftyx pos
 ```
 
-The legacy `thrifty` command also works as an alias.
+The pipeline is identical to the original Thrifty.  The legacy `thrifty`
+command works as an alias for everything above.
 
-### Inspecting a Capture (`analyze_detect`)
+## Capture Reference
+
+The capture command is generic over device type; flags are interpreted by
+the matching HAL.  Defaults below come from `thriftyx/settings.py`
+(`DEFINITIONS`) — they are populated unconditionally, so no callsite
+needs a `.get(default)` fallback.
+
+### Device selection
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--device-type {rtlsdr, airspy_mini, airspy_r2}` | `airspy_mini` | Drives which HAL is loaded and which packing/ADC width applies |
+| `-d, --device-index N` | `0` | 0-based enumeration index when multiple devices are connected |
+| `--airspy-serial SERIAL` | _(unset)_ | 64-bit Airspy board serial (hex or decimal); overrides index |
+
+### Tuning
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--sample-rate, -s` | `2.4M` | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M |
+| `--freq, -f`        | `433.83M` | Tuner centre frequency (Hz) |
+| `--block-size, -b`  | `16384` | Samples per block; must be a power of 2 |
+| `--history, -y`     | `4920`  | Sample overlap between blocks (block_history) |
+
+### Gain — Airspy
+
+| Flag | Default | Range | Notes |
+|------|---------|-------|-------|
+| `--gain-mode {manual, linearity, sensitivity}` | `manual` | — | `linearity`/`sensitivity` use `--combined-gain` instead of per-stage values |
+| `--lna-gain N`   | `0` | 0–14 | Manual LNA index |
+| `--mixer-gain N` | `0` | 0–15 | Manual Mixer index |
+| `--vga-gain N`   | `0` | 0–15 | Manual VGA / IF index |
+| `--combined-gain N` | `0` | 0–21 | Used when `--gain-mode` ≠ `manual` |
+| `--lna-agc`   | `false` | bool | Engages R820T2 LNA AGC (manual mode) |
+| `--mixer-agc` | `false` | bool | Engages R820T2 Mixer AGC (manual mode) |
+
+> The `DEFINITIONS` table starts every gain at `0` so deployments must
+> explicitly choose a value — there is no "safe" default.  See the
+> [user guide](docs/user_guide.md#gain-tuning) for a recommended starting
+> point per ADC headroom budget.
+
+### Gain — RTL-SDR
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--gain, -g` | `0` | RTL-SDR tuner gain in dB |
+
+### RF / USB extras
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--ppm F`     | `0`     | LO correction in ppm; positive → crystal runs fast |
+| `--packing`   | `false` | Enable libairspy 12-bit USB packing (~33 % bandwidth saving; matters at 10 MSPS) |
+| `--bias-tee`  | `false` | Feed DC up the antenna lead.  **Verify your chain is DC-isolated.**  A warning is printed when on |
+
+### Selecting a specific Airspy
+
+```bash
+# Enumerate connected Airspy boards:
+python3 -c "from thriftyx.hal import list_airspy_serials; \
+            print([f'0x{s:016X}' for s in list_airspy_serials()])"
+
+# Select by index (default 0):
+thriftyx capture rx0.card --device-type airspy_mini -d 1
+
+# Or pin to a serial:
+thriftyx capture rx0.card --device-type airspy_mini \
+    --airspy-serial 0x6440EBC51DC01ED5
+```
+
+## Inspecting a Capture (`analyze_detect`)
 
 ```bash
 thriftyx analyze_detect rx0.card -m 20
 ```
 
-Re-runs the detector on up to 20 blocks and opens a **single unified
-window** with two tab bars — block index across the top and plot family
-(`overview`, `time`, `overlays`, `spectra`, `corrs`) below it — mirroring
-the original thrifty `DetectionViewer`.  Requires the `gui` extra
-(`pip install -e ".[gui]"`); without it, or with `--no-gui`, each
-(block, plot) combination opens in its own matplotlib window.  Use
-`-p <list>` to subset the plot families (e.g. `-p overview,overlays`)
-and `--export <prefix>` to write PNGs instead of displaying.
+Re-runs the detector on up to 20 detected blocks and opens a **single
+unified window** with two `QTabBar`s — block index across the top and
+plot family along the second row — driving a shared `FigureCanvas` with
+the standard matplotlib navigation toolbar.  Switching either tab redraws
+the figure in place; no per-block, per-plot pop-up windows.
 
-For the full list of analysis sub-commands (`analyze_toads`,
-`analyze_beacon`, `analyze_tdoa`, `scope`, `template_generate`,
-`template_extract`) see the
-[user guide §9.3](docs/user_guide.md#93-detection-analysis-plots) or
-run `thriftyx --help`.
+### Plot families
 
-### Airspy-Specific Options
+| Family | Shows |
+|--------|-------|
+| `overview` | Combined summary figure (carrier, threshold, correlation, position) |
+| `time`     | Time-domain I/Q of the synced and unsynced signal |
+| `overlays` | Template aligned on top of the synced signal — useful for sanity-checking sub-sample SoA |
+| `spectra`  | FFT magnitude, filtered carrier window, PSD |
+| `corrs`    | Correlation against the template + threshold visualization |
 
-```bash
-thriftyx capture rx0.card --device-type airspy_mini \
-    --sample-rate 6M --freq 433.95M \
-    --lna-gain 5 --mixer-gain 5 --vga-gain 5 --bias-tee true
-```
+### Options
 
-To select a specific Airspy when multiple are connected, pass either a
-0-based enumeration index or the 64-bit board serial:
+| Flag | Default | Notes |
+|------|---------|-------|
+| `-m, --max N` | `20` | Process at most N detected blocks |
+| `-i, --blocks RANGE` | _(none)_ | Subset specific block indices (e.g. `0-10`) |
+| `-p, --plot LIST` | all | Comma-separated subset of plot families |
+| `--prefer-qt / --no-prefer-qt` | `--prefer-qt` | Whether to attempt the Qt viewer; matplotlib fallback is automatic if no Qt binding is available |
+| `--no-gui` | _(unset)_ | Force the matplotlib-only fallback (one figure per `(block, plot)`) |
+| `--export PREFIX` | _(unset)_ | Write PNGs to `PREFIX_block<N>/<plot>.png` instead of displaying |
+| `--save [PREFIX]` | _(unset)_ | Save detection signals (unsynced, synced, correlation, template, metadata) as `.npz` files with the given prefix (default `signals`) |
 
-```bash
-# Enumerate connected Airspy boards
-python3 -c "from thriftyx.hal import list_airspy_serials; \
-            print([f'0x{s:016X}' for s in list_airspy_serials()])"
+### Requirements
 
-# Select by index (default 0)
-thriftyx capture rx0.card --device-type airspy_mini -d 1
+- The Qt viewer needs `pip install -e ".[gui]"` (matplotlib + PyQt5).
+  PySide6 is also accepted at runtime if installed separately.
+- With `--no-gui`, only matplotlib is needed (`pip install -e ".[analysis]"`).
+- Plotters are constructed **lazily** per block — the viewer opens
+  immediately and only pays the per-block FFT-filter + threshold cost
+  when a block tab is first selected.
 
-# Select by serial (hex or decimal)
-thriftyx capture rx0.card --device-type airspy_mini \
-    --airspy-serial 0x6440EBC51DC01ED5
-```
+## Detector & Signal-Processing Defaults
 
-### Using Existing RTL-SDR Data
+Most detector options come from `thriftyx/settings.py` and are shared
+with the original Thrifty.  The two settings whose Thrifty-X defaults
+differ from the upstream are:
 
-Existing .card files captured with the original Thrifty (v1 format, 8-bit)
-are automatically detected and processed correctly:
+| Flag | Default | Alternatives | Trade-off |
+|------|---------|--------------|-----------|
+| `--freq-shift-method` | `integer` | `time_domain` | `integer` uses `np.roll` (FFT-bin shift), ~2× faster; `time_domain` multiplies by `exp(2πj·Δf·t)` and is the original.  Difference in measured RMSE is ~0.03 m on the reference dataset. |
+| `--soa-interpolation` | `parabolic` | `gaussian`, `none` | `parabolic` and `gaussian` are equivalent in accuracy per the original paper.  `none` disables sub-sample refinement and is for debugging. |
+
+Other commonly-tuned detector flags (all unchanged from upstream):
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--carrier-window, -w` | `0--1` (whole spectrum) | Restrict carrier search to a frequency range |
+| `--carrier-threshold, -t` | `15*snr` | Carrier detection threshold expression |
+| `--corr-threshold, -u`    | `15*snr` | Correlation threshold expression |
+| `--template, -z`          | `template.npy` | Path to the matched-filter template |
+| `--rxid, -r`              | `-1` | Receiver ID stamped into output files |
+
+## Using Existing RTL-SDR Data
+
+Existing `.card` files captured with the **original** Thrifty (v1
+format, 8-bit unsigned interleaved I/Q) are auto-detected by the v1/v2
+header sniffer and processed correctly:
 
 ```bash
 thriftyx detect old_rtlsdr_data.card -o detections.toad
 ```
 
-## Supported Hardware
-
-| Device | Sample Rates | Frequency Range | ADC |
-|--------|-------------|-----------------|-----|
-| Airspy Mini | 3 / 6 MSPS | 24 – 1800 MHz | 12-bit |
-| Airspy R2 | 2.5 / 10 MSPS | 24 – 1800 MHz | 12-bit |
-
-## Repository Layout (`thrifty/` vs `thriftyx/`)
-
-| Tree | Status | Purpose |
-|---|---|---|
-| `thriftyx/`, `fastcapture/` | **Active** | Airspy-based pipeline. This is what `pip install` exposes. |
-| `thrifty/`, `fastcard/` | Reference only | Original Schalk-Krüger Thrifty (Python 2 + librtlsdr).  Kept for diff/comparison; not packaged, not tested.  Do not import. |
-
-If you only want the Airspy code path, you can ignore the legacy
-directories — they are excluded from the Python package and CMake build.
-
-## Known Limitations
-
-- **Hot-plug detection** is not handled; if a device is unplugged
-  mid-capture the reader times out after 10 s and exits.
-- The C `fastcapture` binary is provided for parity with the original
-  `fastcard` workflow.  The Python `thriftyx capture` path is the
-  recommended entry point.
-
-## Airspy-specific tuning options
-
-| Setting | Default | Notes |
-|---|---|---|
-| `--lna-gain N` / `--mixer-gain N` / `--vga-gain N` | 7 / 7 / 7 | Manual per-stage indices. Applied when `--gain-mode manual`. |
-| `--gain-mode {manual, linearity, sensitivity}` | `manual` | Linearity/sensitivity use `--combined-gain` (0–21) instead of per-stage values. |
-| `--combined-gain N` | 0 | Used by linearity/sensitivity modes. |
-| `--lna-agc` / `--mixer-agc` | false | Engage R820T2 AGC loops in manual mode. |
-| `--ppm F` | 0 | Software LO correction in parts-per-million.  Positive = crystal runs fast. |
-| `--packing` | false | Enable libairspy 12-bit USB packing.  Saves ~33 % bandwidth (helps Airspy R2 at 10 MSPS on USB 2.0). |
-| `--bias-tee` | false | Feeds DC up the antenna lead.  **Verify your antenna chain is DC-isolated** — a warning is printed when this is on. |
+The `block_data` module promotes 8-bit unsigned to the same complex64
+representation used by Airspy 12-bit data so the rest of the pipeline is
+ADC-width-agnostic.  A regression test (`tests/unit/test_block_data.py`)
+guards the conversion.
 
 ## Permissions / udev (Linux)
 
@@ -184,6 +353,62 @@ sudo usermod -aG plugdev "$USER"   # then log out / back in
 If `airspy_open()` returns `-1000` after that, another process (often
 GNU Radio / SDR# / Gqrx) holds the device open.
 
+## Repository Layout
+
+```
+Thrifty-x/
+├── thriftyx/            # ▶ Active Python package — Python 3.10+, type-hinted
+│   ├── cli.py           #   Command dispatcher (HELP banner + MODULES)
+│   ├── settings.py      #   DEFINITIONS — every CLI flag, default, parser
+│   ├── airspy_capture.py
+│   ├── detect.py
+│   ├── detect_analysis.py # Unified Qt viewer (`analyze_detect`)
+│   ├── gold.py, matchmaker.py, tdoa_est.py, pos_est.py, ...
+│   └── hal/             #   Airspy/RTL-SDR HAL (ctypes-based)
+├── fastcapture/         # ▶ Active C library binding to libairspy
+├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
+├── fastcard/            # ◌ Reference only — original librtlsdr C binding
+├── tests/
+│   ├── unit/            #   19 unit-test modules
+│   └── integration/     #   1 full-pipeline integration test
+├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
+└── docs/                # User & deployment documentation
+```
+
+The active code (`thriftyx/`, `fastcapture/`) is what `pip install`
+exposes.  `pyproject.toml` pins
+`[tool.setuptools.packages.find].include = ["thriftyx*"]`, so the legacy
+`thrifty/` directory is **not** packaged and should not be imported.
+It is kept in the tree purely for diff/comparison.
+
+## Raspberry Pi 5 Deployment
+
+Thrifty-X ships with a complete Pi 5 + Bookworm deployment layout under
+`rpi/`:
+
+| File / Directory | Purpose |
+|------------------|---------|
+| [`rpi/installation_pi5.md`](rpi/installation_pi5.md) | Step-by-step Pi 5 install (libairspy + pyfftw + systemd) |
+| `rpi/systemd/` | Capture/heartbeat unit templates |
+| `rpi/detector.service` | systemd unit for the detector service |
+| `rpi/thriftyx-capture.cfg.example` | Capture config template (sample rate, gain, packing, ppm) |
+| `rpi/heartbeat.py` | Periodic health probe written to a known path |
+| `rpi/soak_test.sh` | 24-hour stability test |
+| `rpi/update_node.sh` | **Idempotent** in-place upgrade script (safe to re-run) |
+| `rpi/cleanup_old_captures.sh` | Retention policy for `.card` files |
+| `rpi/ntp-after-online.{service,sh}` | Force NTP sync after network is up |
+| `rpi/pyFFTW-0.9.2-no-fftwl.patch` | Build patch for `pyfftw` on Pi 5 (no `long double` FFTW) |
+
+Korean operational documents live under `docs/`:
+
+- [`docs/rpi5_deployment_report_ko.md`](docs/rpi5_deployment_report_ko.md) — design analysis
+- [`docs/rpi5_runbook_ko.md`](docs/rpi5_runbook_ko.md) — day-to-day operations
+- [`docs/rpi5_validation_checklist_ko.md`](docs/rpi5_validation_checklist_ko.md) — acceptance checklist
+
+The capture loop uses `pyfftw` when available (install with
+`pip install -e ".[fft]"`) and a batched `fwrite`/flush strategy to
+reduce microSD wear.
+
 ## Testing
 
 ```bash
@@ -191,31 +416,61 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
+The suite covers, among other things:
+
+- Airspy device enumeration, tuning, and capture-safety paths
+  (`tests/unit/test_airspy_*.py`)
+- The detector and its sub-sample interpolation
+  (`tests/unit/test_detect.py`)
+- RTL-SDR vs Airspy bit-depth handling
+  (`tests/unit/test_block_data.py`, `tests/unit/test_scripts_bit_depth.py`)
+- The HAL factory + base abstractions
+  (`tests/unit/test_hal_*.py`)
+- The unified `analyze_detect` viewer plumbing in headless mode
+  (`tests/unit/test_detect_analysis_viewer.py`)
+- A full receive-detect-match-tdoa-pos integration run
+  (`tests/integration/test_full_pipeline.py`)
+
+CI also exercises the `fastcapture` C build via CMake on every push.
+
+## Known Limitations
+
+- **Hot-plug detection** is not handled; if a device is unplugged
+  mid-capture the reader times out after ~10 s and exits.
+- The C `fastcapture` binary is provided mostly for parity with the
+  original `fastcard` workflow — **the Python `thriftyx capture` path is
+  the recommended entry point** and the only one tested in CI for
+  Airspy.
+- Live capture requires the C library for the chosen SDR (`libairspy`
+  for Airspy, `librtlsdr` for RTL-SDR).  Processing previously-captured
+  `.card` files does not.
+
 ## Publications & Attribution
 
 Thrifty-X is built upon the work described in:
 
-> Krüger, S.W. (2016). *An inexpensive hyperbolic positioning system for
-> tracking wildlife using off-the-shelf hardware.* Master's dissertation,
-> North-West University, Potchefstroom Campus.
+> Krüger, S.W. (2016). *An inexpensive hyperbolic positioning system
+> for tracking wildlife using off-the-shelf hardware.* Master's
+> dissertation, North-West University, Potchefstroom Campus.
 > [https://hdl.handle.net/10394/25449](https://hdl.handle.net/10394/25449)
 
 ```bibtex
 @mastersthesis{kruger2016inexpensive,
-  title={An inexpensive hyperbolic positioning system for tracking wildlife
-         using off-the-shelf hardware},
-  author={Kr{\"u}ger, Schalk Willem},
-  year={2016},
-  school={North-West University (South Africa), Potchefstroom Campus}
+  title  = {An inexpensive hyperbolic positioning system for tracking
+            wildlife using off-the-shelf hardware},
+  author = {Kr{\"u}ger, Schalk Willem},
+  year   = {2016},
+  school = {North-West University (South Africa), Potchefstroom Campus}
 }
 ```
 
-Original Thrifty source: [github.com/swkrueger/Thrifty](https://github.com/swkrueger/Thrifty)
+Original Thrifty source:
+[github.com/swkrueger/Thrifty](https://github.com/swkrueger/Thrifty).
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 — see
-[LICENSE.txt](LICENSE.txt) for details.
+This project is licensed under the **GNU General Public License v3.0** —
+see [LICENSE.txt](LICENSE.txt) for details.
 
-Thrifty-X is a derivative work of Thrifty. Both the original and this
+Thrifty-X is a derivative work of Thrifty.  Both the original and this
 derivative are distributed under the same GPL-3.0 license.
