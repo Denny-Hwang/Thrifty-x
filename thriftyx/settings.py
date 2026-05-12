@@ -119,7 +119,7 @@ DEFINITIONS = {
         ['--device-type'],
         str,
         'airspy_mini',
-        "SDR device type ('airspy_mini' or 'airspy_r2')"
+        "SDR device type ('rtlsdr', 'airspy_mini', or 'airspy_r2')"
     ),
 
     'bit_depth': Definition(

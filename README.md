@@ -48,7 +48,8 @@ flipped on the command line:
 - [Python](https://www.python.org/) 3.10+
 - [NumPy](https://numpy.org/) >= 1.23
 - [SciPy](https://scipy.org/) >= 1.9
-- [Optional] [matplotlib](https://matplotlib.org/) for analysis and visualization
+- [Optional] [matplotlib](https://matplotlib.org/) for analysis and visualization (`pip install -e ".[analysis]"`)
+- [Optional] [PyQt5](https://pypi.org/project/PyQt5/) for the unified `analyze_detect` viewer (`pip install -e ".[gui]"`).  PySide6 is also accepted at runtime.
 - [Optional] [libairspy](https://github.com/airspy/airspyone_host) for live capture
 
 ## Installation
@@ -76,6 +77,27 @@ thriftyx pos
 ```
 
 The legacy `thrifty` command also works as an alias.
+
+### Inspecting a Capture (`analyze_detect`)
+
+```bash
+thriftyx analyze_detect rx0.card -m 20
+```
+
+Re-runs the detector on up to 20 blocks and opens a **single unified
+window** with two tab bars — block index across the top and plot family
+(`overview`, `time`, `overlays`, `spectra`, `corrs`) below it — mirroring
+the original thrifty `DetectionViewer`.  Requires the `gui` extra
+(`pip install -e ".[gui]"`); without it, or with `--no-gui`, each
+(block, plot) combination opens in its own matplotlib window.  Use
+`-p <list>` to subset the plot families (e.g. `-p overview,overlays`)
+and `--export <prefix>` to write PNGs instead of displaying.
+
+For the full list of analysis sub-commands (`analyze_toads`,
+`analyze_beacon`, `analyze_tdoa`, `scope`, `template_generate`,
+`template_extract`) see the
+[user guide §9.3](docs/user_guide.md#93-detection-analysis-plots) or
+run `thriftyx --help`.
 
 ### Airspy-Specific Options
 

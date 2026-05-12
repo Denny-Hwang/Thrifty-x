@@ -627,8 +627,19 @@ def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
     summary_liner = detect.SummaryLineFormatter(sample_rate,
                                                 settings.block_len,
                                                 add_dt=False)
-    plotters = [Plotter(d, settings, sample_rate, bit_depth=bit_depth)
-                for d in detections]
+    # Plotter construction runs an FFT filter + threshold calculation;
+    # building one per detection up-front delays the first frame by O(N).
+    # Cache lazily so the viewer pops up immediately and pays per-block
+    # cost only when a tab is first selected.
+    plotter_cache = {}
+
+    def get_plotter(idx):
+        plotter = plotter_cache.get(idx)
+        if plotter is None:
+            plotter = Plotter(detections[idx], settings, sample_rate,
+                              bit_depth=bit_depth)
+            plotter_cache[idx] = plotter
+        return plotter
 
     class DetectionViewer(QtWidgets.QWidget):
         def __init__(self, parent=None):
@@ -684,7 +695,7 @@ def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
             if block_idx < 0 or cmd_idx < 0:
                 return
 
-            plotter = plotters[block_idx]
+            plotter = get_plotter(block_idx)
             detection = detections[block_idx]
             cmd = cmds[cmd_idx]
 
@@ -875,8 +886,8 @@ def _main():
                         help="export plots to .PDF files "
                              "with the given prefix")
     parser.add_argument('--save', type=str, nargs='?', const='signals',
-                        help="save detection signals to .npz"
-                             "files with the given prefix")
+                        help="save detection signals to .npz files "
+                             "with the given prefix")
     parser.add_argument('--no-gui', dest='no_gui', action='store_true',
                         help="skip the unified Qt viewer and open one "
                              "matplotlib figure per (block, plot)")

@@ -43,6 +43,7 @@ Valid commands are:
     ~ Utilities ~
     template_generate Generate a new (ideal) template
     template_extract  Extract a new template from captured data
+    gold              Print or analyze a Gold code sequence
 
 Use 'thriftyx help <command>' for information about the command's arguments."""
 
@@ -61,6 +62,7 @@ MODULES = {
     'template_generate': 'thriftyx.template_generate',
     'template_extract': 'thriftyx.template_extract',
     'scope': 'thriftyx.scope',
+    'gold': 'thriftyx.gold',
 }
 
 
