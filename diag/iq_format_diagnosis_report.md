@@ -6,6 +6,12 @@
 - 산출물: `diag/` 디렉토리 (스크립트, 합성 .card 파일, FFT 플롯, 텍스트 로그 포함)
 - 변경 사항: **코드 수정 없음** (진단 전용)
 
+> **UPDATE 2026-05-14 (실데이터 결과 반영)** — 실제 R2 캡처
+> (`gs_r2_161_3_20260513_152100_TX2_Gain000/b000/capture.card`) 로 가설을 검증한 결과,
+> **시나리오 1-bis (FLOAT32 silent fallback) 는 이 캡처에서 확인되지 않았다**.
+> 자세한 내용은 본 보고서 끝의 **§9 Phase E — 실데이터 재검증** 섹션 참조.
+> 본문 §1-§5 는 합성 컨트롤 기준 원본 분석을 그대로 보존하며, §9 가 우선한다.
+
 ---
 
 ## 0. 환경 / 데이터 가용성 노트
@@ -232,15 +238,121 @@ python3 diag/expected_carrier_bin.py                          | tee -a diag/phas
 | 파일 | 설명 |
 |---|---|
 | `phase_a_code_analysis.md` | Phase A 정적 코드 분석 결과 (상세표 + 시나리오 체크리스트) |
-| `check_card_format.py` | .card 파일의 raw 바이트를 int16 / float32 / uint8 로 비교 해석 |
+| `check_card_format.py` | .card 파일의 v2 base64 페이로드를 디코드해서 int16 / float32 / uint8 로 비교 해석. `--all-blocks` 옵션으로 다중-블록 통계 가능 |
 | `check_fft_dualbin.py` | .card 첫 블록의 FFT 를 INT16/FLOAT32 양쪽으로 그려 비교 |
+| `check_signal_strength.py` | 모든 블록의 caller SNR / 노이즈 RMS / ADC 클리핑 / 캐리어 bin 히스토그램 + gain 권장값 |
 | `expected_carrier_bin.py` | TX 주파수 / center / sample_rate 로 기대 carrier bin 계산 + cfg sniff |
 | `_synth_card.py` | 정상 INT16 경로 + 가설 FLOAT32-misread 경로의 합성 .card 생성기 |
-| `synth_int16_iq.card` | 정상 INT16_IQ 컨트롤 (262144 bytes/block) |
-| `synth_float32_misread.card` | 시나리오 1-bis 컨트롤 (524288 bytes/block) |
+| `synth_int16_iq.card` | 정상 INT16_IQ 컨트롤 (262144 bytes/block) — gitignore |
+| `synth_float32_misread.card` | 시나리오 1-bis 컨트롤 (524288 bytes/block) — gitignore |
 | `phase_b_card_analysis.txt` | check_card_format 의 두 컨트롤 분석 출력 |
 | `phase_b_synth.txt` | 합성 .card 생성 로그 |
 | `phase_c_fft_analysis.txt` | check_fft_dualbin + expected_carrier_bin 출력 |
 | `phase_c_fft_comparison_synth_int16_iq.png` | INT16 컨트롤의 FFT (단일 피크) |
 | `phase_c_fft_comparison_synth_float32_misread.png` | FLOAT32-misread 컨트롤의 FFT (다중 피크) |
 | `iq_format_diagnosis_report.md` | (본 보고서) |
+
+---
+
+## 9. Phase E — 실데이터 재검증 (UPDATE 2026-05-14)
+
+### 9.1 테스트 대상
+
+```
+/home/batrf/github/Thrifty-x/example/
+    gs_r2_161_3_20260513_152100_TX2_Gain000/b000/
+        capture.card
+        capture.log
+        detect.log
+        detector.cfg
+```
+
+### 9.2 capture.log 점검 결과
+
+`airspy_set_sample_type() failed` 또는 sample_type 관련 경고가 **로그에 전혀 없음**.
+유일한 경고는 bias_tee=true 관련 사용자 안내. → §1 의 **시나리오 1-bis (silent FLOAT32 fallback)
+는 이 캡처에서 발생하지 않았음**.
+
+### 9.3 capture.card 포맷 점검 결과
+
+| 메트릭 | 측정값 | 해석 |
+|---|---|---|
+| 헤더 | `#v2 bit_depth=12 sample_rate=10000000` | 정상 v2 |
+| base64-디코딩 후 블록 수 | 55 | — |
+| 블록당 디코딩 바이트 (전 블록 동일) | **262144** | block_size 65536 × 2 (IQ) × 2 bytes (int16) = 262144 ✔ |
+| bytes/complex sample | **4.00** | INT16 IQ |
+| int16 해석 평균/표준편차 | min/max -153/+159, mean ≈ -0.29, std ≈ 15.94 | 정상 신호 (DC 근처 중심, 작은 진폭) |
+| float32 해석 | finite_ratio ≈ 0.51, min/max -3.3e+38 / 1.5e-38, NaN/Inf 다수 | **명백히 비-float32** |
+
+→ 본 캡처는 **정상적인 INT16_IQ v2 .card**. §1 의 1순위 가설은 이 데이터에서 **불성립**.
+
+### 9.4 새 1순위 원인 (실데이터 기반)
+
+`detector.cfg` 와 `capture.log` 확인 결과 **gain 단들이 전부 0** 으로 설정되어 있음:
+
+```
+lna_gain:   0
+mixer_gain: 0
+vga_gain:   0
+gain mode: manual; LNA=0 Mixer=0 VGA=0   ← capture.log
+```
+
+이 때문에:
+
+- carrier 피크 magnitude 가 threshold 바로 위 (`mag[16] ≈ 0.6–0.9`, threshold ≈ 0.6–0.7,
+  noise ≈ 0.2),
+- carrier SNR 대부분 12–14 dB 수준,
+- correlation 은 거의 fail. `detect.log` 에서 `corr: yes` 인 블록은 손꼽을 정도
+  (blk 1747 = 12.06 dB, blk 2141 = 12.26 dB, blk 2196 = 11.80 dB).
+
+캐리어 bin 분포: 대부분 bin 16 (≈ 2.44 kHz @ 10 MSPS / 65536), 가끔 bin 32 / 48.
+→ **단일 피크**, 즉 §3.2 의 다중-피크 (dual-bin) 현상은 이 캡처에서는 재현되지 않음.
+
+> 따라서 이 캡처의 한정 원인은 **포맷 손상이 아니라 신호 강도 부족**.
+> 시나리오 1-bis 는 *방어적 안전 마진* 차원에서는 여전히 의미가 있으나, 본 캡처의 직접 원인은 아니다.
+> 원본 프롬프트가 언급한 7_7_7 캡처 (`...153826` 디렉토리, 캐리어 이중 bin + 14 dB) 와 본 캡처
+> (`...152100_TX2_Gain000`, gain=0, 단일 bin + 12-14 dB) 는 **다른 실험 세션**으로 보이며,
+> 원본 7_7_7 캡처가 확보되면 별도 재검증이 필요하다.
+
+### 9.5 권장 조치 (실데이터 기반, 우선순위 순)
+
+1. **gain 단계적 상향** — 동일 안테나/거리에서 다음 순서로 재캡처:
+   - `lna=4 mixer=4 vga=4` → SNR 변화 확인
+   - 부족하면 `lna=6 mixer=6 vga=6`
+   - 그래도 부족하면 `lna=8 mixer=6 vga=6` (LNA 가 NF 에 가장 큰 영향)
+   - 목표: carrier SNR ≥ 25 dB, ADC 클리핑 0
+2. **bias_tee 점검** — 안테나 체인에 active LNA 가 없다면 `bias_tee: false`. 패시브 안테나에
+   ~+4.5 V 가 흘러 들어가는 것을 막는다.
+3. **fail-fast 패치 유지** — 본 캡처의 원인은 아니지만 `airspy_set_sample_type` 의 silent
+   fallback 은 *언젠가는* 같은 종류의 버그를 가릴 가능성이 있으므로 안전 강화 차원에서
+   `logger.warning` → `raise DeviceConfigError` 권장 (§5 항목 1번).
+4. **template / timing 점검** — gain 을 올린 뒤에도 correlation 이 계속 실패하면 template
+   mismatch / 타이밍 문제 의심. 본 보고서의 범위 밖.
+
+### 9.6 새 도구 / 개선 사항
+
+본 Phase E 의 follow-up 요청에 맞춰 `diag/` 에 추가/개선됨:
+
+| 변경 | 파일 | 비고 |
+|---|---|---|
+| 강화 | `check_card_format.py` | `--all-blocks` 모드 추가: 카드 버전/헤더, bit_depth, sample_rate, 디코딩된 블록 수, unique 블록 사이즈, bytes/complex, int16 plausibility 전반 통계, float32 plausibility 전반 통계, 캐리어 bin 히스토그램 모두 한 번에 출력 |
+| 신규 | `check_signal_strength.py` | 모든 블록의 carrier SNR / 노이즈 RMS / ADC 클리핑 / 캐리어 bin 히스토그램 + RMS amplitude 분포. 자동으로 sibling `detector*.cfg` 의 `carrier_window` / gain 읽어와서 한 줄짜리 RAISE/LOWER gain 권장 출력 |
+
+### 9.7 빠른 재현 가이드
+
+```bash
+cd /home/user/Thrifty-x
+
+# 포맷 확인 (전 블록 통계)
+python3 diag/check_card_format.py <CARD> --all-blocks | tee diag/phase_e_format.txt
+
+# Gain / SNR / 클리핑 진단 + 권장값
+python3 diag/check_signal_strength.py <CARD> | tee diag/phase_e_signal.txt
+
+# 기대 carrier bin
+python3 diag/expected_carrier_bin.py | tee diag/phase_e_bin.txt
+```
+
+`<CARD>` 자리에 `capture.card` 전체 경로를 넣으면 §9.3 의 표가 자동 채워지고,
+권장 gain 값이 직접 출력된다.
+
