@@ -1,0 +1,96 @@
+Block 0: 262144 bytes
+Metadata: {'bit_depth': '12', 'sample_rate': '10000000'}
+/home/user/Thrifty-x/diag/check_fft_dualbin.py:108: RuntimeWarning: invalid value encountered in multiply
+  iq_f32 = raw_f32[0::2] + 1j * raw_f32[1::2]
+/home/user/Thrifty-x/diag/check_fft_dualbin.py:108: RuntimeWarning: invalid value encountered in add
+  iq_f32 = raw_f32[0::2] + 1j * raw_f32[1::2]
+INT16 interpretation peaks (top 6):
+  bin    20  f=    3.05 kHz  mag=  96.32 dB
+  bin    19  f=    2.90 kHz  mag=  57.68 dB
+  bin    21  f=    3.20 kHz  mag=  57.44 dB
+  bin    18  f=    2.75 kHz  mag=  51.54 dB
+  bin    22  f=    3.36 kHz  mag=  51.39 dB
+  bin    17  f=    2.59 kHz  mag=  48.19 dB
+FLOAT32 interpretation peaks (top 6):
+  bin  5471  f= 1669.62 kHz  mag=    nan dB
+  bin  5470  f= 1669.31 kHz  mag=    nan dB
+  bin  5469  f= 1669.01 kHz  mag=    nan dB
+  bin  5468  f= 1668.70 kHz  mag=    nan dB
+  bin  5467  f= 1668.40 kHz  mag=    nan dB
+  bin  5466  f= 1668.09 kHz  mag=    nan dB
+
+Saved: /home/user/Thrifty-x/diag/phase_c_fft_comparison_synth_int16_iq.png
+Block 0: 524288 bytes
+Metadata: {'bit_depth': '12', 'sample_rate': '10000000'}
+INT16 interpretation peaks (top 6):
+  bin 65516  f= 4998.47 kHz  mag=  89.40 dB
+  bin    20  f=    1.53 kHz  mag=  89.39 dB
+  bin 65476  f= 4995.42 kHz  mag=  79.82 dB
+  bin    60  f=    4.58 kHz  mag=  79.80 dB
+  bin 65436  f= 4992.37 kHz  mag=  75.91 dB
+  bin   100  f=    7.63 kHz  mag=  75.17 dB
+FLOAT32 interpretation peaks (top 6):
+  bin    20  f=    3.05 kHz  mag=  96.33 dB
+  bin    19  f=    2.90 kHz  mag=  57.69 dB
+  bin    21  f=    3.20 kHz  mag=  57.44 dB
+  bin    18  f=    2.75 kHz  mag=  51.56 dB
+  bin    22  f=    3.36 kHz  mag=  51.38 dB
+  bin    17  f=    2.59 kHz  mag=  48.21 dB
+
+Saved: /home/user/Thrifty-x/diag/phase_c_fft_comparison_synth_float32_misread.png
+R2 sample rate:    10.000 MSPS
+Block size:        65536
+Bin resolution:    152.5879 Hz/bin
+TX frequency:      161.300 MHz
+
+  center=161.0 MHz: offset =      +300000 Hz  → expected_bin =   +1966.08
+  center=161.3 MHz: offset =           +0 Hz  → expected_bin =      +0.00
+  center=166.0 MHz (detector_r2.cfg): offset =     -4700000 Hz  → expected_bin =  -30801.92
+
+Observed bins (from prompt):
+  bin  20  ≈    3.05 kHz
+  bin  72  ≈   10.99 kHz
+
+  Δbin = 52 → Δf = 7.93 kHz between the two peaks
+
+Searching .cfg files for tuner_freq / sample_rate ...
+  === /home/user/Thrifty-x/example/detector.cfg ===
+    # === Sampling & Frequency ===
+    sample_rate:        2.4M
+    chip_rate:          0.999707M
+    # Tuner center frequency
+    tuner_freq:         433.83M
+    tuner_gain:         0.0
+    # These values are auto-adjusted at runtime when too small for the sample rate.
+    # carrier_window: frequency bin range to search for carrier
+    carrier_window:     7 - 130
+    # freq_shift_method: integer (fast, 2x speed, ~1.07m RMSE) or
+    #                    time_domain (accurate, ~1.04m RMSE)
+    freq_shift_method:  integer
+    # sample_rate:      6M
+    # carrier_window:   6 - 103
+    # sample_rate:      10M
+    # carrier_window:   7 - 124
+
+  === /home/user/Thrifty-x/example/detector_mini.cfg ===
+    # Pre-computed block parameters for Airspy Mini at 6 MHz sample rate.
+    # === Sampling & Frequency ===
+    sample_rate:        6M
+    chip_rate:          0.999707M
+    # Tuner center frequency — adjust for your TX
+    tuner_freq:         166M
+    # carrier_window: bin range covering ~1 kHz to ~19 kHz at 183.1 Hz/bin
+    carrier_window:     6 - 103
+    freq_shift_method:  integer
+
+  === /home/user/Thrifty-x/example/detector_r2.cfg ===
+    # Pre-computed block parameters for Airspy R2 at 10 MHz sample rate.
+    # === Sampling & Frequency ===
+    sample_rate:        10M
+    chip_rate:          0.999707M
+    # Tuner center frequency — adjust for your TX
+    tuner_freq:         166M
+    # carrier_window: bin range covering ~1 kHz to ~19 kHz at 152.6 Hz/bin
+    carrier_window:     7 - 124
+    freq_shift_method:  integer
+
