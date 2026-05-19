@@ -24,10 +24,10 @@ import logging
 
 import numpy as np
 
-UNIDENTIFIED_TX = -1
-
 from thriftyx import toads_data
 from thriftyx.settings import parse_kvconfig
+
+UNIDENTIFIED_TX = -1
 
 
 def detect_transmitter_windows(freqs, verbose=False):

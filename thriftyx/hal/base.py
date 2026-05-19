@@ -9,9 +9,9 @@
 """Abstract SDR device interface for Thrifty-X."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 
