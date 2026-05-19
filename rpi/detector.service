@@ -1,13 +1,33 @@
 [Unit]
-Description=Detect TDOA transmissions
+Description=Thrifty-X (legacy) detect-from-fastcard pipeline
+Documentation=https://github.com/Denny-Hwang/thrifty-x
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 
 [Service]
 ExecStart=/home/pi/thrifty/rpi/fastdet.sh
+WorkingDirectory=/home/pi/thrifty
 User=pi
 Group=pi
+Type=simple
+
+# Restart on transient failure (USB enumeration, brief stream stalls).
+Restart=on-failure
 RestartSec=120
-Restart=always
-Type=idle
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Hardening — same baseline as thriftyx-capture@.service.  Relax only
+# if a specific path conflicts with a deployment.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=thriftyx-detector
 
 [Install]
 WantedBy=multi-user.target

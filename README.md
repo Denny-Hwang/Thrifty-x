@@ -49,7 +49,7 @@ Version: see `thriftyx/__init__.py` (`__version__`).
 | Aspect | Original Thrifty | Thrifty-X |
 |--------|------------------|-----------|
 | SDR hardware | RTL-SDR only (8-bit, 2.4 MSPS) | RTL-SDR + Airspy Mini (12-bit, 3/6 MSPS) + Airspy R2 (12-bit, 2.5/10 MSPS) |
-| Python version | 2.7 / early 3 | 3.10+ with type hints |
+| Python version | 2.7 / early 3 | 3.10+ (ruff + mypy gated in CI; type hints rolling out module-by-module) |
 | ADC resolution | 8-bit unsigned | 12-bit signed (Airspy) / 8-bit unsigned (RTL-SDR, auto-detected) |
 | Gain control | Single `tuner_gain` | LNA + Mixer + VGA (3-stage) or combined `linearity`/`sensitivity` presets |
 | AGC | n/a | Optional `--lna-agc` / `--mixer-agc` for R820T2 |
@@ -58,7 +58,7 @@ Version: see `thriftyx/__init__.py` (`__version__`).
 | Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` + `setup.py`; dynamic version |
-| Tests | Minimal | 20 unit + integration test modules under `tests/` |
+| Tests | Minimal | 25 test modules / 219 tests; lint + type-check + pytest gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -357,7 +357,7 @@ GNU Radio / SDR# / Gqrx) holds the device open.
 
 ```
 Thrifty-x/
-├── thriftyx/            # ▶ Active Python package — Python 3.10+, type-hinted
+├── thriftyx/            # ▶ Active Python package — Python 3.10+
 │   ├── cli.py           #   Command dispatcher (HELP banner + MODULES)
 │   ├── settings.py      #   DEFINITIONS — every CLI flag, default, parser
 │   ├── airspy_capture.py
@@ -369,8 +369,9 @@ Thrifty-x/
 ├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
 ├── fastcard/            # ◌ Reference only — original librtlsdr C binding
 ├── tests/
-│   ├── unit/            #   19 unit-test modules
-│   └── integration/     #   1 full-pipeline integration test
+│   ├── unit/            #   16 unit-test modules
+│   ├── integration/     #   1 integration test (block_data + mock capture)
+│   └── test_*.py        #   8 top-level pipeline-stage tests
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
 └── docs/                # User & deployment documentation
 ```
@@ -428,10 +429,15 @@ The suite covers, among other things:
   (`tests/unit/test_hal_*.py`)
 - The unified `analyze_detect` viewer plumbing in headless mode
   (`tests/unit/test_detect_analysis_viewer.py`)
-- A full receive-detect-match-tdoa-pos integration run
-  (`tests/integration/test_full_pipeline.py`)
+- The data-layer integration path — `block_data` 8↔12-bit conversion,
+  v1/v2 `.card` round-trip, and the capture loop against a mock SDR
+  (`tests/integration/test_full_pipeline.py`). The downstream
+  `detect → identify → match → tdoa → pos` stages are exercised by
+  unit tests in `tests/unit/` and `tests/test_*.py`, not by the
+  integration test.
 
-CI also exercises the `fastcapture` C build via CMake on every push.
+CI runs `ruff check`, `mypy`, the full `pytest` suite, and the
+`fastcapture` / `fastdet` CMake builds on every push and pull request.
 
 ## Known Limitations
 
