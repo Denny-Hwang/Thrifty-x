@@ -13,8 +13,3 @@ pytest>=7.0
 pytest-cov
 mypy
 ruff
-
-# Docs
-Sphinx
-numpydoc
-sphinx_rtd_theme
