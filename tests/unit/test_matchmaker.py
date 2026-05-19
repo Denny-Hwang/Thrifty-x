@@ -4,8 +4,6 @@
 """Tests for matchmaker module."""
 
 import io
-import numpy as np
-import pytest
 
 from thriftyx.matchmaker import load_matches, save_matches
 

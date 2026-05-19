@@ -4,7 +4,6 @@
 """Tests for signal_utils module."""
 
 import numpy as np
-import pytest
 
 from thriftyx.signal_utils import Signal, time_shift
 

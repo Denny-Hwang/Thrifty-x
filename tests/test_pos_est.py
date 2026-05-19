@@ -1,6 +1,5 @@
 import itertools
 import numpy as np
-import pytest
 from thriftyx import pos_est
 from thriftyx import tdoa_est
 

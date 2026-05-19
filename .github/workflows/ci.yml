@@ -15,9 +15,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev]'
+          pip install -e '.[dev,analysis]'
       - name: Run ruff (style + dead code)
-        run: ruff check thriftyx/
+        run: ruff check thriftyx/ tests/
       - name: Run mypy (static type check)
         run: mypy thriftyx/
 
@@ -31,7 +31,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev]'
+          pip install -e '.[dev,analysis]'
       - name: Run Python test suite
         run: pytest -q
 
