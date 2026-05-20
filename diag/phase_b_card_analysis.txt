@@ -1,0 +1,109 @@
+==================== CORRECT INT16_IQ ====================
+Analyzing: diag/synth_int16_iq.card
+File size: 349578 bytes
+
+=== File Header ===
+  line 0: #v2 bit_depth=12 sample_rate=10000000
+
+=== First Data Block ===
+  timestamp: 0.000000
+  block_idx: 0
+  raw bytes: 262144
+
+=== Interpreted as int16 (expected for 12-bit Airspy v2) ===
+  count: 131072 values (65536 complex samples)
+  min:   -32768
+  max:   32767
+  mean:  -8.4892
+  std:   23160.2132
+  first 20 values: [32767   -68 32663  -124 32767    66 32482   195 32767   212 32767   -27
+ 32736   502 32159   554 32448   515 32458   202]
+  12-bit raw range  (-2048 .. +2047):  FAIL
+  full int16 range  (-32768 .. +32767): PASS
+
+=== Interpreted as float32 (FLOAT32_IQ format) ===
+  count: 65536 values (32768 complex samples)
+  min:   nan
+  max:   nan
+/usr/local/lib/python3.11/dist-packages/numpy/_core/_methods.py:132: RuntimeWarning: overflow encountered in reduce
+  ret = umr_sum(arr, axis, dtype, out, keepdims, where=where)
+/usr/local/lib/python3.11/dist-packages/numpy/_core/_methods.py:132: RuntimeWarning: invalid value encountered in reduce
+  ret = umr_sum(arr, axis, dtype, out, keepdims, where=where)
+  mean:  nan
+/usr/local/lib/python3.11/dist-packages/numpy/_core/_methods.py:168: RuntimeWarning: overflow encountered in reduce
+  arrmean = umr_sum(arr, axis, dtype, keepdims=True, where=where)
+/usr/local/lib/python3.11/dist-packages/numpy/_core/_methods.py:168: RuntimeWarning: invalid value encountered in reduce
+  arrmean = umr_sum(arr, axis, dtype, keepdims=True, where=where)
+/usr/local/lib/python3.11/dist-packages/numpy/_core/_methods.py:188: RuntimeWarning: invalid value encountered in subtract
+  x = um.subtract(arr, arrmean, out=...)
+  std:   nan
+  first 10 values: [          nan           nan 6.1070591e-39 1.7953439e-38 1.9515042e-38
+           nan 9.0549620e-38 1.2525679e-37 9.6607355e-38 1.8596254e-38]
+  NaN present:  True
+  Inf present:  False
+  range check ([-2, +2]): FAIL
+
+=== Interpreted as uint8 (legacy RTL-SDR v1) ===
+  count: 262144 values (131072 complex samples)
+  min:   0
+  max:   255
+  mean:  127.4955
+  centred near 127.4: PASS
+
+============================================================
+=== FORMAT VERDICT ===
+============================================================
+  (assuming block_size=65536: 4.00 bytes/complex sample)
+    2 → int16 IQ  |  4 → float32 IQ  |  1 → uint8 IQ
+
+  → Data is INT16_IQ scaled to FULL int16 range. block_data.raw_to_complex(/32768.0) matches.
+
+==================== MISREAD FLOAT32 (scenario 1-bis) ====================
+Analyzing: diag/synth_float32_misread.card
+File size: 699102 bytes
+
+=== File Header ===
+  line 0: #v2 bit_depth=12 sample_rate=10000000
+
+=== First Data Block ===
+  timestamp: 0.000000
+  block_idx: 0
+  raw bytes: 524288
+
+=== Interpreted as int16 (expected for 12-bit Airspy v2) ===
+  count: 262144 values (131072 complex samples)
+  min:   -32768
+  max:   32767
+  mean:  -75.4802
+  std:   17686.8505
+  first 20 values: [ 18907  16257 -10158 -17656  11786  16255  31636 -17543  -8808  16257
+  15653  15109 -15143  16253 -31316  15299  13546  16256 -15151  15316]
+  12-bit raw range  (-2048 .. +2047):  FAIL
+  full int16 range  (-32768 .. +32767): PASS
+
+=== Interpreted as float32 (FLOAT32_IQ format) ===
+  count: 131072 values (65536 complex samples)
+  min:   -1.035173
+  max:   1.041300
+  mean:  -0.000262
+  std:   0.707184
+  first 10 values: [ 1.0100664  -0.00208809  0.99679625 -0.0038068   1.014575    0.00203306
+  0.9912849   0.00596686  1.0016148   0.00649319]
+  NaN present:  False
+  Inf present:  False
+  range check ([-2, +2]): PASS
+
+=== Interpreted as uint8 (legacy RTL-SDR v1) ===
+  count: 524288 values (262144 complex samples)
+  min:   0
+  max:   255
+  mean:  121.7174
+  centred near 127.4: PASS
+
+============================================================
+=== FORMAT VERDICT ===
+============================================================
+  (assuming block_size=65536: 8.00 bytes/complex sample)
+    2 → int16 IQ  |  4 → float32 IQ  |  1 → uint8 IQ
+
+  → AMBIGUOUS: both int16 and float32 interpretations are within plausible ranges. Inspect bytes-per-sample ratio and FFT shape (Phase C) to disambiguate.

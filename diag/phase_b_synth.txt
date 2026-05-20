@@ -1,0 +1,2 @@
+Wrote /home/user/Thrifty-x/diag/synth_int16_iq.card (raw bytes: 262144, dtype=int16, min=-32768, max=32767)
+Wrote /home/user/Thrifty-x/diag/synth_float32_misread.card (raw bytes: 524288, dtype=float32 presented as int16)
