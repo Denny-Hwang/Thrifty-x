@@ -11,9 +11,15 @@
 # on Bookworm and the only one referenced by installation_pi5.md.
 #
 # Exit codes:
-#   0  — clock disciplined (chronyc waitsync returned 0) or chrony absent
-#        and we logged a warning
-#   1  — chronyc reachable but failed to step / wait
+#   0  — clock disciplined (chronyc waitsync returned 0)
+#   1  — chronyc reached the system but failed to step / wait, OR
+#        chronyc is not installed at all.  We *fail closed* in both
+#        cases: on a Pi with no RTC, returning success on no-sync would
+#        let capture start with an arbitrary wall-clock and silently
+#        corrupt TDOA alignment — exactly what this script exists to
+#        prevent.  If a deployment legitimately runs without chrony,
+#        disable the unit (`systemctl disable ntp-after-online`)
+#        instead of relying on this script to silently noop.
 #
 # Inputs (env):
 #   THRIFTYX_NTP_PROBE_HOST  host to ping before attempting sync
@@ -39,8 +45,10 @@ while :; do
 done
 
 if ! command -v chronyc >/dev/null 2>&1; then
-    echo "ntp-after-online: chronyc not found; skipping forced sync" >&2
-    exit 0
+    echo "ntp-after-online: chronyc not found — refusing to declare the" \
+         "system clock disciplined.  Install chrony (see" \
+         "rpi/installation_pi5.md) or disable this unit." >&2
+    exit 1
 fi
 
 # Step the clock immediately (large adjustment in one go) instead of

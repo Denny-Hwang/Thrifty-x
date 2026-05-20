@@ -17,11 +17,22 @@ RestartSec=120
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
-# Hardening — same baseline as thriftyx-capture@.service.  Relax only
-# if a specific path conflicts with a deployment.
-NoNewPrivileges=true
+# Hardening — intentionally minimal.
+#
+# This unit's entrypoint (rpi/fastdet.sh) does two things that the
+# stronger sandboxing flags applied to thriftyx-capture@.service would
+# block:
+#   * `sudo systemctl stop ntp` / `sudo ntpd -gq`  — requires the
+#     ability to elevate, which `NoNewPrivileges=true` forbids.
+#   * `mkdir -p toad/ card/ log/` under `/home/pi/detector`  — writes
+#     to $HOME, which `ProtectHome=read-only` forbids.
+# We therefore omit those two flags here.  ProtectSystem and
+# PrivateTmp are still safe because fastdet writes only to its own
+# subdirectory under $HOME and never touches /usr or /tmp.
+#
+# For a fully hardened deployment, prefer thriftyx-capture@.service
+# instead of this legacy pipeline.
 ProtectSystem=full
-ProtectHome=read-only
 PrivateTmp=true
 
 # Logging
