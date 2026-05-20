@@ -15,7 +15,6 @@ Estimate position from TDOA values.
 
 import scipy.optimize
 import numpy as np
-import itertools
 
 from thriftyx import tdoa_est
 

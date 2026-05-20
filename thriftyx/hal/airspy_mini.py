@@ -15,7 +15,7 @@ import logging
 import threading
 import time
 import warnings
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 
@@ -437,13 +437,13 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceConfigError(
                 f"Sample rate {rate} not supported. "
                 f"Valid rates: {rates}")
-        self._check_open()
-        ret = _lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
+        lib = self._check_open()
+        ret = lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
 
     def set_center_freq(self, freq: int) -> None:
-        self._check_open()
+        lib = self._check_open()
         min_f, max_f = _FREQUENCY_RANGE
         if not (min_f <= int(freq) <= max_f):
             raise DeviceConfigError(
@@ -456,7 +456,7 @@ class AirspyMiniDevice(SDRDevice):
         if request != int(freq):
             logger.debug("PPM=%g shifts LO request %d -> %d",
                           self._ppm, int(freq), request)
-        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
+        ret = lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_freq() failed: {ret}")
 
@@ -470,7 +470,7 @@ class AirspyMiniDevice(SDRDevice):
         self._ppm = float(value)
 
     def set_gain(self, gain_type: str, value: int) -> None:
-        self._check_open()
+        lib = self._check_open()
         if gain_type not in _GAIN_STAGES:
             raise DeviceConfigError(
                 f"Unknown gain type '{gain_type}'. "
@@ -481,22 +481,22 @@ class AirspyMiniDevice(SDRDevice):
                 f"Gain {value} for '{gain_type}' out of range "
                 f"[{min_v}, {max_v}]")
         if gain_type == 'lna':
-            ret = _lib.airspy_set_lna_gain(self._handle,
-                                            ctypes.c_uint8(value))
+            ret = lib.airspy_set_lna_gain(self._handle,
+                                           ctypes.c_uint8(value))
         elif gain_type == 'mixer':
-            ret = _lib.airspy_set_mixer_gain(self._handle,
-                                              ctypes.c_uint8(value))
+            ret = lib.airspy_set_mixer_gain(self._handle,
+                                             ctypes.c_uint8(value))
         else:
-            ret = _lib.airspy_set_vga_gain(self._handle,
-                                            ctypes.c_uint8(value))
+            ret = lib.airspy_set_vga_gain(self._handle,
+                                           ctypes.c_uint8(value))
         if ret != 0:
             raise DeviceConfigError(
                 f"airspy_set_{gain_type}_gain() failed: {ret}")
 
     def set_bias_tee(self, enabled: bool) -> None:
-        self._check_open()
-        ret = _lib.airspy_set_rf_bias(self._handle,
-                                       ctypes.c_uint8(1 if enabled else 0))
+        lib = self._check_open()
+        ret = lib.airspy_set_rf_bias(self._handle,
+                                      ctypes.c_uint8(1 if enabled else 0))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_rf_bias() failed: {ret}")
         if enabled:
@@ -522,34 +522,35 @@ class AirspyMiniDevice(SDRDevice):
             ``True`` engages the LNA AGC; ``False`` reverts to the value
             set by :meth:`set_gain` ('lna').
         """
-        self._check_open()
-        if not hasattr(_lib, 'airspy_set_lna_agc'):
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_set_lna_agc'):
             raise DeviceConfigError(
                 "libairspy build does not expose airspy_set_lna_agc")
-        ret = _lib.airspy_set_lna_agc(self._handle,
-                                       ctypes.c_uint8(1 if enabled else 0))
+        ret = lib.airspy_set_lna_agc(self._handle,
+                                      ctypes.c_uint8(1 if enabled else 0))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_lna_agc() failed: {ret}")
 
     def set_mixer_agc(self, enabled: bool) -> None:
         """Toggle the R820T2 mixer AGC loop."""
-        self._check_open()
-        if not hasattr(_lib, 'airspy_set_mixer_agc'):
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_set_mixer_agc'):
             raise DeviceConfigError(
                 "libairspy build does not expose airspy_set_mixer_agc")
-        ret = _lib.airspy_set_mixer_agc(self._handle,
-                                         ctypes.c_uint8(1 if enabled else 0))
+        ret = lib.airspy_set_mixer_agc(self._handle,
+                                        ctypes.c_uint8(1 if enabled else 0))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_mixer_agc() failed: {ret}")
 
     def set_linearity_gain(self, value: int) -> None:
         """Apply the linearity gain ladder (low-IMD profile, 0–21)."""
         self._check_combined_gain('linearity', value)
-        if not hasattr(_lib, 'airspy_set_linearity_gain'):
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_set_linearity_gain'):
             raise DeviceConfigError(
                 "libairspy build does not expose airspy_set_linearity_gain")
-        ret = _lib.airspy_set_linearity_gain(self._handle,
-                                              ctypes.c_uint8(value))
+        ret = lib.airspy_set_linearity_gain(self._handle,
+                                             ctypes.c_uint8(value))
         if ret != 0:
             raise DeviceConfigError(
                 f"airspy_set_linearity_gain() failed: {ret}")
@@ -557,11 +558,12 @@ class AirspyMiniDevice(SDRDevice):
     def set_sensitivity_gain(self, value: int) -> None:
         """Apply the sensitivity gain ladder (high-NF profile, 0–21)."""
         self._check_combined_gain('sensitivity', value)
-        if not hasattr(_lib, 'airspy_set_sensitivity_gain'):
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_set_sensitivity_gain'):
             raise DeviceConfigError(
                 "libairspy build does not expose airspy_set_sensitivity_gain")
-        ret = _lib.airspy_set_sensitivity_gain(self._handle,
-                                                ctypes.c_uint8(value))
+        ret = lib.airspy_set_sensitivity_gain(self._handle,
+                                               ctypes.c_uint8(value))
         if ret != 0:
             raise DeviceConfigError(
                 f"airspy_set_sensitivity_gain() failed: {ret}")
@@ -621,14 +623,14 @@ class AirspyMiniDevice(SDRDevice):
         Most useful at the highest Airspy R2 rate (10 MSPS) on USB 2.0
         hosts.  Falls back to a no-op when the library lacks the API.
         """
-        self._check_open()
-        if not hasattr(_lib, 'airspy_set_packing'):
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_set_packing'):
             if enabled:
                 logger.warning(
                     "airspy_set_packing not available; packing ignored.")
             return
-        ret = _lib.airspy_set_packing(self._handle,
-                                       ctypes.c_uint8(1 if enabled else 0))
+        ret = lib.airspy_set_packing(self._handle,
+                                      ctypes.c_uint8(1 if enabled else 0))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_packing() failed: {ret}")
 
@@ -649,7 +651,7 @@ class AirspyMiniDevice(SDRDevice):
         """Start the Airspy RX stream (called once, shared by both modes)."""
         if self._capturing:
             return
-        self._check_open()
+        lib = self._check_open()
 
         def _c_callback(transfer_ptr):
             t = transfer_ptr.contents
@@ -673,7 +675,7 @@ class AirspyMiniDevice(SDRDevice):
             return 0
 
         self._callback_ref = _CALLBACK_TYPE(_c_callback)
-        ret = _lib.airspy_start_rx(self._handle, self._callback_ref, None)
+        ret = lib.airspy_start_rx(self._handle, self._callback_ref, None)
         if ret != 0:
             raise DeviceCaptureError(f"airspy_start_rx() failed: {ret}")
         self._capturing = True
@@ -769,8 +771,9 @@ class AirspyMiniDevice(SDRDevice):
         except Exception:
             pass
 
-    def _check_open(self):
+    def _check_open(self) -> ctypes.CDLL:
         if not self._open:
             raise DeviceError("Device is not open. Call open() first.")
         if _lib is None:
             raise DeviceNotFoundError("libairspy not available")
+        return _lib

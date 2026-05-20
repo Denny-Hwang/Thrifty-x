@@ -143,7 +143,6 @@ def validate_config(config: dict) -> list[str]:
     if carrier_window is not None and block_size is not None:
         # carrier_window is (start, stop) or (start, stop, unit_hz) tuple
         if isinstance(carrier_window, (tuple, list)) and len(carrier_window) >= 2:
-            start_val = carrier_window[0]
             stop_val = carrier_window[1]
             unit_hz = (len(carrier_window) >= 3 and carrier_window[2])
             if unit_hz:

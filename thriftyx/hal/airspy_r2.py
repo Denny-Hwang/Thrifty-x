@@ -10,10 +10,9 @@
 
 import ctypes
 
-from thriftyx.hal.airspy_mini import (AirspyMiniDevice, _lib, _lib_error,
-                                       _rate_is_supported)
+from thriftyx.hal.airspy_mini import (AirspyMiniDevice, _rate_is_supported)
 from thriftyx.hal.base import DeviceInfo, SampleFormat
-from thriftyx.exceptions import DeviceNotFoundError, DeviceConfigError
+from thriftyx.exceptions import DeviceConfigError
 
 _DEVICE_NAME = "Airspy R2"
 _SUPPORTED_SAMPLE_RATES = (2_500_000, 10_000_000)
@@ -60,13 +59,13 @@ class AirspyR2Device(AirspyMiniDevice):
             raise DeviceConfigError(
                 f"Sample rate {rate} not supported by Airspy R2. "
                 f"Valid rates: {rates}")
-        self._check_open()
-        ret = _lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
+        lib = self._check_open()
+        ret = lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
 
     def set_center_freq(self, freq: int) -> None:
-        self._check_open()
+        lib = self._check_open()
         min_f, max_f = _FREQUENCY_RANGE
         if not (min_f <= int(freq) <= max_f):
             raise DeviceConfigError(
@@ -74,12 +73,12 @@ class AirspyR2Device(AirspyMiniDevice):
                 f"[{min_f}, {max_f}]")
         # Apply software PPM correction (see AirspyMiniDevice.set_center_freq).
         request = int(round(int(freq) / (1.0 + self._ppm * 1e-6)))
-        ret = _lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
+        ret = lib.airspy_set_freq(self._handle, ctypes.c_uint32(request))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_freq() failed: {ret}")
 
     def set_gain(self, gain_type: str, value: int) -> None:
-        self._check_open()
+        lib = self._check_open()
         if gain_type not in _GAIN_STAGES:
             raise DeviceConfigError(
                 f"Unknown gain type '{gain_type}'. "
@@ -90,14 +89,14 @@ class AirspyR2Device(AirspyMiniDevice):
                 f"Gain {value} for '{gain_type}' out of range "
                 f"[{min_v}, {max_v}]")
         if gain_type == 'lna':
-            ret = _lib.airspy_set_lna_gain(self._handle,
-                                            ctypes.c_uint8(value))
+            ret = lib.airspy_set_lna_gain(self._handle,
+                                           ctypes.c_uint8(value))
         elif gain_type == 'mixer':
-            ret = _lib.airspy_set_mixer_gain(self._handle,
-                                              ctypes.c_uint8(value))
+            ret = lib.airspy_set_mixer_gain(self._handle,
+                                             ctypes.c_uint8(value))
         else:
-            ret = _lib.airspy_set_vga_gain(self._handle,
-                                            ctypes.c_uint8(value))
+            ret = lib.airspy_set_vga_gain(self._handle,
+                                           ctypes.c_uint8(value))
         if ret != 0:
             raise DeviceConfigError(
                 f"airspy_set_{gain_type}_gain() failed: {ret}")

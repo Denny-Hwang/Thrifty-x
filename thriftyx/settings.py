@@ -17,16 +17,15 @@ Example:
 
 import contextlib
 import logging
-import math
 import sys
 from collections import namedtuple
 
 from thriftyx import setting_parsers
-from thriftyx.exceptions import ConfigError, ConfigSyntaxError, SettingKeyError
+from thriftyx.exceptions import ConfigSyntaxError, SettingKeyError
 
 
 # Setting definition
-Definition = namedtuple('SettingDefinition', 'args parser default description')
+Definition = namedtuple('Definition', 'args parser default description')
 
 DEFINITIONS = {
     'sample_rate': Definition(

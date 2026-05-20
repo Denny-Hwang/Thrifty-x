@@ -16,7 +16,6 @@ from collections import namedtuple
 import numpy as np
 
 from thriftyx.settings import load_args
-from thriftyx.signal_utils import Signal
 from thriftyx import toads_data
 from thriftyx import util
 from thriftyx.block_data import block_reader, card_reader

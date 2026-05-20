@@ -11,6 +11,18 @@ LOG_DAYS="${LOG_RETENTION_DAYS:-30}"
 DISK_WARN_PCT="${DISK_WARN_PCT:-80}"
 DISK_PURGE_PCT="${DISK_PURGE_PCT:-90}"
 
+# Defensive: refuse to operate on an empty or root path even if a
+# misconfigured environment file sets THRIFTYX_OUT="" or "/".  The
+# `find ... -delete` below would otherwise become catastrophic.
+if [ -z "${ROOT}" ] || [ "${ROOT}" = "/" ]; then
+    echo "cleanup_old_captures: refusing to operate on ROOT='${ROOT}'" >&2
+    exit 2
+fi
+if [ ! -d "${ROOT}" ]; then
+    echo "cleanup_old_captures: ROOT '${ROOT}' is not a directory" >&2
+    exit 2
+fi
+
 cd "${ROOT}"
 
 [ -d card ] && find card -type f -name '*.card' -mtime "+${CARD_DAYS}" -delete

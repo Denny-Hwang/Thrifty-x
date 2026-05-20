@@ -12,12 +12,10 @@ import io
 import base64
 
 import numpy as np
-import pytest
 
-from thriftyx.block_data import (raw_to_complex, complex_to_raw,
-                                   card_reader, card_writer, write_card_header)
+from thriftyx.block_data import (raw_to_complex, card_reader, card_writer, write_card_header)
 from tests.mocks.mock_device import MockSDRDevice
-from tests.mocks.signal_generator import generate_carrier, add_noise, complex_to_int16
+from tests.mocks.signal_generator import generate_carrier, complex_to_int16
 
 
 def test_12bit_conversion_pipeline():
@@ -123,7 +121,6 @@ def test_complex_to_int16_range():
     libairspy INT16_IQ left-shifts 12-bit ADC values into the full int16
     range, so amplitude-1.0 signals correctly produce values up to ±32767.
     """
-    from tests.mocks.signal_generator import complex_to_int16
     signal = np.exp(1j * np.linspace(0, 2*np.pi, 64)).astype(np.complex64)
     raw = complex_to_int16(signal)
     assert raw.dtype == np.int16

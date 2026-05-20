@@ -213,11 +213,14 @@ class Plotter:
             x_scale = 1
 
         if db_scale:
-            transf = lambda v: 20 * np.log10(v * y_scale)
+            def transf(v):
+                return 20 * np.log10(v * y_scale)
         elif power:
-            transf = lambda v: (v * y_scale)**2
+            def transf(v):
+                return (v * y_scale)**2
         else:
-            transf = lambda v: v * y_scale
+            def transf(v):
+                return v * y_scale
 
         fft_mag = fft.mag
         y = np.fft.fftshift(fft_mag)

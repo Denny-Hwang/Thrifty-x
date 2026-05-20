@@ -18,7 +18,7 @@ import pytest
 
 matplotlib = pytest.importorskip("matplotlib")
 
-from thriftyx import detect_analysis as da
+from thriftyx import detect_analysis as da  # noqa: E402  (imported after importorskip)
 
 
 def test_try_qt_modules_returns_none_when_no_binding(monkeypatch):

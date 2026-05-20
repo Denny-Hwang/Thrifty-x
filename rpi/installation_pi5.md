@@ -93,6 +93,28 @@ pip install --upgrade pip
 pip install -e ".[analysis,fft]"   # fft = pyfftw, analysis = matplotlib
 ```
 
+> **pyfftw 설치가 실패하는 경우**: Bookworm ARM64 인덱스에 pyfftw
+> 휠이 없거나, `libfftw3l-dev`(long-double FFTW)가 없는 환경에서는
+> 소스 빌드가 실패한다.  이때는 다음 두 가지 선택지가 있다.
+>
+> 1. **pyfftw 없이 설치** — capture 루프는 NumPy FFT로 자동 폴백
+>    한다(`thriftyx/signal_utils.py`).  성능은 약 1.3~1.7배 느려지나
+>    기능은 동일하다:
+>    ```bash
+>    pip install -e ".[analysis]"   # fft extra 제외
+>    ```
+>
+> 2. **번들된 long-double 제거 패치를 적용해서 빌드** —
+>    `rpi/pyFFTW-0.9.2-no-fftwl.patch` 가 그 용도이다.  대략:
+>    ```bash
+>    pip download --no-binary=:all: --no-deps pyfftw==0.13.* -d /tmp/pyfftw-src
+>    cd /tmp/pyfftw-src && tar xzf pyFFTW-*.tar.gz && cd pyFFTW-*
+>    patch -p1 < ~/thrifty-x/rpi/pyFFTW-0.9.2-no-fftwl.patch
+>    pip install .
+>    ```
+>    적용 후 `python -c "import pyfftw; print(pyfftw.__version__)"`
+>    로 확인한다.
+
 ### 4.1 설치 검증
 
 ```bash
