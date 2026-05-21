@@ -91,11 +91,11 @@ def analyse(path: Path, out_png: Path) -> int:
     print(f"Block {block_idx}: {len(raw_bytes)} bytes")
     print(f"Metadata: {metadata}")
 
-    # ===== Interpretation 1: INT16_IQ (canonical /32768.0) =====
+    # ===== Interpretation 1: INT16_IQ (canonical /2048.0) =====
     raw_i16 = np.frombuffer(raw_bytes, dtype=np.int16)
     if raw_i16.size % 2 != 0:
         raw_i16 = raw_i16[:-1]
-    iq_i16 = (raw_i16.astype(np.float32) / 32768.0)
+    iq_i16 = (raw_i16.astype(np.float32) / 2048.0)
     iq_i16 = iq_i16[0::2] + 1j * iq_i16[1::2]
     iq_i16 = iq_i16.astype(np.complex64)
 
@@ -123,7 +123,7 @@ def analyse(path: Path, out_png: Path) -> int:
                  20 * np.log10(mag_i16[:half] + 1e-12),
                  linewidth=0.6)
     axes[0].set_title(
-        f"FFT (INT16_IQ interpretation, /32768.0) — block {block_idx}"
+        f"FFT (INT16_IQ interpretation, /2048.0) — block {block_idx}"
         f"  N={len(iq_i16)}  fs={sample_rate/1e6:.3f} MSPS")
     axes[0].set_xlabel("Frequency (kHz)")
     axes[0].set_ylabel("Magnitude (dB)")

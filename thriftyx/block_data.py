@@ -80,8 +80,13 @@ def raw_to_complex(data, bit_depth=8):
 
     floats = data.astype(np.float32, copy=False)
     if bit_depth == 12:
-        # Airspy INT16_IQ: signed int16 left-shifted from 12-bit ADC.
-        floats = floats / 32768.0
+        # Airspy INT16_IQ: signed int16 in NATIVE 12-bit range (-2048..+2047).
+        # libairspy does NOT left-shift; the int16 container is used because the
+        # internal FIR filter output can briefly exceed the raw 12-bit ADC range.
+        # Normalize to [-1, +1] by dividing by 2048 (12-bit signed full scale).
+        # Empirical verification: low-4-bit nibble of recorded samples shows all
+        # 16 distinct values (would be a single value if left-shifted x16).
+        floats = floats / 2048.0
     else:
         # RTL-SDR legacy: 8-bit unsigned, DC offset at 127.4.
         floats = (floats - 127.4) / 128.0
@@ -122,7 +127,10 @@ def complex_to_raw(array, bit_depth=8):
     interleaved[1::2] = array.imag
 
     if bit_depth == 12:
-        scaled = interleaved * 32768.0
+        # Inverse of raw_to_complex 12-bit path: multiply by 2048 to map [-1, +1]
+        # back to 12-bit signed range. Clip to int16 storage limits (the wider
+        # int16 envelope is preserved so FIR-overshoot test signals round-trip).
+        scaled = interleaved * 2048.0
         return np.clip(scaled, -32768, 32767).astype(np.int16)
     scaled = interleaved * 128.0 + 127.4
     return np.clip(scaled, 0, 255).astype(np.uint8)

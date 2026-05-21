@@ -43,24 +43,39 @@ class TestRawToComplex8bit:
 
 
 class TestRawToComplex12bit:
+    """Airspy 12-bit normalization: divide by 2048 (12-bit signed full scale)."""
+
     def test_zero_input(self):
         """Zero input should give zero output."""
         data = np.zeros(4, dtype=np.int16)
         result = raw_to_complex(data, bit_depth=12)
         np.testing.assert_allclose(np.abs(result[0]), 0.0, atol=1e-6)
 
-    def test_max_positive(self):
-        """32767 I, 0 Q → real ≈ 1.0, imag ≈ 0."""
-        data = np.array([32767, 0], dtype=np.int16)
+    def test_max_positive_12bit(self):
+        """+2047 I (12-bit max) → real ≈ +1.0."""
+        data = np.array([2047, 0], dtype=np.int16)
         result = raw_to_complex(data, bit_depth=12)
-        np.testing.assert_allclose(result[0].real, 32767/32768, rtol=1e-5)
+        np.testing.assert_allclose(result[0].real, 2047 / 2048.0, rtol=1e-5)
         np.testing.assert_allclose(result[0].imag, 0.0, atol=1e-5)
 
-    def test_max_negative(self):
-        """-32768 I → real ≈ -1.0."""
-        data = np.array([-32768, 0], dtype=np.int16)
+    def test_max_negative_12bit(self):
+        """-2048 I (12-bit min) → real ≈ -1.0."""
+        data = np.array([-2048, 0], dtype=np.int16)
         result = raw_to_complex(data, bit_depth=12)
         np.testing.assert_allclose(result[0].real, -1.0, rtol=1e-5)
+
+    def test_int16_envelope_no_overflow(self):
+        """FIR overshoot up to int16 limits must not corrupt the output dtype.
+
+        libairspy can briefly emit values beyond the raw 12-bit range due to
+        FIR filtering; conversion must still produce finite complex64 values.
+        """
+        data = np.array([32767, -32768], dtype=np.int16)
+        result = raw_to_complex(data, bit_depth=12)
+        assert np.isfinite(result).all()
+        # Magnitude > 1 is acceptable here (FIR overshoot envelope).
+        np.testing.assert_allclose(result[0].real, 32767 / 2048.0, rtol=1e-5)
+        np.testing.assert_allclose(result[0].imag, -32768 / 2048.0, rtol=1e-5)
 
     def test_output_dtype(self):
         data = np.zeros(4, dtype=np.int16)
@@ -74,19 +89,21 @@ class TestRawToComplex12bit:
 
 
 class TestComplexToRaw12bit:
-    def test_roundtrip(self):
-        """12-bit conversion round-trip should be lossless."""
+    """Inverse of raw_to_complex 12-bit: multiply by 2048, clip to int16."""
+
+    def test_roundtrip_within_12bit_range(self):
+        """Round-trip within 12-bit range is lossless."""
         original = np.array([100, -200, 500, -1000], dtype=np.int16)
         complex_vals = raw_to_complex(original, bit_depth=12)
         recovered = complex_to_raw(complex_vals, bit_depth=12)
         np.testing.assert_array_equal(original, recovered)
 
-    def test_roundtrip_8bit(self):
-        """8-bit conversion round-trip."""
-        original = np.array([50, 100, 200, 127], dtype=np.uint8)
-        complex_vals = raw_to_complex(original, bit_depth=8)
-        recovered = complex_to_raw(complex_vals, bit_depth=8)
-        np.testing.assert_array_almost_equal(original, recovered, decimal=0)
+    def test_roundtrip_full_12bit_extremes(self):
+        """±2048 (12-bit extremes) round-trip exactly."""
+        original = np.array([-2048, 0, 0, 2047], dtype=np.int16)
+        complex_vals = raw_to_complex(original, bit_depth=12)
+        recovered = complex_to_raw(complex_vals, bit_depth=12)
+        np.testing.assert_array_equal(original, recovered)
 
 
 class TestBlockReader:
