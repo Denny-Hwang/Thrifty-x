@@ -9,7 +9,7 @@ capture (all gain stages at 0).
 What it does
 ------------
 For every block in the .card file (base64-decoded payload, interpreted
-as INT16 IQ pairs, scaled by /32768.0):
+as INT16 IQ pairs, scaled by /2048.0):
 
   * compute the FFT-magnitude carrier peak inside the configured
     ``carrier_window`` (taken from a sibling ``detector.cfg`` when
@@ -168,7 +168,7 @@ def analyse(card_path: Path) -> int:
         arr = np.frombuffer(payload, dtype=np.int16)
         if arr.size < 4 or arr.size % 2 != 0:
             continue
-        iq = (arr.astype(np.float32) / 32768.0)
+        iq = (arr.astype(np.float32) / 2048.0)
         cx = iq[0::2] + 1j * iq[1::2]
         # FFT magnitude
         mag = np.abs(np.fft.fft(cx))

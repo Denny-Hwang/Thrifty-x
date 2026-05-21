@@ -73,13 +73,12 @@ def test_raw_to_complex_8bit_basic():
 
 
 def test_raw_to_complex_12bit_basic():
-    """12-bit int16 interleaved I/Q is paired and normalized by 32768."""
-    raw = np.array([0, 0, 32768 // 2, -32768 // 2, -32768, 32767],
-                   dtype=np.int16)
+    """12-bit int16 interleaved I/Q is paired and normalized by 2048."""
+    raw = np.array([0, 0, 1024, -1024, -2048, 2047], dtype=np.int16)
     expected = np.array([
         0.0 + 0.0j,
         0.5 - 0.5j,
-        -1.0 + (32767 / 32768.0) * 1j,
+        -1.0 + (2047 / 2048.0) * 1j,
     ], dtype=np.complex64)
     result = block_data.raw_to_complex(raw, bit_depth=12)
     assert result.dtype == np.complex64
@@ -112,13 +111,21 @@ def test_raw_to_complex_round_trip_8bit():
 
 
 def test_raw_to_complex_round_trip_12bit():
-    """Random int16 length-2N array round-trips within ±1 LSB."""
+    """Random int16 within 12-bit range round-trips within ±1 LSB."""
     rng = np.random.default_rng(seed=12345)
-    raw = rng.integers(-32768, 32768, size=2048, dtype=np.int16)
+    raw = rng.integers(-2048, 2048, size=2048, dtype=np.int16)
     recovered = block_data.complex_to_raw(
         block_data.raw_to_complex(raw, bit_depth=12), bit_depth=12)
     diff = recovered.astype(np.int32) - raw.astype(np.int32)
     assert np.max(np.abs(diff)) <= 1
+
+
+def test_raw_to_complex_int16_envelope_finite():
+    """int16 extremes (FIR overshoot envelope) yield finite complex64."""
+    raw = np.array([-32768, 32767, 32767, -32768], dtype=np.int16)
+    result = block_data.raw_to_complex(raw, bit_depth=12)
+    assert result.dtype == np.complex64
+    assert np.isfinite(result).all()
 
 
 def test_card_reader():

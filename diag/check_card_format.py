@@ -176,12 +176,12 @@ def _verdict(i16: dict, f32: dict, u8: dict, bytes_per_complex: float) -> str:
                 "(bytes/complex ≈ 8). Most likely libairspy fallback.")
     if i16_full and not f32_ok and 3.5 <= bytes_per_complex <= 4.5:
         if i16_12bit:
-            return ("INT16_IQ in 12-bit raw range (-2048..+2047). "
-                    "raw_to_complex /32768.0 underutilises ~16x — "
-                    "consider /2048.0 if SNR is unexpectedly low.")
-        return ("INT16_IQ scaled to FULL int16 range. "
-                "block_data.raw_to_complex(/32768.0) matches "
-                "(bytes/complex == 4).")
+            return ("INT16_IQ in native 12-bit range (-2048..+2047). "
+                    "block_data.raw_to_complex(/2048.0) matches.")
+        return ("INT16_IQ extends beyond 12-bit range (envelope > +/-2048). "
+                "Likely libairspy FIR overshoot or saturated signal - "
+                "still consistent with /2048.0 normalization but check "
+                "clip_count for ADC saturation.")
     if u8.get("centred_near_127") and bytes_per_complex == 2.0:
         return "Legacy v1 RTL-SDR uint8 IQ (bytes/complex == 2)."
     if f32_ok and i16_full:
@@ -287,8 +287,10 @@ def analyse_all_blocks(path: Path) -> int:
                         and finite.max() <= 2.0):
                     f32_in_range += 1
         # Carrier-bin histogram via FFT magnitude peak.
+        # Use the canonical /2048.0 normalization (12-bit signed full scale)
+        # to match thriftyx.block_data.raw_to_complex(bit_depth=12).
         if i16_arr.size >= 4 and i16_arr.size % 2 == 0:
-            iq = (i16_arr.astype(np.float32) / 32768.0)
+            iq = (i16_arr.astype(np.float32) / 2048.0)
             cx = iq[0::2] + 1j * iq[1::2]
             mag = np.abs(np.fft.fft(cx))
             # Restrict to lower-frequency half (positive bins) for the
