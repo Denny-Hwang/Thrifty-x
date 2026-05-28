@@ -60,7 +60,7 @@ All documentation is in English.
 | Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` + `setup.py`; dynamic version |
-| Tests | Minimal | 31 test modules / 300+ tests; lint + type-check + pytest gated in CI |
+| Tests | Minimal | 32 test modules / 314 tests; lint + type-check + pytest + C builds gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -219,11 +219,11 @@ needs a `.get(default)` fallback.
 
 | Flag | Default | Range | Notes |
 |------|---------|-------|-------|
-| `--gain-mode {manual, linearity, sensitivity}` | `manual` | — | `linearity`/`sensitivity` use `--combined-gain` instead of per-stage values |
+| `--gain-mode {manual, linearity, sensitivity}` | `manual` | — | Preset modes delegate the LNA/Mixer/VGA ladder to libairspy and force AGC off. See caveat below. |
 | `--lna-gain N`   | `0` | 0–14 | Manual LNA index |
 | `--mixer-gain N` | `0` | 0–15 | Manual Mixer index |
 | `--vga-gain N`   | `0` | 0–15 | Manual VGA / IF index |
-| `--combined-gain N` | `0` | 0–21 | Used when `--gain-mode` ≠ `manual` |
+| `--combined-gain N` | `0` | 0–21 | Index into the preset ladder. **`0` = minimum**, **`21` = maximum** (libairspy inverts internally). Min row floors VGA at index 4, so only manual `0/0/0` reaches true zero internal gain. |
 | `--lna-agc`   | `false` | bool | Engages R820T2 LNA AGC (manual mode) |
 | `--mixer-agc` | `false` | bool | Engages R820T2 Mixer AGC (manual mode) |
 
@@ -325,6 +325,26 @@ Other commonly-tuned detector flags (all unchanged from upstream):
 | `--template, -z`          | `template.npy` | Path to the matched-filter template |
 | `--rxid, -r`              | `-1` | Receiver ID stamped into output files |
 
+For multi-TX captures (e.g. BatRF's two-collar deployment), use
+`thriftyx identify --map freqmap.cfg` rather than the histogram
+auto-classifier — it is more robust against very uneven per-TX
+populations (see [user guide §9.2.1](docs/user_guide.md#921-identifying-transmitters-identify---map)).
+For RTL-SDR with an external LNA, the default `15*snr` is often too
+strict; a `10*snr` starting point is documented in
+[user guide §5.5](docs/user_guide.md#55-threshold-tuning).
+
+**Carrier sub-bin offset is bounded.** The Dirichlet-kernel
+interpolator now passes `bounds=([0, -0.5], [∞, 0.5])` to
+`scipy.optimize.curve_fit`, so `CarrierSyncInfo.offset` and the
+`carrier_offset` column of `.toad(s)` are guaranteed in
+`[-0.5, 0.5]` (Krüger §4.4.2). The correlation interpolator is
+clipped to `±0.6` by `soa_estimator._clip_offset`. See
+[`docs/verification/sub_offset_investigation.md`](docs/verification/sub_offset_investigation.md)
+for the reasoning. If you are re-running an analysis on data captured
+before this fix landed, the TX1 carrier-offset distribution will shift
+by up to ±0.5 of a bin (~76 Hz at 10 Msps / 65536 FFT) on previously
+out-of-bound detections.
+
 ## Using Existing RTL-SDR Data
 
 Existing `.card` files captured with the **original** Thrifty (v1
@@ -371,7 +391,7 @@ Thrifty-x/
 ├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
 ├── fastcard/            # ◌ Reference only — original librtlsdr C binding
 ├── tests/
-│   ├── unit/            #   16 unit-test modules
+│   ├── unit/            #   23 unit-test modules
 │   ├── integration/     #   1 integration test (block_data + mock capture)
 │   └── test_*.py        #   8 top-level pipeline-stage tests
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
@@ -439,7 +459,11 @@ The suite covers, among other things:
   integration test.
 
 CI runs `ruff check`, `mypy`, the full `pytest` suite, and the
-`fastcapture` / `fastdet` CMake builds on every push and pull request.
+`fastcapture` and `fastdet` CMake builds on every push and pull
+request. fastdet links the fastcapture static archive: the workflow
+builds and installs fastcapture to `/usr/local` before configuring
+fastdet — details in
+[`docs/verification/c_build_ci_failure.md`](docs/verification/c_build_ci_failure.md) §7.
 
 ## Known Limitations
 
@@ -447,8 +471,9 @@ CI runs `ruff check`, `mypy`, the full `pytest` suite, and the
   mid-capture the reader times out after ~10 s and exits.
 - The C `fastcapture` binary is provided mostly for parity with the
   original `fastcard` workflow — **the Python `thriftyx capture` path is
-  the recommended entry point** and the only one tested in CI for
-  Airspy.
+  the recommended entry point.** Both `fastcapture` and the `fastdet`
+  detector are smoke-built in CI, but only the Python capture path is
+  exercised end-to-end by the test suite.
 - Live capture requires the C library for the chosen SDR (`libairspy`
   for Airspy, `librtlsdr` for RTL-SDR).  Processing previously-captured
   `.card` files does not.
