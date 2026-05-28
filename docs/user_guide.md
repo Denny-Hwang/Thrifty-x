@@ -738,6 +738,57 @@ One detection per line, whitespace-separated:
 The `.toads` file produced by `identify` adds a `txid` column and
 de-duplicates per-receiver detections.
 
+**Magnitude note for `carrier_energy` / `corr_energy`.** Internally
+the detector normalises raw Airspy INT16_IQ samples by `2048.0` (the
+12-bit ADC full scale; see
+[`docs/verification/normalization_divisor.md`](verification/normalization_divisor.md))
+so complex64 magnitudes typically land in roughly `[-1, +1]`. The
+libairspy IQ-correction FIR can briefly overshoot this envelope, so
+occasional `|z| > 1` values are normal and not a clipping error.
+Code that consumes `carrier_energy` / `corr_energy` should treat the
+range as "approximately unit-scale" rather than a hard `[0, 1]`
+envelope.
+
+### 9.2.1 Identifying transmitters (`identify --map`)
+
+`thriftyx identify` writes a `.toads` file with a `txid` column. By
+default it auto-classifies transmitters by clustering the
+carrier-bin histogram. The auto-classifier
+(`thriftyx/identify.py:detect_transmitter_windows`) handles the
+common BatRF dual-bin pattern, but it is **not robust to extremely
+uneven transmitter populations** (40:1 detection-count ratios can
+make the weak transmitter disappear; see
+[`docs/verification/auto_classify_robustness.md`](verification/auto_classify_robustness.md)).
+
+**For paper-grade or production captures, supply an explicit
+frequency map via `--map`:**
+
+```ini
+# freqmap.cfg - one TX per line, value is "start - stop" in FFT bins
+# (or in Hz if a unit suffix is given).
+1: 100 - 105   # TX1 carrier sits in bins 100..105
+2: 125 - 130   # TX2 carrier sits in bins 125..130
+
+# Per-receiver bin offsets (in case different receivers have
+# different LO offsets). Key starts with '@' followed by rxid.
+@0: 0
+@1: 0
+```
+
+```bash
+thriftyx identify --map freqmap.cfg rx0.toad rx1.toad -o data.toads
+```
+
+The map is parsed by `thriftyx.identify.load_freqmap`. Each TX range
+is offset per-receiver before being checked. A detection whose
+`carrier_bin + carrier_offset` falls outside every TX range gets
+`txid = -1` (sentinel for "unidentified") and is dropped from the
+`.toads` output by `filter_duplicates`. A warning is logged for
+each unidentified detection.
+
+The auto-classifier is fine for ad-hoc inspection runs but the
+explicit map is the recommended production workflow.
+
 ### 9.3 Detection Analysis Plots
 
 `thriftyx analyze_detect <file.card> -m <N> -p <plots>` runs the
