@@ -357,11 +357,20 @@ class AirspyMiniDevice(SDRDevice):
                     "Check udev rules / user group membership.")
         self._open = True
 
-        # Set sample type to INT16 IQ (matches fastcapture/airspy_reader.c)
+        # Set sample type to INT16 IQ (matches fastcapture/airspy_reader.c).
+        # This MUST succeed: on failure libairspy leaves the device in its
+        # default FLOAT32_IQ mode, and the capture path then reinterprets
+        # those bytes as int16, silently corrupting the spectrum. Fail fast
+        # (and release the handle) rather than capture a ruined session.
         ret = _lib.airspy_set_sample_type(
             self._handle, ctypes.c_int(AIRSPY_SAMPLE_INT16_IQ))
         if ret != 0:
-            logger.warning("airspy_set_sample_type() failed: %d", ret)
+            _lib.airspy_close(self._handle)
+            self._open = False
+            raise DeviceConfigError(
+                f"airspy_set_sample_type(INT16_IQ) failed: {ret}. "
+                "Refusing to capture: the device would deliver FLOAT32 "
+                "samples that the int16 path would misread.")
 
         # Read serial number
         self._serial = "unknown"

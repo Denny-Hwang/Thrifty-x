@@ -24,13 +24,15 @@ class _FakeLib:
     AIRSPY_SUCCESS = 0
 
     def __init__(self, serials=(), open_returns_zero=True,
-                 sample_rates=None):
+                 sample_rates=None, sample_type_returns_zero=True):
         self._serials = list(serials)
         self._open_ok = open_returns_zero
         self._sample_rates = sample_rates  # None => API absent
+        self._sample_type_ok = sample_type_returns_zero
         self.opened_with_serial = None
         self.opened_default = False
         self.set_sample_type_called = False
+        self.closed = False
         self.last_set_rate = None
 
     # airspy_open / airspy_open_sn
@@ -81,6 +83,10 @@ class _FakeLib:
     # Functions invoked during open() that we don't care to model.
     def airspy_set_sample_type(self, handle, fmt):
         self.set_sample_type_called = True
+        return 0 if self._sample_type_ok else -1
+
+    def airspy_close(self, handle):
+        self.closed = True
         return 0
 
     def airspy_board_partid_serialno_read(self, handle, info_ptr):
@@ -158,6 +164,28 @@ def test_open_by_index_out_of_range_raises(fake_lib):
     dev = AirspyMiniDevice(device_index=99)
     with pytest.raises(DeviceNotFoundError):
         dev.open()
+
+
+def test_open_raises_when_set_sample_type_fails(monkeypatch):
+    """A failed airspy_set_sample_type must fail-fast, not warn-and-continue.
+
+    Regression for the silent-FLOAT32-fallback bug: if libairspy refuses
+    INT16_IQ the device stays in its default FLOAT32 mode and the int16
+    capture path silently misreads the byte stream, corrupting the
+    spectrum. open() must raise DeviceConfigError and release the handle
+    rather than hand back a device that would capture a ruined session.
+    """
+    fl = _FakeLib(serials=[0x1], sample_type_returns_zero=False)
+    monkeypatch.setattr(am, '_lib', fl, raising=False)
+
+    dev = AirspyMiniDevice()
+    with pytest.raises(DeviceConfigError, match="set_sample_type"):
+        dev.open()
+
+    # The handle must have been closed and the device marked not-open,
+    # so a later close()/__del__ does not double-free or leak it.
+    assert fl.closed is True
+    assert dev._open is False
 
 
 def test_dynamic_sample_rates_query(monkeypatch):
