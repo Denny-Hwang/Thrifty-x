@@ -136,7 +136,7 @@ investigating in separate work:
    (`docs/verification/threshold_sweep.md`) on the same .card files
    used for the original field test once the sub_offset fix is in.
 3. Document per-device recommended thresholds in
-   `docs/user_guide.md` and `_ko.md` only if the sweep shows
+   `docs/user_guide.md` only if the sweep shows
    a consistent device-relative pattern that survives the
    sub_offset fix.
 4. **Do not** touch `settings.py` defaults - the config file is

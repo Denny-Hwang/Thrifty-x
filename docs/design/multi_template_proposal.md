@@ -39,7 +39,7 @@ against each template and keeps the best.
 | `thriftyx/toads_data.py` | `CorrDetectionInfo` gains a `template_id` field. `serialize` / `deserialize` get one extra column. **Breaking change** to .toad/.toads format. |
 | `thrifty/toads_data.py` | Same as above for upstream-compat. |
 | `thriftyx/identify.py` | If `template_id` is present, prefer it over carrier-frequency-based classification. |
-| `docs/user_guide.md` (+ `_ko.md`) | Document the directory layout. |
+| `docs/user_guide.md` | Document the directory layout. |
 
 ### New tests
 
@@ -78,7 +78,7 @@ only*.
 | `thriftyx/soa_estimator.py` | No change. |
 | `thriftyx/toads_data.py` | Same `template_id` column extension as Option 1. |
 | `thriftyx/identify.py` | If `template_id` is set during detection, skip the auto-classifier for that detection. |
-| `docs/user_guide.md` (+ `_ko.md`) | Document the JSON format and `--template-map` flag. |
+| `docs/user_guide.md` | Document the JSON format and `--template-map` flag. |
 
 ### New tests
 
@@ -112,7 +112,7 @@ templates:
 
 **Option 1's cost grows linearly with N.** With Thrifty-X's 2 templates
 (TX1, TX2) it doubles correlation cost. Per the rpi5 deployment
-report (`docs/rpi5_deployment_report_ko.md` §1.1: "single-thread FFT
+report (`docs/rpi5_deployment_report.md` §1.1: "single-thread FFT
 ... 10 MSPS"), the Pi 5 has headroom to absorb 2x correlation cost in
 batch mode but it could matter at real-time edge.
 
@@ -204,4 +204,4 @@ unidentified.
   thresholds).
 - `docs/verification/auto_classify_robustness.md` — explains why
   `--freq-map` is already the recommended production workflow.
-- `docs/rpi5_deployment_report_ko.md` §1.1 — Pi 5 throughput context.
+- `docs/rpi5_deployment_report.md` §1.1 — Pi 5 throughput context.
