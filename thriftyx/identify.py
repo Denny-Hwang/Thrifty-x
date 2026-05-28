@@ -91,17 +91,30 @@ def auto_classify_transmitters(detections):
         detections_by_rx[detection.rxid].append(detection)
 
     edges = {}
+    max_tx = 0
     for rxid, rx_detections in detections_by_rx.items():
         freqs = np.array([d.carrier_info.bin for d in rx_detections])
         rx_edges = detect_transmitter_windows(freqs)
 
-        summary = ("Detected {} transmitter(s) at RX {}:"
-                   .format(len(rx_edges) - 1, rxid))
+        n_tx = len(rx_edges) - 1
+        max_tx = max(max_tx, n_tx)
+        summary = ("Detected {} transmitter(s) at RX {}:".format(n_tx, rxid))
         for i in range(len(rx_edges) - 1):
             summary += " {}-{}".format(rx_edges[i], rx_edges[i+1] - 1)
         print(summary)
 
         edges[rxid] = rx_edges[:-1]
+
+    # Soft nudge: the histogram auto-classifier is a convenience for ad-hoc
+    # runs. For production captures with a known transmitter count, a manual
+    # frequency map (--map) is more robust (e.g. against very uneven per-TX
+    # detection populations). See docs/user_guide.md sec 9.2.1.
+    if max_tx >= 2:
+        logging.warning(
+            "auto-classified %d transmitters from the carrier-bin histogram; "
+            "for production runs with a known TX count, prefer --map "
+            "(see user_guide sec 9.2.1) for more robust classification.",
+            max_tx)
 
     txids = [np.digitize(d.carrier_info.bin, edges[d.rxid]) - 1
              for d in detections]
