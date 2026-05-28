@@ -1,26 +1,21 @@
-"""Reproducer: carrier sub_offset can exceed the [-0.5, 0.5] bound.
+"""Regression tests: carrier sub_offset is bound-clipped to [-0.5, 0.5].
 
-These tests document the current behaviour of the carrier sub-bin
-interpolator (``thrifty.carrier_sync.make_dirichlet_interpolator`` and
-``thriftyx.carrier_sync.make_dirichlet_interpolator``) when applied to
-noisy signals or signals whose spectrum contains energy spread across
-multiple adjacent bins.
+These tests started life (PR #39) as a REPRODUCER for an unbounded
+carrier sub-bin interpolator that returned ``|offset|`` up to ~1.07 on
+synthetic noisy CW, consistent with the field-observed 0.845 from R2.
 
-The Krueger dissertation specifies sub-sample offsets in [-0.5, 0.5)
-(Section 3.2 Eqs 3.4-3.6 for correlation peak, Section 4.4.2 for carrier
-peak). The C++ ``fastdet`` implementation enforces this bound explicitly
-(see ``fastdet/corr_detector.cpp:97-98``). The Python implementation does
-not - ``curve_fit`` is invoked without ``bounds`` and the returned offset
-is propagated unmodified through ``Synchronizer.sync``.
+After the fix landed (``curve_fit(bounds=([0.0, -0.5], [np.inf, 0.5]))``
+in ``thrifty/carrier_sync.py`` and ``thriftyx/carrier_sync.py``), the
+assertions are inverted to assert the bound is now respected. The
+synthetic stress cases are preserved as regression tests so any future
+change that drops the bounds would resurrect the bug and fail here.
 
-Field-test observation that motivated this reproducer:
-    Airspy R2 at 161.3 MHz with ext. 20 dB LNA, internal gain 0/0/0
-    produced carrier offsets up to 0.845 on TX1 bins 101 and 102.
-
-These tests are PASSING expectation-style tests: each one asserts the
-*observed* behaviour. When a fix lands (clipping at +-0.5 or
-``bounds=`` on curve_fit), the appropriate assertions will need to be
-inverted to assert the bound is respected.
+Bound: ``[-0.5, 0.5]`` per Krueger Section 4.4.2 (carrier peak) and
+Section 3.2 Eqs 3.4-3.6 (correlation peak). The C++ ``fastdet``
+implementation enforces the same bound (``fastdet/corr_detector.cpp:97-98``);
+the Python correlation path uses ``soa_estimator._clip_offset`` with
+``max_=0.6`` (slightly wider than spec for parabolic/Gaussian
+interpolators).
 
 Parameters (block_len=65536, carrier_len=10232) match Thrifty-X's
 Airspy R2 configuration at 10 Msps - see ``example/detector_r2.cfg``.
@@ -95,11 +90,12 @@ def test_clean_carrier_offset_just_past_half_wraps_via_argmax(interp_module):
 # ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
-def test_noisy_carrier_can_exceed_half_bin_bound(interp_module):
-    """Under moderate noise, the Dirichlet curve_fit returns |offset| > 0.5.
+def test_noisy_carrier_stays_within_half_bin_bound(interp_module):
+    """Under moderate noise, the bounded curve_fit stays within [-0.5, 0.5].
 
-    This reproduces the field-observed 0.845 carrier offset on TX1 with
-    Airspy R2 + 20 dB external LNA.
+    Pre-fix behaviour: this same sweep produced |offset| up to ~1.07,
+    matching the field-observed 0.845 on R2 TX1. After the bounded
+    curve_fit landed, every trial must respect the spec bound.
 
     Sweep: 200 trials, each with a random true offset in [-0.5, 0.5] and
     additive complex Gaussian noise at amplitude 0.5 (carrier amplitude 1.0).
@@ -107,10 +103,9 @@ def test_noisy_carrier_can_exceed_half_bin_bound(interp_module):
     interp = interp_module.make_dirichlet_interpolator(BLOCK_LEN, CARRIER_LEN)
     rs = np.random.RandomState(42)
 
-    excursions = []
     max_abs_offset = 0.0
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # scipy OptimizeWarning is expected
+        warnings.simplefilter("ignore")
         for _ in range(200):
             true_offset = rs.uniform(-0.5, 0.5)
             signal = _make_carrier(101, true_offset)
@@ -119,24 +114,19 @@ def test_noisy_carrier_can_exceed_half_bin_bound(interp_module):
             fft_mag = np.abs(np.fft.fft(signal + noise))
             peak_idx = _argmax_in_window(fft_mag)
             got = interp(fft_mag, peak_idx)
-            if abs(got) > 0.5:
-                excursions.append(got)
+            assert -0.5 <= got <= 0.5, (
+                "Bound violation: noisy CW trial returned offset {:.6f} "
+                "outside [-0.5, 0.5]. The bounded curve_fit must have been "
+                "removed from {}.".format(got, interp_module.__name__))
             max_abs_offset = max(max_abs_offset, abs(got))
 
-    # Currently expected (bug): at least some trials exceed the half-bin bound.
-    assert len(excursions) > 0, (
-        "Expected the interpolator to return |offset|>0.5 in noisy trials, "
-        "but it never did. If this assertion fails, the bug may already be "
-        "fixed - in that case, invert this assertion to assert that the "
-        "interpolator always stays within [-0.5, 0.5]."
-    )
-    # And the largest excursion is similar in magnitude to the field-observed
-    # 0.845 value. Document the headroom rather than asserting an exact value.
-    assert max_abs_offset > 0.6, (
-        "Largest |offset| was {:.4f}; expected something close to the "
-        "field-observed 0.845 (with this seed/noise/parameters the "
-        "reference run produces max |offset| ~ 1.02).".format(max_abs_offset)
-    )
+    # Sanity: the algorithm is actually exercising its full range, not
+    # stuck at zero - we want to confirm the bound is active, not
+    # vacuous.
+    assert max_abs_offset > 0.3, (
+        "All offsets stayed within +/-0.3; the bound assertion above is "
+        "vacuous. Check that the noise injection is actually perturbing "
+        "the curve_fit away from the true offset.")
 
 
 @pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
@@ -163,13 +153,13 @@ def test_dual_bin_equal_peaks_stays_at_boundary(interp_module):
 
 
 @pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
-def test_dual_bin_plus_noise_exceeds_bound(interp_module):
-    """TX1-like pattern (energy split across bins 101 and 102) + noise
-    pushes the carrier interpolator past |0.5|.
+def test_dual_bin_plus_noise_stays_within_bound(interp_module):
+    """TX1-like pattern (energy split across bins 101+102) + noise still
+    yields ``|offset| <= 0.5``.
 
     This is the closest synthetic analogue to the observed BatRF TX1
-    behaviour: carrier energy bridging two adjacent bins together with
-    realistic noise.
+    behaviour. The bounded curve_fit must keep every trial inside the
+    spec bound even under the dual-bin + noise stressor.
     """
     interp = interp_module.make_dirichlet_interpolator(BLOCK_LEN, CARRIER_LEN)
     freq1 = 101.0 * CARRIER_LEN / BLOCK_LEN
@@ -178,11 +168,10 @@ def test_dual_bin_plus_noise_exceeds_bound(interp_module):
     c1 = np.exp(2j * np.pi * arr / CARRIER_LEN * freq1)
     c2 = np.exp(2j * np.pi * arr / CARRIER_LEN * freq2)
 
-    excursions = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         rs = np.random.RandomState(7)
-        for _ in range(200):
+        for trial in range(200):
             ratio = rs.uniform(0.7, 1.3)
             phase = rs.uniform(0, 2 * np.pi)
             sig_t = c1 + ratio * c2 * np.exp(1j * phase)
@@ -191,13 +180,10 @@ def test_dual_bin_plus_noise_exceeds_bound(interp_module):
             fft_mag = np.abs(np.fft.fft(signal + noise))
             peak_idx = _argmax_in_window(fft_mag)
             got = interp(fft_mag, peak_idx)
-            if abs(got) > 0.5:
-                excursions.append(got)
-
-    assert len(excursions) > 0, (
-        "Expected dual-bin + noise to push the interpolator past |0.5| in "
-        "at least one trial out of 200; got zero."
-    )
+            assert -0.5 <= got <= 0.5, (
+                "Trial {}: dual-bin+noise returned offset {:.6f} outside "
+                "[-0.5, 0.5] from {}.".format(trial, got,
+                                                interp_module.__name__))
 
 
 # ----------------------------------------------------------------------

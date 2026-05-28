@@ -186,7 +186,11 @@ def make_dirichlet_interpolator(block_len, carrier_len,
         xdata = np.array(np.arange(-(width//2), width//2+1))
         ydata = fft_mag[peak_idx + xdata]
         initial_guess = (fft_mag[peak_idx], 0)
-        popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess)
+        # bounds: amplitude >= 0, sub-bin offset in [-0.5, 0.5] per the
+        # Krueger Section 4.4.2 spec. Without bounds, curve_fit on noisy
+        # data can return arbitrarily-large offsets.
+        popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess,
+                            bounds=([0.0, -0.5], [np.inf, 0.5]))
         amplitude, fit_offset = popt
         if return_amplitude:
             return amplitude, fit_offset
