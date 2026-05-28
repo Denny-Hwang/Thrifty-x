@@ -15,8 +15,8 @@ add_definitions(-Wno-unused-parameter)
 add_definitions(-Wno-unused)
 add_definitions(-Wsign-compare)
 
-# use c++11
-add_definitions(-std=c++11)
+# use GNU C++17 (required for VOLK headers with hex-float literals)
+add_definitions(-std=gnu++17)
 
 # the version number
 set(VERSION_INFO_MAJOR_VERSION 0)
@@ -35,6 +35,11 @@ find_package(PkgConfig)
 find_package(Fastcard)
 find_package(Volk)
 
+# fastcapture is a STATIC archive, so its own dependencies (libairspy,
+# fftw3f) must be linked explicitly by every consumer.
+pkg_check_modules(AIRSPY REQUIRED libairspy)
+pkg_check_modules(FFTW3F REQUIRED fftw3f)
+
 if(NOT FASTCARD_FOUND)
     message(FATAL_ERROR "Fastcard required to compile fastdet")
 endif()
@@ -46,6 +51,8 @@ endif()
 include_directories(
     ${FASTCARD_INCLUDE_DIRS}
     ${VOLK_INCLUDE_DIRS}
+    ${AIRSPY_INCLUDE_DIRS}
+    ${FFTW3F_INCLUDE_DIRS}
 )
 
 # configure a header file to pass some of the CMake settings to the source code
@@ -84,6 +91,8 @@ add_library(fastdet
 target_link_libraries (fastdet
                        ${FASTCARD_LIBRARIES}
                        ${VOLK_LIBRARIES}
+                       ${AIRSPY_LIBRARIES}
+                       ${FFTW3F_LIBRARIES}
                        m)
 
 add_executable(fastdet_bin fastdet.cpp)

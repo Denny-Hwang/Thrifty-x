@@ -40,26 +40,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # fastdet is temporarily disabled: it depends on fastcapture being
-        # installed at /usr/include/fastcard/<header>.h and linked as
-        # libfastcard.a, but the current fastcapture install layout uses
-        # libfastcapture.a and a flat header layout. Restoring the fastdet
-        # build needs a coordinated rename across:
-        #   - fastcapture/CMakeLists.txt install rules (headers and library)
-        #   - fastdet/cmake/Modules/FindFastcard.cmake (library/header names)
-        #   - the workflow (build+install fastcapture before configuring fastdet)
-        # Tracked as a separate follow-up. fastcapture stays in the matrix
-        # so Airspy-side C changes still get smoke-built.
-        target: [fastcapture]
+        target: [fastcapture, fastdet]
     steps:
       - uses: actions/checkout@v4
       - name: Install C dependencies
-        # libvolk-dev replaces libvolk2-dev on Ubuntu Noble (24.04). The pkg-
-        # config interface (`pkg-config volk`) is unchanged, so the CMake
-        # configuration still works as-is.
+        # libvolk-dev replaces libvolk2-dev on Ubuntu Noble (24.04); fall back
+        # to the old name on older runners. The pkg-config interface
+        # (`pkg-config volk`) is unchanged, so the CMake configuration works
+        # either way.
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config libfftw3-dev libvolk-dev libairspy-dev
+          sudo apt-get install -y cmake build-essential pkg-config libfftw3-dev libairspy-dev
+          if apt-cache show libvolk-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libvolk-dev
+          else
+            sudo apt-get install -y libvolk2-dev
+          fi
+      - name: Build and install fastcapture (fastdet link dependency)
+        # fastdet links the fastcapture static archive and includes its
+        # headers, so fastcapture must be installed to the prefix first.
+        if: matrix.target == 'fastdet'
+        run: |
+          cmake -S fastcapture -B build/fastcapture
+          cmake --build build/fastcapture --config Release -j
+          sudo cmake --install build/fastcapture --prefix /usr/local
       - name: Configure ${{ matrix.target }}
         run: cmake -S ${{ matrix.target }} -B build/${{ matrix.target }}
       - name: Build ${{ matrix.target }}
@@ -67,3 +71,4 @@ jobs:
       - name: Smoke-check binary output
         run: |
           if [ -f build/${{ matrix.target }}/fastcapture ]; then build/${{ matrix.target }}/fastcapture --help >/dev/null || true; fi
+          if [ -f build/${{ matrix.target }}/fastdet ]; then build/${{ matrix.target }}/fastdet --help >/dev/null || true; fi

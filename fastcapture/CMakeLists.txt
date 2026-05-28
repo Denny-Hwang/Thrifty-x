@@ -56,7 +56,11 @@ add_library(fastcapture_lib STATIC ${FASTCAPTURE_SOURCES})
 # Output name on disk: libfastcapture.a so the pkg-config "-lfastcapture"
 # directive resolves correctly.  (The target *name* stays "fastcapture_lib"
 # to disambiguate from the executable target below.)
-set_target_properties(fastcapture_lib PROPERTIES OUTPUT_NAME fastcapture)
+# POSITION_INDEPENDENT_CODE: fastdet links this static archive into its
+# shared library (libfastdet.so), which requires the objects to be -fPIC.
+set_target_properties(fastcapture_lib PROPERTIES
+    OUTPUT_NAME fastcapture
+    POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(fastcapture_lib
     ${AIRSPY_LIBRARIES}
     ${FFTW3F_LIBRARIES}
@@ -73,7 +77,17 @@ target_link_libraries(fastcapture_bin fastcapture_lib)
 # Installation
 install(TARGETS fastcapture_bin DESTINATION bin)
 install(TARGETS fastcapture_lib DESTINATION lib)
-install(FILES fastcard.h DESTINATION include)
+install(FILES
+    fastcard.h
+    cardet.h
+    rawconv.h
+    reader.h
+    fft.h
+    fargs.h
+    fargs_type.h
+    parse.h
+    lib/base64.h
+    DESTINATION include)
 
 # pkg-config file
 configure_file(

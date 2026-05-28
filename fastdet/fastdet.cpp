@@ -12,8 +12,8 @@
 
 #include <argp.h>
 
-#include <fastcard/parse.h>
-#include <fastcard/base64.h>
+#include <parse.h>
+#include <base64.h>
 
 #include "corr_detector.h"
 #include "configuration.h"
