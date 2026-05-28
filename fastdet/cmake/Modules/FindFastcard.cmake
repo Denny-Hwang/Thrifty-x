@@ -1,9 +1,9 @@
 find_package(PkgConfig)
-pkg_check_modules (PC_FASTCARD librtlsdr)
+pkg_check_modules (PC_FASTCARD fastcapture)
 
 find_path(
     FASTCARD_INCLUDE_DIRS
-    NAMES fastcard/fastcard.h
+    NAMES fastcard.h
     HINTS ${PC_FASTCARD_INCLUDE_DIRS}
     PATHS /usr/include
           /usr/local/include
@@ -11,7 +11,7 @@ find_path(
 
 find_library(
     FASTCARD_LIBRARIES
-    NAMES fastcard
+    NAMES fastcapture
     HINTS ${PC_FASTCARD_LIBRARY_DIRS}
     PATHS /usr/lib
           /usr/local/lib
