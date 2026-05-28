@@ -1,11 +1,11 @@
 # c-build CI failure investigation
 
-**Status:** Partial fix landed. The `fastcapture` matrix entry now
-builds cleanly on Ubuntu Noble. The `fastdet` matrix entry has a
-deeper structural issue (header layout + library naming mismatch
-between what fastcapture installs and what fastdet expects) and has
-been temporarily dropped from the matrix with a `TODO` comment in the
-workflow. Restoring it is tracked as separate follow-up work.
+**Status:** RESOLVED. Both `fastcapture` and `fastdet` now build
+cleanly on Ubuntu Noble and both are back in the CI matrix. The
+`fastcapture` fixes landed first (PR #45); the `fastdet` integration
+fix landed second (this report's §7), salvaged from the approach in
+the superseded PR #38 and completed (PR #38 never actually compiled
+the C link).
 
 ---
 
@@ -124,16 +124,66 @@ Usage: fastcapture ...
 
 ## 3. Follow-up
 
-- Restore `fastdet` to the CI matrix once the integration mismatch in
-  §1.4 is fixed. Suggested sequence:
-  1. Audit which headers fastdet actually needs from fastcapture
-     (`grep -h '#include <fastcard/' fastdet/*.cpp fastdet/*.h`).
-  2. Update `fastcapture/CMakeLists.txt` to install those headers
-     under `include/fastcard/`.
-  3. Rewrite `fastdet/cmake/Modules/FindFastcard.cmake` to find the
-     installed fastcapture artifacts.
-  4. Update the workflow to install fastcapture before configuring
-     fastdet.
 - Check whether `libairspy-dev` is in the `universe` repo on the GitHub
   Actions Noble runner; if `apt-get update` fails to find it again,
   add `sudo add-apt-repository -y universe` before the install step.
+
+## 7. fastdet integration fix (RESOLVED)
+
+The §1.4 mismatch is now fixed. fastdet builds against an installed
+fastcapture. Six coordinated changes (verified locally end-to-end):
+
+1. **Header install list** (`fastcapture/CMakeLists.txt`): install the
+   headers fastdet actually consumes — `fastcard.h`, `cardet.h`,
+   `rawconv.h`, `reader.h`, `fft.h`, `fargs.h`, `fargs_type.h`,
+   `parse.h`, `lib/base64.h` — flat under `include/` (no `fastcard/`
+   subdir).
+2. **Position-independent fastcapture** (`fastcapture/CMakeLists.txt`):
+   `set_target_properties(fastcapture_lib PROPERTIES
+   POSITION_INDEPENDENT_CODE ON)`. fastdet links the static archive
+   into the **shared** `libfastdet.so`, which requires `-fPIC` objects;
+   without this the link fails with `relocation R_X86_64_PC32 ...
+   recompile with -fPIC`.
+3. **FindFastcard** (`fastdet/cmake/Modules/FindFastcard.cmake`):
+   `pkg_check_modules(PC_FASTCARD fastcapture)`, find `fastcard.h`
+   (flat) and library `fastcapture` (was the upstream-residual
+   `librtlsdr` / `fastcard`).
+4. **Include paths** (`fastdet/fastcard_wrappers.h`, `fastdet/fastdet.cpp`):
+   `<fastcard/X.h>` -> `<X.h>` for `fastcard.h`, `fargs.h`, `fft.h`,
+   `parse.h`, `base64.h`.
+5. **Transitive link deps** (`fastdet/CMakeLists.txt`): a static
+   archive does not carry its own dependencies, so fastdet must link
+   `libairspy` and `fftw3f` explicitly (added via
+   `pkg_check_modules(AIRSPY REQUIRED libairspy)` +
+   `pkg_check_modules(FFTW3F REQUIRED fftw3f)` and the corresponding
+   include dirs + link libraries). Without this the executable link
+   fails with undefined `airspy_*` / `fftwf_*` references.
+6. **C++ standard** (`fastdet/CMakeLists.txt`): `-std=c++11` ->
+   `-std=gnu++17` (current VOLK headers use hex-float literals).
+
+CI (`.github/workflows/ci.yml`): `fastdet` is back in the matrix; a
+`matrix.target == 'fastdet'` step builds and `cmake --install`s
+fastcapture to `/usr/local` before configuring fastdet. `/usr/local`
+is on the default CMake/pkg-config search path, so no
+`-DCMAKE_PREFIX_PATH` is needed.
+
+### Verified locally on Noble (gcc 13.3.0, cmake 3.28)
+
+```
+$ cmake -S fastcapture -B build/fastcapture && \
+  cmake --build build/fastcapture --config Release -j && \
+  sudo cmake --install build/fastcapture --prefix /usr/local
+$ cmake -S fastdet -B build/fastdet && \
+  cmake --build build/fastdet --config Release -j
+...
+[100%] Built target fastdet_bin   # build/fastdet/fastdet + libfastdet.so
+```
+
+### Note on PR #38
+
+The fastdet approach here was salvaged from the (closed, superseded)
+PR #38, but completed: #38 fixed items 1, 3, 4(partial), 6 yet its
+test plan only ran the Python sub_offset test, so it never compiled
+the C link and missed the `-fPIC` (item 2), the `fastdet.cpp`
+includes (rest of item 4), and the transitive `libairspy`/`fftw3f`
+link (item 5). All are included here.
