@@ -31,9 +31,12 @@ import warnings
 import numpy as np
 import pytest
 
-from thrifty import carrier_sync as upstream_cs
 from thriftyx import carrier_sync as thriftyx_cs
-from thrifty.soa_estimator import _clip_offset
+from thriftyx.soa_estimator import _clip_offset
+
+# The shipped package is ``thriftyx``. The legacy ``thrifty`` package is a
+# frozen upstream reference (not packaged, not imported by the active suite)
+# - see README. These tests therefore exercise ``thriftyx`` only.
 
 
 BLOCK_LEN = 65536
@@ -58,7 +61,7 @@ def _argmax_in_window(fft_mag, window=(7, 124)):
 # These are EXPECTED to keep passing both before and after a fix lands.
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
+@pytest.mark.parametrize("interp_module", [thriftyx_cs])
 @pytest.mark.parametrize("true_offset", [-0.49, -0.25, 0.0, 0.25, 0.49])
 def test_clean_carrier_offset_within_bounds(interp_module, true_offset):
     """A clean CW carrier produces an offset within [-0.5, 0.5]."""
@@ -71,7 +74,7 @@ def test_clean_carrier_offset_within_bounds(interp_module, true_offset):
     assert -0.5 <= got <= 0.5
 
 
-@pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
+@pytest.mark.parametrize("interp_module", [thriftyx_cs])
 def test_clean_carrier_offset_just_past_half_wraps_via_argmax(interp_module):
     """Offsets just beyond +/-0.5 are absorbed by argmax picking the neighbour bin."""
     signal = _make_carrier(101, 0.51)
@@ -89,7 +92,7 @@ def test_clean_carrier_offset_just_past_half_wraps_via_argmax(interp_module):
 # under realistic noise it returns |offset| > 0.5.
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
+@pytest.mark.parametrize("interp_module", [thriftyx_cs])
 def test_noisy_carrier_stays_within_half_bin_bound(interp_module):
     """Under moderate noise, the bounded curve_fit stays within [-0.5, 0.5].
 
@@ -129,7 +132,7 @@ def test_noisy_carrier_stays_within_half_bin_bound(interp_module):
         "the curve_fit away from the true offset.")
 
 
-@pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
+@pytest.mark.parametrize("interp_module", [thriftyx_cs])
 def test_dual_bin_equal_peaks_stays_at_boundary(interp_module):
     """Two coherent carriers at adjacent bins do NOT by themselves break the bound.
 
@@ -152,7 +155,7 @@ def test_dual_bin_equal_peaks_stays_at_boundary(interp_module):
     assert abs(got) > 0.4  # but right at the edge
 
 
-@pytest.mark.parametrize("interp_module", [upstream_cs, thriftyx_cs])
+@pytest.mark.parametrize("interp_module", [thriftyx_cs])
 def test_dual_bin_plus_noise_stays_within_bound(interp_module):
     """TX1-like pattern (energy split across bins 101+102) + noise still
     yields ``|offset| <= 0.5``.

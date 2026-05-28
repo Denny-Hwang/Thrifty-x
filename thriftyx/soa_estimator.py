@@ -131,8 +131,12 @@ class SoaEstimator:
         # alternative: signal_energy = np.sum(np.abs(np.fft.ifft(fft))**2)
         signal_corr_energy = signal_energy * self.template_energy
 
-        # Subtract twice the peak power to compensate for both the correlation
-        # peak's energy and the energy of the unmodulated carrier.
+        # Subtract the correlation peak's power from the total despread
+        # energy to estimate the noise floor. Unlike the carrier-FFT noise
+        # estimate (carrier_detect._estimate_noise), which subtracts *twice*
+        # the peak to also remove the unmodulated-carrier line, here the
+        # carrier has already been moved to DC and removed by the frequency
+        # shift, so only the single correlation peak is subtracted.
         peak_power = peak_mag**2
         noise_power = max(0, (signal_corr_energy - peak_power) / len(fft))
         noise_rms = np.sqrt(noise_power)
