@@ -189,6 +189,17 @@ def validate_config(config: dict) -> list[str]:
                 warnings.append(
                     f"gain_mode='{gain_mode}' ignores lna_agc / mixer_agc; "
                     "use gain_mode='manual' to combine AGC with manual gains.")
+            # Per-stage indices are resolved by libairspy's combined-gain
+            # ladder in preset modes; warn if the user left non-default
+            # per-stage values that will be silently ignored.
+            stray_stages = [s for s in ('lna', 'mixer', 'vga')
+                            if int(config.get(f'{s}_gain', 0) or 0) != 0]
+            if stray_stages:
+                warnings.append(
+                    f"gain_mode='{gain_mode}' ignores per-stage gains "
+                    f"{stray_stages}; libairspy resolves LNA/Mixer/VGA from "
+                    "combined_gain. Use gain_mode='manual' to set stages "
+                    "directly.")
 
     # 8. bit_depth must match device type
     bit_depth = config.get('bit_depth')
