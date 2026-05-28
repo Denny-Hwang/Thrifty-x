@@ -293,34 +293,43 @@ Combined three-stage maximum is ~65 dB.
 
 ### 4.4 Gain Modes (manual / linearity / sensitivity)
 
-libairspy exposes three preset modes; Thrifty-X surfaces them via
+libairspy exposes three gain configurations; Thrifty-X surfaces them via
 `--gain-mode`:
 
 | Mode | What it does | When to use |
 |---|---|---|
-| **manual** *(default)* | Apply LNA, Mixer, VGA indices directly. | Full control, debugging. |
-| **linearity** | Lookup table that backs off the LNA first while keeping VGA — minimizes IMD. | Strong-signal environments (urban, near transmitters). |
-| **sensitivity** | Lookup table that holds LNA high and trims VGA first — minimizes noise figure. | Weak-signal environments (rural, distant TX). |
+| **manual** *(default)* | Apply LNA, Mixer, VGA indices directly. | Full control, debugging, external-LNA deployments. |
+| **linearity** | libairspy resolves all three stages from one index — backs off the LNA first while keeping VGA — minimizes IMD. | Strong-signal environments (urban, near transmitters). |
+| **sensitivity** | libairspy resolves all three stages from one index — holds LNA high and trims VGA first — minimizes noise figure. | Weak-signal environments (rural, distant TX). |
 
 In `linearity` and `sensitivity` modes, control collapses to a single
-**combined-gain** value 0–21 (0 = max gain, 21 = min). Excerpts from
-libairspy's actual lookup tables:
+**`--combined-gain`** index `0–21`. Thrifty-X delegates these modes
+directly to `airspy_set_linearity_gain()` / `airspy_set_sensitivity_gain()`
+(it does **not** re-derive the stage ladder in Python), so the mapping is
+exactly libairspy's.
 
-```
-Linearity mode (combined index → LNA, Mixer, VGA):
-   0:  14, 12, 14    (max gain)
-   5:  10, 10,  9
-  10:   8,  7,  5
-  15:   0,  3,  1
-  21:   0,  0,  0    (min gain)
+**Two consequences you must know** (verified against
+`airspy/airspyone_host`, `libairspy/src/airspy.c`):
 
-Sensitivity mode:
-   0:  14, 12, 13    (max gain)
-   5:  14, 10,  8
-  10:  12,  7,  5
-  15:   7,  2,  4
-  21:   0,  0,  4    (min gain)
-```
+1. **`combined-gain 0` is the *minimum*, `21` is the *maximum*.**
+   libairspy inverts the index internally
+   (`value = GAIN_COUNT - 1 - value;`, `GAIN_COUNT == 22`), so the
+   user-facing `0` selects the lowest-gain row of the ladder. This is the
+   opposite of what the raw lookup-table order suggests.
+
+2. **Preset modes force AGC off and cannot reach a true all-zero internal
+   gain.** Both functions call `airspy_set_mixer_agc(device, 0)` and
+   `airspy_set_lna_agc(device, 0)`, so `--lna-agc` / `--mixer-agc` are
+   ignored (Thrifty-X warns if you set them with a preset). And the
+   minimum-gain row is `LNA=0, Mixer=0, VGA=4` — the VGA floor is **4**,
+   not 0. Only **manual `0/0/0`** reaches `LNA=0, Mixer=0, VGA=0`.
+
+> **Recommendation for external-LNA deployments (e.g. BatRF, +20 dB
+> external LNA at 161.3 MHz):** use **manual mode with `LNA=0 Mixer=0
+> VGA=0`** to keep the internal front-end at its true hardware minimum and
+> avoid overdriving the ADC. The preset modes are offered as a convenience
+> for single-knob tuning when no external amplifier is present; they
+> cannot reach the internal minimum because of the VGA=4 floor above.
 
 ### 4.5 Gain-Tuning Procedure
 
