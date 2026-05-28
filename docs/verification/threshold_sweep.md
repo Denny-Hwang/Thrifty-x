@@ -101,7 +101,7 @@ Once §2 is populated, fill this in:
 - [ ] **If the plateaus are the same threshold**, the default `15*snr`
       is fine and the user_guide does not need a device-specific note.
 - [ ] **If R2 plateaus at a lower threshold than RTL**, document the
-      recommended R2 threshold in `docs/user_guide.md` and `_ko.md`
+      recommended R2 threshold in `docs/user_guide.md`
       (no code change). Keep the default at `15*snr`.
 - [ ] **If R2 plateaus at a HIGHER threshold than RTL** (unlikely given
       R2's higher SNR), reopen this investigation - that result would

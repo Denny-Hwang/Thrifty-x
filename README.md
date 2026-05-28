@@ -35,14 +35,16 @@ Version: see `thriftyx/__init__.py` (`__version__`).
 
 ## Documentation
 
-| Document | Audience | Language |
-|----------|----------|----------|
-| [docs/user_guide.md](docs/user_guide.md) | End users — install, hardware, gain tuning, template extraction, config reference, command reference, troubleshooting | English |
-| [docs/user_guide_ko.md](docs/user_guide_ko.md) | End users (Korean) | 한국어 |
-| [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation | 한국어 |
-| [docs/rpi5_deployment_report_ko.md](docs/rpi5_deployment_report_ko.md) | Pi 5 deployment analysis report | 한국어 |
-| [docs/rpi5_runbook_ko.md](docs/rpi5_runbook_ko.md) | Pi 5 operational runbook | 한국어 |
-| [docs/rpi5_validation_checklist_ko.md](docs/rpi5_validation_checklist_ko.md) | Pi 5 acceptance/validation checklist | 한국어 |
+All documentation is in English.
+
+| Document | Audience |
+|----------|----------|
+| [docs/user_guide.md](docs/user_guide.md) | End users — install, hardware, gain tuning (incl. `--gain-mode`), template extraction, config reference, threshold tuning, command reference, troubleshooting |
+| [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation |
+| [docs/rpi5_deployment_report.md](docs/rpi5_deployment_report.md) | Pi 5 deployment analysis report |
+| [docs/rpi5_runbook.md](docs/rpi5_runbook.md) | Pi 5 operational runbook |
+| [docs/rpi5_validation_checklist.md](docs/rpi5_validation_checklist.md) | Pi 5 acceptance/validation checklist |
+| [docs/verification/](docs/verification/) | Engineering verification reports (sample format, sub-offset bounds, gain mode, threshold path, auto-classify) |
 
 ## What's Changed from Original Thrifty
 
@@ -58,7 +60,7 @@ Version: see `thriftyx/__init__.py` (`__version__`).
 | Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` + `setup.py`; dynamic version |
-| Tests | Minimal | 25 test modules / 219 tests; lint + type-check + pytest gated in CI |
+| Tests | Minimal | 31 test modules / 300+ tests; lint + type-check + pytest gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -400,11 +402,11 @@ Thrifty-X ships with a complete Pi 5 + Bookworm deployment layout under
 | `rpi/ntp-after-online.{service,sh}` | Force NTP sync after network is up |
 | `rpi/pyFFTW-0.9.2-no-fftwl.patch` | Build patch for `pyfftw` on Pi 5 (no `long double` FFTW) |
 
-Korean operational documents live under `docs/`:
+Operational documents live under `docs/`:
 
-- [`docs/rpi5_deployment_report_ko.md`](docs/rpi5_deployment_report_ko.md) — design analysis
-- [`docs/rpi5_runbook_ko.md`](docs/rpi5_runbook_ko.md) — day-to-day operations
-- [`docs/rpi5_validation_checklist_ko.md`](docs/rpi5_validation_checklist_ko.md) — acceptance checklist
+- [`docs/rpi5_deployment_report.md`](docs/rpi5_deployment_report.md) — design analysis
+- [`docs/rpi5_runbook.md`](docs/rpi5_runbook.md) — day-to-day operations
+- [`docs/rpi5_validation_checklist.md`](docs/rpi5_validation_checklist.md) — acceptance checklist
 
 The capture loop uses `pyfftw` when available (install with
 `pip install -e ".[fft]"`) and a batched `fwrite`/flush strategy to

@@ -1,227 +1,228 @@
-# Airspy IQ Format 진단 보고서
+# Airspy IQ Format Diagnostic Report
 
-- 날짜: 2026-05-14
-- 작업 디렉토리: `/home/user/Thrifty-x`
-- 브랜치: `claude/diagnose-airspy-iq-format-BZzTO`
-- 산출물: `diag/` 디렉토리 (스크립트, 합성 .card 파일, FFT 플롯, 텍스트 로그 포함)
-- 변경 사항: **코드 수정 없음** (진단 전용)
+- Date: 2026-05-14
+- Working directory: `/home/user/Thrifty-x`
+- Branch: `claude/diagnose-airspy-iq-format-BZzTO`
+- Artifacts: `diag/` directory (includes scripts, synthetic .card files, FFT plots, text logs)
+- Changes: **No code modifications** (diagnostic only)
 
-> **UPDATE 2026-05-14 (실데이터 결과 반영)** — 실제 R2 캡처
-> (`gs_r2_161_3_20260513_152100_TX2_Gain000/b000/capture.card`) 로 가설을 검증한 결과,
-> **시나리오 1-bis (FLOAT32 silent fallback) 는 이 캡처에서 확인되지 않았다**.
-> 자세한 내용은 본 보고서 끝의 **§9 Phase E — 실데이터 재검증** 섹션 참조.
-> 본문 §1-§5 는 합성 컨트롤 기준 원본 분석을 그대로 보존하며, §9 가 우선한다.
-
----
-
-## 0. 환경 / 데이터 가용성 노트
-
-- 프롬프트가 명시한 R2 캡처 디렉토리 `~/github/Thrifty-x/example/gs_r2_161_3_20260513_153826` 는
-  현재 워크스페이스(`/home/user/Thrifty-x` 및 `~`)에 **존재하지 않음**.
-- R2 USB 디바이스 또한 이 환경에서는 연결되어 있지 않음 (`airspy_info` / `lsusb` 결과 없음).
-- 따라서 Phase B-1 / B-2 / B-3 의 *실측 데이터* 부분은 수행할 수 없었음. 대신
-  - 분석 스크립트(`diag/check_card_format.py`, `diag/check_fft_dualbin.py`,
-    `diag/expected_carrier_bin.py`) 를 작성하여 디스크에 저장.
-  - 프로젝트 코드(`thriftyx.block_data.complex_to_raw` 등)를 그대로 사용해
-    **두 종류의 합성 .card 파일**을 생성하고, 이를 컨트롤로 분석함:
-    - `diag/synth_int16_iq.card` — 정상 INT16_IQ 경로의 결과물 (현재 코드가 emit 하는 형식).
-    - `diag/synth_float32_misread.card` — 가설 "libairspy 가 FLOAT32_IQ 로 동작했지만
-      HAL 이 바이트 스트림을 그대로 디스크에 INT16 로 라벨링했다" 시나리오의 결과물.
-- 실제 R2 캡처 파일이 확보되는 즉시 같은 스크립트를 `<path/to/file.card>` 인자로 재실행하면
-  본 보고서의 모든 판정 셀이 자동으로 채워진다.
+> **UPDATE 2026-05-14 (reflecting real-data results)** — Validating the hypothesis with an actual R2 capture
+> (`gs_r2_161_3_20260513_152100_TX2_Gain000/b000/capture.card`),
+> **Scenario 1-bis (FLOAT32 silent fallback) was NOT confirmed in this capture**.
+> For details see the **§9 Phase E — Real-data Re-verification** section at the end of this report.
+> The body §1-§5 preserves the original analysis based on the synthetic controls as-is, and §9 takes precedence.
 
 ---
 
-## 1. Phase A 결과: 코드 분석
+## 0. Environment / Data Availability Note
 
-세부 표는 `diag/phase_a_code_analysis.md` 참고. 요약:
+- The R2 capture directory specified by the prompt, `~/github/Thrifty-x/example/gs_r2_161_3_20260513_153826`,
+  **does not exist** in the current workspace (`/home/user/Thrifty-x` and `~`).
+- The R2 USB device is also not connected in this environment (no `airspy_info` / `lsusb` results).
+- Therefore the *measured-data* portions of Phase B-1 / B-2 / B-3 could not be performed. Instead:
+  - Analysis scripts (`diag/check_card_format.py`, `diag/check_fft_dualbin.py`,
+    `diag/expected_carrier_bin.py`) were written and saved to disk.
+  - Using project code (`thriftyx.block_data.complex_to_raw`, etc.) directly,
+    **two kinds of synthetic .card files** were generated and analyzed as controls:
+    - `diag/synth_int16_iq.card` — the output of the normal INT16_IQ path (the format the current code emits).
+    - `diag/synth_float32_misread.card` — the output of the hypothetical "libairspy operated as FLOAT32_IQ but
+      the HAL labeled the byte stream on disk as INT16 verbatim" scenario.
+- As soon as an actual R2 capture file is obtained, re-running the same scripts with a `<path/to/file.card>` argument
+  will automatically populate all the verdict cells in this report.
 
-| 항목 | 결과 |
+---
+
+## 1. Phase A Results: Code Analysis
+
+See `diag/phase_a_code_analysis.md` for the detailed table. Summary:
+
+| Item | Result |
 |------|------|
-| `airspy_set_sample_type` 호출 여부 | **있음** — Python HAL (`airspy_mini.py:361-364`) 과 C fastcapture (`airspy_reader.c:201-202`) 양쪽 모두 `AIRSPY_SAMPLE_INT16_IQ`(=2) 로 호출. |
-| 콜백 데이터 dtype | **`int16`** (Python: `np.frombuffer(..., dtype=np.int16)`; C: `int16_t *`) — 일관됨. |
-| `raw_to_complex(bit_depth=12)` 정규화 | `floats / 32768.0` (full int16 범위 가정). `airspy_reader.c` 의 주석 *"scaled to full int16 range by libairspy"* 와 일치. |
-| `.card` v2 저장 dtype | int16 IQ interleaved, base64. 헤더 `#v2 bit_depth=12 sample_rate=…`. |
-| 캡처 경로 | `thriftyx capture` → `_capture_airspy()` (`airspy_capture.py:326`) → Python HAL. **C fastcapture 는 Airspy 경로에서 호출되지 않음.** |
-| 표면적 불일치 | **없음**. 세 층(설정, 콜백, 정규화)이 모두 INT16_IQ 를 가정. |
+| Whether `airspy_set_sample_type` is called | **Yes** — both the Python HAL (`airspy_mini.py:361-364`) and the C fastcapture (`airspy_reader.c:201-202`) call it with `AIRSPY_SAMPLE_INT16_IQ`(=2). |
+| Callback data dtype | **`int16`** (Python: `np.frombuffer(..., dtype=np.int16)`; C: `int16_t *`) — consistent. |
+| `raw_to_complex(bit_depth=12)` normalization | `floats / 32768.0` (assumes full int16 range). Matches the `airspy_reader.c` comment *"scaled to full int16 range by libairspy"*. |
+| `.card` v2 storage dtype | int16 IQ interleaved, base64. Header `#v2 bit_depth=12 sample_rate=…`. |
+| Capture path | `thriftyx capture` → `_capture_airspy()` (`airspy_capture.py:326`) → Python HAL. **The C fastcapture is not called on the Airspy path.** |
+| Surface-level inconsistency | **None**. All three layers (configuration, callback, normalization) assume INT16_IQ. |
 
-**잠재 약점 1 (강한 후보):** `airspy_mini.py:361-364`
+**Potential weakness 1 (strong candidate):** `airspy_mini.py:361-364`
 ```python
 ret = _lib.airspy_set_sample_type(
     self._handle, ctypes.c_int(AIRSPY_SAMPLE_INT16_IQ))
 if ret != 0:
     logger.warning("airspy_set_sample_type() failed: %d", ret)
 ```
-실패 시 **경고만 띄우고 진행**한다. libairspy 가 그 디바이스에 대해 sample_type 설정에 실패한 경우
-기본값(`AIRSPY_SAMPLE_FLOAT32_IQ` = 0) 으로 데이터가 들어오며, 콜백은 이를 int16 로 reinterpret 한다.
-4 byte float32 IQ → 2 byte int16 IQ 로 잘못 잘려서 들어가므로 스펙트럼이 손상된다.
+On failure it **only logs a warning and proceeds**. If libairspy fails to set the sample_type for that device,
+data comes in at the default value (`AIRSPY_SAMPLE_FLOAT32_IQ` = 0), and the callback reinterprets it as int16.
+4-byte float32 IQ → 2-byte int16 IQ gets incorrectly truncated, so the spectrum is corrupted.
 
-**잠재 약점 2 (약한 후보):** `airspy_set_packing(True)` 호출이 일부 libairspy 빌드에서
-sample_type 내부 상태를 리셋한다는 사례가 알려져 있음. 다만 `example/detector_r2.cfg` 에는
-`packing` 키가 없으므로 기본값(`False`)이 적용될 가능성이 높아 이 경로는 가능성이 낮다.
+**Potential weakness 2 (weak candidate):** There are known cases where calling `airspy_set_packing(True)`
+resets the internal sample_type state in some libairspy builds. However, `example/detector_r2.cfg` has no
+`packing` key, so the default value (`False`) is likely applied, making this path unlikely.
 
-**잠재 약점 3 (약한 후보):** R2 LO 누설이 평소보다 큼 → bin 0 근처 DC + 실제 캐리어 bin 의
-공존이 "이중 bin" 으로 보일 수 있음. 다만 SNR 이 40→14 dB 로 25 dB 가까이 떨어진 점은
-DC 누설만으로 설명되기 어렵다.
+**Potential weakness 3 (weak candidate):** R2 LO leakage is larger than usual → the coexistence of DC near
+bin 0 and the actual carrier bin could look like a "dual bin". However, the fact that SNR drops by nearly
+25 dB from 40→14 dB is hard to explain by DC leakage alone.
 
 ---
 
-## 2. Phase B 결과: 데이터 검증 (컨트롤 비교)
+## 2. Phase B Results: Data Verification (Control Comparison)
 
-스크립트: `diag/check_card_format.py`
-로그: `diag/phase_b_card_analysis.txt`
+Script: `diag/check_card_format.py`
+Log: `diag/phase_b_card_analysis.txt`
 
-| 메트릭 | INT16_IQ 컨트롤 (`synth_int16_iq.card`) | FLOAT32 misread 컨트롤 (`synth_float32_misread.card`) |
+| Metric | INT16_IQ control (`synth_int16_iq.card`) | FLOAT32 misread control (`synth_float32_misread.card`) |
 |---|---|---|
-| 블록 raw bytes | **262144** | **524288** |
-| block_size=65536 가정시 bytes / complex sample | **4.00** ✔ | **8.00** ✗ |
-| int16 해석 평균 | -8.49 | -75.48 |
-| int16 해석 std | 23160 | 17687 |
-| int16 해석 range (-32768..+32767) | PASS | PASS |
-| float32 해석 NaN | 있음 (해석 실패) | 없음 |
-| float32 해석 range [-2, +2] | FAIL (NaN) | **PASS** (실제 데이터가 float32 였으므로) |
-| uint8 해석 centred near 127.4 | PASS (우연) | PASS (우연) |
-| 자동 판정 | "INT16_IQ scaled to FULL int16 range" | **"AMBIGUOUS — both interpretations plausible"** |
+| Block raw bytes | **262144** | **524288** |
+| bytes / complex sample assuming block_size=65536 | **4.00** ✔ | **8.00** ✗ |
+| int16 interpretation mean | -8.49 | -75.48 |
+| int16 interpretation std | 23160 | 17687 |
+| int16 interpretation range (-32768..+32767) | PASS | PASS |
+| float32 interpretation NaN | present (interpretation fails) | none |
+| float32 interpretation range [-2, +2] | FAIL (NaN) | **PASS** (because the actual data was float32) |
+| uint8 interpretation centred near 127.4 | PASS (coincidental) | PASS (coincidental) |
+| Automatic verdict | "INT16_IQ scaled to FULL int16 range" | **"AMBIGUOUS — both interpretations plausible"** |
 
-> 결정적 단서는 **블록 raw 바이트 수**. 정상 경로는 `block_size * 2 (IQ) * 2 bytes(int16) = 262144`.
-> 만약 R2 캡처 파일에서 블록당 raw bytes 가 524288 (즉 8.00 bytes/complex sample) 이라면, 그것은
-> libairspy 가 FLOAT32_IQ (4 bytes/component) 를 흘려보냈고 HAL 이 그 바이트 스트림을 그대로
-> 저장했다는 증거다 → **시나리오 1-bis 확정**.
+> The decisive clue is the **block raw byte count**. The normal path is `block_size * 2 (IQ) * 2 bytes(int16) = 262144`.
+> If the raw bytes per block in the R2 capture file were 524288 (i.e., 8.00 bytes/complex sample), that is
+> evidence that libairspy emitted FLOAT32_IQ (4 bytes/component) and the HAL stored that byte stream verbatim
+> → **Scenario 1-bis confirmed**.
 
-> R2 실측 데이터 확보 시 다음 한 줄로 즉시 판정 가능:
+> When R2 measured data is obtained, an immediate verdict is possible with the single line:
 > ```
 > python diag/check_card_format.py /path/to/R2_capture.card
 > ```
-> 보고서의 "FORMAT VERDICT" 섹션이 INT16_IQ / FLOAT32 misread 중 하나로 직접 분류해 준다.
+> The report's "FORMAT VERDICT" section directly classifies it as either INT16_IQ / FLOAT32 misread.
 
 ---
 
-## 3. Phase C 결과: FFT 분석 (컨트롤 비교)
+## 3. Phase C Results: FFT Analysis (Control Comparison)
 
-스크립트: `diag/check_fft_dualbin.py`, `diag/expected_carrier_bin.py`
-로그: `diag/phase_c_fft_analysis.txt`
-플롯: `diag/phase_c_fft_comparison_synth_int16_iq.png`,
+Scripts: `diag/check_fft_dualbin.py`, `diag/expected_carrier_bin.py`
+Log: `diag/phase_c_fft_analysis.txt`
+Plots: `diag/phase_c_fft_comparison_synth_int16_iq.png`,
        `diag/phase_c_fft_comparison_synth_float32_misread.png`
 
-### 3.1 정상 INT16_IQ 컨트롤
+### 3.1 Normal INT16_IQ Control
 
-INT16 해석으로 FFT 했을 때 **단일 강한 피크**가 관측됨:
+When FFT'd with the INT16 interpretation, a **single strong peak** is observed:
 
 ```
 bin    20  f=    3.05 kHz  mag=  96.32 dB
-bin    19  f=    2.90 kHz  mag=  57.68 dB   (인접 누출)
-bin    21  f=    3.20 kHz  mag=  57.44 dB   (인접 누출)
+bin    19  f=    2.90 kHz  mag=  57.68 dB   (adjacent leakage)
+bin    21  f=    3.20 kHz  mag=  57.44 dB   (adjacent leakage)
 bin    18  f=    2.75 kHz  mag=  51.54 dB
 bin    22  f=    3.36 kHz  mag=  51.39 dB
 ```
 
-피크 1 개, peak-to-floor ≈ 40 dB. **RTL-SDR 기준 정상 동작과 일치.**
+1 peak, peak-to-floor ≈ 40 dB. **Consistent with normal operation by the RTL-SDR baseline.**
 
-### 3.2 FLOAT32 misread 컨트롤
+### 3.2 FLOAT32 misread Control
 
-같은 합성 데이터를 float32-misread 경로로 저장한 뒤, **(잘못된) int16 해석**으로 FFT:
+After saving the same synthetic data via the float32-misread path, FFT with the **(incorrect) int16 interpretation**:
 
 ```
-bin 65516  f= 4998.47 kHz  mag=  89.40 dB    ← 미러 피크
-bin    20  f=    1.53 kHz  mag=  89.39 dB    ← 첫 번째 피크
-bin 65476  f= 4995.42 kHz  mag=  79.82 dB    ← 미러 피크
-bin    60  f=    4.58 kHz  mag=  79.80 dB    ← 두 번째 피크 ★
+bin 65516  f= 4998.47 kHz  mag=  89.40 dB    ← mirror peak
+bin    20  f=    1.53 kHz  mag=  89.39 dB    ← first peak
+bin 65476  f= 4995.42 kHz  mag=  79.82 dB    ← mirror peak
+bin    60  f=    4.58 kHz  mag=  79.80 dB    ← second peak ★
 bin 65436  f= 4992.37 kHz  mag=  75.91 dB
-bin   100  f=    7.63 kHz  mag=  75.17 dB    ← 세 번째 피크
+bin   100  f=    7.63 kHz  mag=  75.17 dB    ← third peak
 ```
 
-**다중 피크 + 미러 + peak-to-floor 격차 축소.** 사용자 보고와 정성적으로 일치하는 패턴.
+**Multiple peaks + mirror + reduced peak-to-floor gap.** A pattern that qualitatively matches the user report.
 
-### 3.3 사용자 보고치와의 매칭
+### 3.3 Matching Against the User-Reported Values
 
-| 항목 | 사용자 보고 (R2 7_7_7) | INT16 컨트롤 | FLOAT32 misread 컨트롤 |
+| Item | User report (R2 7_7_7) | INT16 control | FLOAT32 misread control |
 |---|---|---|---|
-| 캐리어 피크 개수 | **2 개** (bin ~20, ~72) | 1 개 (bin 20) | **2~3 개** (bin 20, 60, 100, 미러 다수) |
-| 캐리어 SNR | ~14 dB | ~40 dB | ~10–15 dB (피크-옆 peak 마진) |
-| Δbin (관측) | 52 (≈ 7.93 kHz) | — | 40 (≈ 3.05 kHz) ※ |
-| 정성적 일치 | — | ✗ (단일 피크) | ✔ (다중 피크) |
+| Number of carrier peaks | **2** (bin ~20, ~72) | 1 (bin 20) | **2~3** (bin 20, 60, 100, multiple mirrors) |
+| Carrier SNR | ~14 dB | ~40 dB | ~10–15 dB (peak-to-adjacent-peak margin) |
+| Δbin (observed) | 52 (≈ 7.93 kHz) | — | 40 (≈ 3.05 kHz) ※ |
+| Qualitative match | — | ✗ (single peak) | ✔ (multiple peaks) |
 
-※ 사용자 보고의 Δbin=52 와 컨트롤의 Δbin=40 차이는 **TX 주파수·center freq·block_size·signal SNR 모두가
-달라서** 절대 위치는 다르지만, "단일 캐리어가 다중 bin 으로 펼쳐지는 현상" 자체는 재현됨.
-컨트롤은 합성 톤(3.05 kHz)에서 시작했지만 misread 시 1.53 kHz / 4.58 kHz / 7.63 kHz 의
-강한 피크가 동시에 나타났다. 따라서 사용자 보고의 두 bin 도 **동일 메커니즘에 의한 "원래 한 개였던 캐리어의
-잘못된 시간 정렬에 의한 분리"** 일 가능성이 매우 높다.
+※ The difference between the user-reported Δbin=52 and the control's Δbin=40 is because **the TX frequency, center freq,
+block_size, and signal SNR all differ**, so the absolute positions differ, but the phenomenon itself of "a single carrier
+spreading into multiple bins" is reproduced. The control started from a synthetic tone (3.05 kHz), but on misread strong
+peaks at 1.53 kHz / 4.58 kHz / 7.63 kHz appeared simultaneously. Therefore the two bins in the user report are also very
+likely **"a separation, by the same mechanism, of an originally single carrier due to incorrect time alignment"**.
 
-### 3.4 예상 캐리어 bin
+### 3.4 Expected Carrier bin
 
-`example/detector_r2.cfg` 의 `tuner_freq: 166M` 은 161.3 MHz TX 와 4.7 MHz 차이로 carrier_window
-(bin 7-124, 즉 1.07–18.9 kHz) 를 한참 벗어남. 즉 프롬프트에 명시된 캡처는 **별도의 detector.cfg
-(아마 `tuner_freq: 161.3M` 또는 매우 근접한 값)** 로 수행되었을 것이다. 이때:
+The `tuner_freq: 166M` in `example/detector_r2.cfg` is 4.7 MHz away from the 161.3 MHz TX, far outside the carrier_window
+(bin 7-124, i.e., 1.07–18.9 kHz). That is, the capture specified in the prompt was likely performed with a **separate
+detector.cfg (probably `tuner_freq: 161.3M` or a value very close to it)**. In that case:
 
-- center=161.300 MHz → 기대 carrier bin = 0 (DC)
-- 만약 center 가 ±수 kHz 어긋났다면 bin 20 (~3 kHz) 이 정확히 합리적 범위에 들어옴.
+- center=161.300 MHz → expected carrier bin = 0 (DC)
+- If center was off by ±a few kHz, bin 20 (~3 kHz) falls precisely within a reasonable range.
 
-따라서 **"진짜" 캐리어는 bin 20** 하나이며, bin 72 는 포맷 손상으로 인한 인공물이라고 해석하는 것이
-지금까지의 모든 증거와 부합한다.
+Therefore, interpreting the **"real" carrier as the single bin 20** and bin 72 as an artifact caused by format corruption
+is consistent with all the evidence gathered so far.
 
 ---
 
-## 4. 근본 원인 판정
+## 4. Root Cause Verdict
 
-### 1순위 가설 (강함): **`airspy_set_sample_type(INT16_IQ)` 실패의 silent fallback**
+### Top hypothesis (strong): **silent fallback from `airspy_set_sample_type(INT16_IQ)` failure**
 
-- 코드 흐름상 `set_sample_type` 의 ret 값이 0 이 아닌 경우 `logger.warning` 만 띄우고 무시한다
+- In the code flow, if the ret value of `set_sample_type` is non-zero, it only logs `logger.warning` and ignores it
   (`airspy_mini.py:361-364`).
-- libairspy 가 그 호출에 실패하면 디바이스는 **기본값인 FLOAT32_IQ** 로 동작한다.
-- 콜백은 데이터를 `np.int16` 로 reinterpret 하므로, 모든 IQ 샘플의 바이트 정렬이 어긋나 spectrum
-  이 깨진다.
-- 합성 컨트롤 (Phase C 3.2) 에서 이 시나리오가 **다중 피크 + SNR 급락** 패턴을 재현했다.
-- 검증 방법: `airspy_mini.py:361-364` 에 `raise DeviceConfigError(...)` 를 임시로 끼워 넣고
-  R2 7_7_7 캡처를 다시 시도. 같은 환경에서 즉시 예외가 발생하면 1순위 가설이 확정된다.
+- If libairspy fails that call, the device operates at the **default value, FLOAT32_IQ**.
+- The callback reinterprets the data as `np.int16`, so the byte alignment of every IQ sample is off and the spectrum
+  breaks.
+- In the synthetic control (Phase C 3.2), this scenario reproduced the **multiple-peaks + SNR collapse** pattern.
+- Verification method: temporarily insert `raise DeviceConfigError(...)` at `airspy_mini.py:361-364` and retry the
+  R2 7_7_7 capture. If an exception fires immediately in the same environment, the top hypothesis is confirmed.
 
-### 2순위 가설 (보조): 다른 libairspy API 호출 (e.g. `set_packing`, `set_samplerate`) 이 일부 빌드에서 sample_type 을 리셋
+### Second hypothesis (auxiliary): another libairspy API call (e.g. `set_packing`, `set_samplerate`) resets sample_type in some builds
 
-- 일부 빌드에서 `airspy_set_samplerate` 직후 sample_type 이 기본값으로 돌아간다는 보고가 있다.
-- 코드 흐름은 `device.open()` 에서 sample_type 설정 → `set_sample_rate()` 호출 (`airspy_capture.py:381`)
-  순이므로 만약 R2 펌웨어/libairspy 빌드가 그런 동작을 하면 1순위와 동일한 결과가 된다.
-- 검증 방법: `device.open()` 직후가 아니라 **`set_sample_rate` 직후**에 한 번 더 `set_sample_type`
-  을 부르도록 임시 패치하고 R2 캡처 결과를 비교.
+- There are reports that in some builds the sample_type reverts to the default value immediately after `airspy_set_samplerate`.
+- The code flow is: set sample_type in `device.open()` → call `set_sample_rate()` (`airspy_capture.py:381`),
+  so if the R2 firmware/libairspy build behaves that way, the result is identical to the top hypothesis.
+- Verification method: temporarily patch it to call `set_sample_type` once more **immediately after `set_sample_rate`**
+  rather than right after `device.open()`, and compare the R2 capture results.
 
-### 3순위 가설 (약함): R2 의 비정상 DC 누설
+### Third hypothesis (weak): abnormal DC leakage of the R2
 
-- bin 20 (~3 kHz) 이 진짜 캐리어, bin 72 가 R2 image leak 혹은 강한 노이즈 피크.
-- 그러나 SNR 25 dB 강하는 단순 LO 누설 수준을 넘어 포맷 손상 쪽에 더 부합한다.
-
----
-
-## 5. 권장 수정 방향 (이 보고서는 수정하지 않음)
-
-- [ ] **HAL 의 `set_sample_type` 반환값 fail-fast 처리**: `airspy_mini.py:361-364` 의
-      `logger.warning` 을 `raise DeviceConfigError(f"airspy_set_sample_type failed: {ret}")`
-      으로 변경. fastcapture 의 `airspy_reader.c:201-202` 는 이미 `goto err` 로 fail-fast 임.
-- [ ] **`set_sample_rate` 후 sample_type 재설정**: 안전 마진 차원에서 `_capture_airspy` 의
-      `device.set_sample_rate(...)` 호출 직후 sample_type 재설정 메서드(예: `device.ensure_int16_iq()`)
-      를 추가. 일부 libairspy 빌드의 리셋 이슈를 회피.
-- [ ] **opening 시 sample_type 진단 출력**: `libairspy_version()` 과 함께 어떤 sample_type
-      이 활성화되어 있는지 INFO 로그를 남기면 같은 증상이 또 발생했을 때 1초 만에 식별 가능.
-- [ ] **선택적으로 `raw_to_complex` 의 정규화 상수**: 만약 R2 의 일부 빌드가 12-bit 데이터를
-      full int16 로 확장하지 않고 **raw 12-bit 범위(-2048..+2047)** 로 흘려 보내는 경우가 있다면
-      `/32768.0` 대신 `/2048.0` 로 적용해야 SNR 이 정상 회복된다.  Phase B 의 raw bytes 값과
-      `as_int16.max()` 값이 함께 작으면(예: max ≤ 2047, std ≤ 1000) 이 경로를 의심.
+- bin 20 (~3 kHz) is the real carrier, and bin 72 is an R2 image leak or a strong noise peak.
+- However, the 25 dB SNR drop exceeds the level of simple LO leakage and fits better with format corruption.
 
 ---
 
-## 6. 수정 후 검증 기준
+## 5. Recommended Fix Direction (this report does not modify anything)
 
-- [ ] R2 7_7_7 캡처에서 단일 캐리어 bin 확인 (이중 bin 해소)
-- [ ] `python diag/check_card_format.py <new_capture.card>` 가 "INT16_IQ scaled to FULL int16
-      range" 판정 + bytes/complex sample == 4.00
-- [ ] `python diag/check_fft_dualbin.py <new_capture.card>` 의 INT16 해석 FFT 가 단일 피크 +
+- [ ] **Fail-fast handling of the HAL's `set_sample_type` return value**: change the `logger.warning` at
+      `airspy_mini.py:361-364` to
+      `raise DeviceConfigError(f"airspy_set_sample_type failed: {ret}")`.
+      The fastcapture's `airspy_reader.c:201-202` already fails fast via `goto err`.
+- [ ] **Re-set sample_type after `set_sample_rate`**: as a safety margin, add a sample_type re-setting method
+      (e.g., `device.ensure_int16_iq()`) immediately after the `device.set_sample_rate(...)` call in `_capture_airspy`.
+      This avoids the reset issue in some libairspy builds.
+- [ ] **sample_type diagnostic output on opening**: logging at INFO which sample_type is active along with
+      `libairspy_version()` would allow identifying the same symptom within 1 second if it recurs.
+- [ ] **Optionally, the normalization constant in `raw_to_complex`**: if some R2 builds emit 12-bit data
+      not expanded to full int16 but in the **raw 12-bit range (-2048..+2047)**, then `/2048.0` must be applied
+      instead of `/32768.0` for SNR to recover normally. If both the raw bytes value from Phase B and the
+      `as_int16.max()` value are small (e.g., max ≤ 2047, std ≤ 1000), suspect this path.
+
+---
+
+## 6. Post-Fix Verification Criteria
+
+- [ ] Confirm a single carrier bin in the R2 7_7_7 capture (dual bin resolved)
+- [ ] `python diag/check_card_format.py <new_capture.card>` gives the "INT16_IQ scaled to FULL int16
+      range" verdict + bytes/complex sample == 4.00
+- [ ] The INT16-interpretation FFT of `python diag/check_fft_dualbin.py <new_capture.card>` shows a single peak +
       peak-to-floor ≥ 35 dB
-- [ ] carrier SNR ≥ 35 dB, corr SNR ≥ 35 dB (RTL-SDR 기준치 비교)
-- [ ] `apply_gain_mode('manual', lna=7, mixer=7, vga=7)` 로 설정했을 때 보고된 gain 값이
-      0.00 dB 가 아닌 실제 값으로 표시
+- [ ] carrier SNR ≥ 35 dB, corr SNR ≥ 35 dB (compared against the RTL-SDR baseline)
+- [ ] When set with `apply_gain_mode('manual', lna=7, mixer=7, vga=7)`, the reported gain value is displayed
+      as an actual value rather than 0.00 dB
 
 ---
 
-## 7. 빠른 재현 / 재실행 가이드
+## 7. Quick Reproduction / Re-run Guide
 
-R2 캡처 파일(`.card`)을 확보하면 아래 한 줄로 본 보고서의 후속 분석을 자동 갱신할 수 있다.
+Once an R2 capture file (`.card`) is obtained, the follow-up analysis of this report can be automatically refreshed with the single line below.
 
 ```bash
 cd /home/user/Thrifty-x
@@ -230,33 +231,33 @@ python3 diag/check_fft_dualbin.py  /path/to/R2_capture.card | tee -a diag/phase_
 python3 diag/expected_carrier_bin.py                          | tee -a diag/phase_c_real.txt
 ```
 
-- `phase_b_real.txt` 의 FORMAT VERDICT 라인이 1순위 가설을 즉시 검증한다.
-- `phase_c_real.txt` 의 INT16 vs FLOAT32 해석 피크 비교가 보조 확인이다.
+- The FORMAT VERDICT line in `phase_b_real.txt` immediately verifies the top hypothesis.
+- The INT16 vs FLOAT32 interpretation peak comparison in `phase_c_real.txt` is the auxiliary confirmation.
 
-## 8. 산출물 목록 (`diag/` 디렉토리)
+## 8. Artifact List (`diag/` directory)
 
-| 파일 | 설명 |
+| File | Description |
 |---|---|
-| `phase_a_code_analysis.md` | Phase A 정적 코드 분석 결과 (상세표 + 시나리오 체크리스트) |
-| `check_card_format.py` | .card 파일의 v2 base64 페이로드를 디코드해서 int16 / float32 / uint8 로 비교 해석. `--all-blocks` 옵션으로 다중-블록 통계 가능 |
-| `check_fft_dualbin.py` | .card 첫 블록의 FFT 를 INT16/FLOAT32 양쪽으로 그려 비교 |
-| `check_signal_strength.py` | 모든 블록의 caller SNR / 노이즈 RMS / ADC 클리핑 / 캐리어 bin 히스토그램 + gain 권장값 |
-| `expected_carrier_bin.py` | TX 주파수 / center / sample_rate 로 기대 carrier bin 계산 + cfg sniff |
-| `_synth_card.py` | 정상 INT16 경로 + 가설 FLOAT32-misread 경로의 합성 .card 생성기 |
-| `synth_int16_iq.card` | 정상 INT16_IQ 컨트롤 (262144 bytes/block) — gitignore |
-| `synth_float32_misread.card` | 시나리오 1-bis 컨트롤 (524288 bytes/block) — gitignore |
-| `phase_b_card_analysis.txt` | check_card_format 의 두 컨트롤 분석 출력 |
-| `phase_b_synth.txt` | 합성 .card 생성 로그 |
-| `phase_c_fft_analysis.txt` | check_fft_dualbin + expected_carrier_bin 출력 |
-| `phase_c_fft_comparison_synth_int16_iq.png` | INT16 컨트롤의 FFT (단일 피크) |
-| `phase_c_fft_comparison_synth_float32_misread.png` | FLOAT32-misread 컨트롤의 FFT (다중 피크) |
-| `iq_format_diagnosis_report.md` | (본 보고서) |
+| `phase_a_code_analysis.md` | Phase A static code analysis results (detailed table + scenario checklist) |
+| `check_card_format.py` | Decodes a .card file's v2 base64 payload and interprets it comparatively as int16 / float32 / uint8. Multi-block statistics possible via the `--all-blocks` option |
+| `check_fft_dualbin.py` | Plots the FFT of the first block of a .card in both INT16/FLOAT32 for comparison |
+| `check_signal_strength.py` | caller SNR / noise RMS / ADC clipping / carrier bin histogram of all blocks + recommended gain value |
+| `expected_carrier_bin.py` | Computes the expected carrier bin from TX frequency / center / sample_rate + cfg sniff |
+| `_synth_card.py` | Synthetic .card generator for the normal INT16 path + the hypothetical FLOAT32-misread path |
+| `synth_int16_iq.card` | Normal INT16_IQ control (262144 bytes/block) — gitignore |
+| `synth_float32_misread.card` | Scenario 1-bis control (524288 bytes/block) — gitignore |
+| `phase_b_card_analysis.txt` | check_card_format analysis output for the two controls |
+| `phase_b_synth.txt` | Synthetic .card generation log |
+| `phase_c_fft_analysis.txt` | check_fft_dualbin + expected_carrier_bin output |
+| `phase_c_fft_comparison_synth_int16_iq.png` | FFT of the INT16 control (single peak) |
+| `phase_c_fft_comparison_synth_float32_misread.png` | FFT of the FLOAT32-misread control (multiple peaks) |
+| `iq_format_diagnosis_report.md` | (this report) |
 
 ---
 
-## 9. Phase E — 실데이터 재검증 (UPDATE 2026-05-14)
+## 9. Phase E — Real-data Re-verification (UPDATE 2026-05-14)
 
-### 9.1 테스트 대상
+### 9.1 Test Target
 
 ```
 /home/batrf/github/Thrifty-x/example/
@@ -267,28 +268,28 @@ python3 diag/expected_carrier_bin.py                          | tee -a diag/phas
         detector.cfg
 ```
 
-### 9.2 capture.log 점검 결과
+### 9.2 capture.log Inspection Results
 
-`airspy_set_sample_type() failed` 또는 sample_type 관련 경고가 **로그에 전혀 없음**.
-유일한 경고는 bias_tee=true 관련 사용자 안내. → §1 의 **시나리오 1-bis (silent FLOAT32 fallback)
-는 이 캡처에서 발생하지 않았음**.
+There is **no `airspy_set_sample_type() failed` or any sample_type-related warning in the log whatsoever**.
+The only warning is the user notice regarding bias_tee=true. → **Scenario 1-bis (silent FLOAT32 fallback) of §1
+did not occur in this capture**.
 
-### 9.3 capture.card 포맷 점검 결과
+### 9.3 capture.card Format Inspection Results
 
-| 메트릭 | 측정값 | 해석 |
+| Metric | Measured value | Interpretation |
 |---|---|---|
-| 헤더 | `#v2 bit_depth=12 sample_rate=10000000` | 정상 v2 |
-| base64-디코딩 후 블록 수 | 55 | — |
-| 블록당 디코딩 바이트 (전 블록 동일) | **262144** | block_size 65536 × 2 (IQ) × 2 bytes (int16) = 262144 ✔ |
+| Header | `#v2 bit_depth=12 sample_rate=10000000` | normal v2 |
+| Block count after base64-decoding | 55 | — |
+| Decoded bytes per block (identical for all blocks) | **262144** | block_size 65536 × 2 (IQ) × 2 bytes (int16) = 262144 ✔ |
 | bytes/complex sample | **4.00** | INT16 IQ |
-| int16 해석 평균/표준편차 | min/max -153/+159, mean ≈ -0.29, std ≈ 15.94 | 정상 신호 (DC 근처 중심, 작은 진폭) |
-| float32 해석 | finite_ratio ≈ 0.51, min/max -3.3e+38 / 1.5e-38, NaN/Inf 다수 | **명백히 비-float32** |
+| int16 interpretation mean/std | min/max -153/+159, mean ≈ -0.29, std ≈ 15.94 | normal signal (centered near DC, small amplitude) |
+| float32 interpretation | finite_ratio ≈ 0.51, min/max -3.3e+38 / 1.5e-38, many NaN/Inf | **clearly non-float32** |
 
-→ 본 캡처는 **정상적인 INT16_IQ v2 .card**. §1 의 1순위 가설은 이 데이터에서 **불성립**.
+→ This capture is a **normal INT16_IQ v2 .card**. The top hypothesis of §1 **does not hold** for this data.
 
-### 9.4 새 1순위 원인 (실데이터 기반)
+### 9.4 New Top Cause (real-data based)
 
-`detector.cfg` 와 `capture.log` 확인 결과 **gain 단들이 전부 0** 으로 설정되어 있음:
+Inspection of `detector.cfg` and `capture.log` shows that the **gain stages are all set to 0**:
 
 ```
 lna_gain:   0
@@ -297,62 +298,61 @@ vga_gain:   0
 gain mode: manual; LNA=0 Mixer=0 VGA=0   ← capture.log
 ```
 
-이 때문에:
+Because of this:
 
-- carrier 피크 magnitude 가 threshold 바로 위 (`mag[16] ≈ 0.6–0.9`, threshold ≈ 0.6–0.7,
+- The carrier peak magnitude is just above threshold (`mag[16] ≈ 0.6–0.9`, threshold ≈ 0.6–0.7,
   noise ≈ 0.2),
-- carrier SNR 대부분 12–14 dB 수준,
-- correlation 은 거의 fail. `detect.log` 에서 `corr: yes` 인 블록은 손꼽을 정도
+- Carrier SNR is mostly around the 12–14 dB level,
+- Correlation almost always fails. In `detect.log` the blocks with `corr: yes` can be counted on one hand
   (blk 1747 = 12.06 dB, blk 2141 = 12.26 dB, blk 2196 = 11.80 dB).
 
-캐리어 bin 분포: 대부분 bin 16 (≈ 2.44 kHz @ 10 MSPS / 65536), 가끔 bin 32 / 48.
-→ **단일 피크**, 즉 §3.2 의 다중-피크 (dual-bin) 현상은 이 캡처에서는 재현되지 않음.
+Carrier bin distribution: mostly bin 16 (≈ 2.44 kHz @ 10 MSPS / 65536), occasionally bin 32 / 48.
+→ **Single peak**, i.e., the multiple-peak (dual-bin) phenomenon of §3.2 is not reproduced in this capture.
 
-> 따라서 이 캡처의 한정 원인은 **포맷 손상이 아니라 신호 강도 부족**.
-> 시나리오 1-bis 는 *방어적 안전 마진* 차원에서는 여전히 의미가 있으나, 본 캡처의 직접 원인은 아니다.
-> 원본 프롬프트가 언급한 7_7_7 캡처 (`...153826` 디렉토리, 캐리어 이중 bin + 14 dB) 와 본 캡처
-> (`...152100_TX2_Gain000`, gain=0, 단일 bin + 12-14 dB) 는 **다른 실험 세션**으로 보이며,
-> 원본 7_7_7 캡처가 확보되면 별도 재검증이 필요하다.
+> Therefore the limiting cause of this capture is **insufficient signal strength, not format corruption**.
+> Scenario 1-bis still has meaning as a *defensive safety margin*, but it is not the direct cause of this capture.
+> The 7_7_7 capture mentioned in the original prompt (`...153826` directory, carrier dual bin + 14 dB) and this capture
+> (`...152100_TX2_Gain000`, gain=0, single bin + 12-14 dB) appear to be **different experiment sessions**, and if
+> the original 7_7_7 capture is obtained, separate re-verification is needed.
 
-### 9.5 권장 조치 (실데이터 기반, 우선순위 순)
+### 9.5 Recommended Actions (real-data based, in priority order)
 
-1. **gain 단계적 상향** — 동일 안테나/거리에서 다음 순서로 재캡처:
-   - `lna=4 mixer=4 vga=4` → SNR 변화 확인
-   - 부족하면 `lna=6 mixer=6 vga=6`
-   - 그래도 부족하면 `lna=8 mixer=6 vga=6` (LNA 가 NF 에 가장 큰 영향)
-   - 목표: carrier SNR ≥ 25 dB, ADC 클리핑 0
-2. **bias_tee 점검** — 안테나 체인에 active LNA 가 없다면 `bias_tee: false`. 패시브 안테나에
-   ~+4.5 V 가 흘러 들어가는 것을 막는다.
-3. **fail-fast 패치 유지** — 본 캡처의 원인은 아니지만 `airspy_set_sample_type` 의 silent
-   fallback 은 *언젠가는* 같은 종류의 버그를 가릴 가능성이 있으므로 안전 강화 차원에서
-   `logger.warning` → `raise DeviceConfigError` 권장 (§5 항목 1번).
-4. **template / timing 점검** — gain 을 올린 뒤에도 correlation 이 계속 실패하면 template
-   mismatch / 타이밍 문제 의심. 본 보고서의 범위 밖.
+1. **Step up gain incrementally** — re-capture at the same antenna/distance in the following order:
+   - `lna=4 mixer=4 vga=4` → confirm SNR change
+   - if insufficient, `lna=6 mixer=6 vga=6`
+   - if still insufficient, `lna=8 mixer=6 vga=6` (LNA has the largest impact on NF)
+   - target: carrier SNR ≥ 25 dB, ADC clipping 0
+2. **Check bias_tee** — if there is no active LNA in the antenna chain, set `bias_tee: false`. This prevents
+   ~+4.5 V from flowing into a passive antenna.
+3. **Keep the fail-fast patch** — although it is not the cause of this capture, the silent fallback of
+   `airspy_set_sample_type` could *someday* mask the same kind of bug, so as a safety hardening measure
+   `logger.warning` → `raise DeviceConfigError` is recommended (§5 item 1).
+4. **Check template / timing** — if correlation keeps failing even after raising gain, suspect a template
+   mismatch / timing problem. Out of scope for this report.
 
-### 9.6 새 도구 / 개선 사항
+### 9.6 New Tools / Improvements
 
-본 Phase E 의 follow-up 요청에 맞춰 `diag/` 에 추가/개선됨:
+Added/improved in `diag/` per the follow-up request of this Phase E:
 
-| 변경 | 파일 | 비고 |
+| Change | File | Notes |
 |---|---|---|
-| 강화 | `check_card_format.py` | `--all-blocks` 모드 추가: 카드 버전/헤더, bit_depth, sample_rate, 디코딩된 블록 수, unique 블록 사이즈, bytes/complex, int16 plausibility 전반 통계, float32 plausibility 전반 통계, 캐리어 bin 히스토그램 모두 한 번에 출력 |
-| 신규 | `check_signal_strength.py` | 모든 블록의 carrier SNR / 노이즈 RMS / ADC 클리핑 / 캐리어 bin 히스토그램 + RMS amplitude 분포. 자동으로 sibling `detector*.cfg` 의 `carrier_window` / gain 읽어와서 한 줄짜리 RAISE/LOWER gain 권장 출력 |
+| Enhanced | `check_card_format.py` | Added `--all-blocks` mode: outputs the card version/header, bit_depth, sample_rate, decoded block count, unique block sizes, bytes/complex, overall int16 plausibility statistics, overall float32 plausibility statistics, and carrier bin histogram all at once |
+| New | `check_signal_strength.py` | carrier SNR / noise RMS / ADC clipping / carrier bin histogram + RMS amplitude distribution of all blocks. Automatically reads the `carrier_window` / gain from the sibling `detector*.cfg` and outputs a one-line RAISE/LOWER gain recommendation |
 
-### 9.7 빠른 재현 가이드
+### 9.7 Quick Reproduction Guide
 
 ```bash
 cd /home/user/Thrifty-x
 
-# 포맷 확인 (전 블록 통계)
+# Format check (all-block statistics)
 python3 diag/check_card_format.py <CARD> --all-blocks | tee diag/phase_e_format.txt
 
-# Gain / SNR / 클리핑 진단 + 권장값
+# Gain / SNR / clipping diagnosis + recommended values
 python3 diag/check_signal_strength.py <CARD> | tee diag/phase_e_signal.txt
 
-# 기대 carrier bin
+# Expected carrier bin
 python3 diag/expected_carrier_bin.py | tee diag/phase_e_bin.txt
 ```
 
-`<CARD>` 자리에 `capture.card` 전체 경로를 넣으면 §9.3 의 표가 자동 채워지고,
-권장 gain 값이 직접 출력된다.
-
+Putting the full path of `capture.card` in place of `<CARD>` automatically populates the table in §9.3 and
+directly outputs the recommended gain values.

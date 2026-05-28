@@ -181,7 +181,7 @@ desired.
 
 ## 7. Follow-up
 
-- (optional) Documentation note in `docs/user_guide.md` and `_ko.md`
+- (optional) Documentation note in `docs/user_guide.md`
   recommending `--map` for production. Cite this report.
 - (optional) If the uneven-population mode ever blocks a user, the
   fix is straightforward: detect peaks via `cnt >= max(1, 0.05*max(cnts))`

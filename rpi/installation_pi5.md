@@ -1,45 +1,46 @@
-# Raspberry Pi 5 — Thrifty-X RX Site 설치 가이드
+# Raspberry Pi 5 — Thrifty-X RX Site Installation Guide
 
-본 문서는 Raspberry Pi 5(64-bit Bookworm) + Airspy Mini/R2 조합으로
-독립형 RX 노드를 구성하는 절차를 정리한다. 레거시 `rpi/installation.md`
-(Pi 3 / Jessie / fastcard) 는 RTL-SDR 운용 시에만 참고한다.
+This document summarizes the procedure for configuring a standalone RX node
+with a Raspberry Pi 5 (64-bit Bookworm) + Airspy Mini/R2 combination.
+Refer to the legacy `rpi/installation.md` (Pi 3 / Jessie / fastcard) only when
+operating with RTL-SDR.
 
 ---
 
-## 1. 권장 하드웨어
+## 1. Recommended Hardware
 
-| 항목 | 권장 사양 |
+| Item | Recommended Spec |
 |---|---|
-| 보드 | Raspberry Pi 5 (4 GB 이상) |
-| 전원 | 공식 27W USB-C PD 어댑터 (5V/5A) |
-| 저장 | 마이크로SD 32 GB(부팅) + USB SSD 128 GB↑ (`/var/lib/thriftyx`) |
-| 냉각 | 공식 액티브 쿨러 또는 케이스 + 팬 (스로틀 방지) |
-| SDR | Airspy Mini 또는 Airspy R2 |
-| 케이블 | 짧고 양질의 USB 2.0/3.0 (USB 허브 사용 시 외부 전원 필요) |
-| 시간 동기 | 인터넷(WAN) 또는 로컬 NTP/PTP 서버 |
+| Board | Raspberry Pi 5 (4 GB or more) |
+| Power | Official 27W USB-C PD adapter (5V/5A) |
+| Storage | microSD 32 GB (boot) + USB SSD 128 GB↑ (`/var/lib/thriftyx`) |
+| Cooling | Official active cooler or case + fan (prevents throttling) |
+| SDR | Airspy Mini or Airspy R2 |
+| Cable | Short, high-quality USB 2.0/3.0 (external power required when using a USB hub) |
+| Time sync | Internet (WAN) or local NTP/PTP server |
 
 ---
 
-## 2. OS 준비
+## 2. OS Preparation
 
 ```bash
-# Raspberry Pi OS 64-bit (Bookworm) Lite 설치 후
+# After installing Raspberry Pi OS 64-bit (Bookworm) Lite
 sudo apt update && sudo apt full-upgrade -y
 sudo raspi-config         # Hostname=rx0, Locale, Timezone, Expand FS
 ```
 
-`/boot/firmware/config.txt` 추가:
+Add to `/boot/firmware/config.txt`:
 
 ```
-# USB 포트당 출력 1.6 A 허용 (공식 27W PD 어댑터 사용 시)
+# Allow 1.6 A output per USB port (when using the official 27W PD adapter)
 usb_max_current_enable=1
 ```
 
-선택: HDMI/Bluetooth 비활성화로 전력 절약 (헤드리스 노드).
+Optional: Disable HDMI/Bluetooth to save power (headless node).
 
 ---
 
-## 3. 패키지 설치
+## 3. Package Installation
 
 ```bash
 sudo apt install -y \
@@ -50,39 +51,38 @@ sudo apt install -y \
     airspy libairspy-dev \
     chrony
 
-# (선택) 로그/모니터링
+# (Optional) logging/monitoring
 sudo apt install -y htop tmux rsync
 ```
 
-> Bookworm `airspy` 패키지는 libairspy 1.0.10 이상으로,
-> Thrifty-X HAL이 필요로 하는 `airspy_open_sn`,
-> `airspy_list_devices`, `airspy_get_samplerates`,
-> `airspy_set_packing` 을 모두 제공한다.
+> The Bookworm `airspy` package is libairspy 1.0.10 or higher and provides all of
+> `airspy_open_sn`, `airspy_list_devices`, `airspy_get_samplerates`, and
+> `airspy_set_packing` that the Thrifty-X HAL requires.
 
-### 3.1 udev 규칙 (사용자 권한)
+### 3.1 udev Rules (User Permissions)
 
-apt의 `airspy` 패키지가 `/lib/udev/rules.d/60-libairspy0.rules` 를
-설치한다. 사용자 계정이 `plugdev` 그룹에 속해야 한다:
+The apt `airspy` package installs `/lib/udev/rules.d/60-libairspy0.rules`.
+The user account must belong to the `plugdev` group:
 
 ```bash
 sudo usermod -aG plugdev $USER
-# 재로그인 후
+# After re-login
 groups | grep plugdev
 ```
 
-### 3.2 시간 동기화 (TDOA 핵심)
+### 3.2 Time Synchronization (Core of TDOA)
 
 ```bash
 sudo systemctl disable --now systemd-timesyncd
 sudo systemctl enable --now chrony
-chronyc tracking         # 동기화 상태 확인
+chronyc tracking         # Check synchronization status
 ```
 
-WAN이 없는 사이트는 인접 노드 중 하나를 chrony 서버로 설정.
+For sites without WAN, configure one of the adjacent nodes as a chrony server.
 
 ---
 
-## 4. Thrifty-X 설치
+## 4. Thrifty-X Installation
 
 ```bash
 git clone https://github.com/Denny-Hwang/thrifty-x.git ~/thrifty-x
@@ -93,29 +93,29 @@ pip install --upgrade pip
 pip install -e ".[analysis,fft]"   # fft = pyfftw, analysis = matplotlib
 ```
 
-> **pyfftw 설치가 실패하는 경우**: Bookworm ARM64 인덱스에 pyfftw
-> 휠이 없거나, `libfftw3l-dev`(long-double FFTW)가 없는 환경에서는
-> 소스 빌드가 실패한다.  이때는 다음 두 가지 선택지가 있다.
+> **If pyfftw installation fails**: In environments where there is no pyfftw
+> wheel in the Bookworm ARM64 index, or where `libfftw3l-dev` (long-double FFTW)
+> is missing, the source build fails. In this case, there are two options.
 >
-> 1. **pyfftw 없이 설치** — capture 루프는 NumPy FFT로 자동 폴백
->    한다(`thriftyx/signal_utils.py`).  성능은 약 1.3~1.7배 느려지나
->    기능은 동일하다:
+> 1. **Install without pyfftw** — the capture loop automatically falls back to
+>    NumPy FFT (`thriftyx/signal_utils.py`). Performance is about 1.3~1.7x
+>    slower, but functionality is identical:
 >    ```bash
->    pip install -e ".[analysis]"   # fft extra 제외
+>    pip install -e ".[analysis]"   # excluding the fft extra
 >    ```
 >
-> 2. **번들된 long-double 제거 패치를 적용해서 빌드** —
->    `rpi/pyFFTW-0.9.2-no-fftwl.patch` 가 그 용도이다.  대략:
+> 2. **Build with the bundled long-double removal patch applied** —
+>    `rpi/pyFFTW-0.9.2-no-fftwl.patch` is for that purpose. Roughly:
 >    ```bash
 >    pip download --no-binary=:all: --no-deps pyfftw==0.13.* -d /tmp/pyfftw-src
 >    cd /tmp/pyfftw-src && tar xzf pyFFTW-*.tar.gz && cd pyFFTW-*
 >    patch -p1 < ~/thrifty-x/rpi/pyFFTW-0.9.2-no-fftwl.patch
 >    pip install .
 >    ```
->    적용 후 `python -c "import pyfftw; print(pyfftw.__version__)"`
->    로 확인한다.
+>    After applying, verify with
+>    `python -c "import pyfftw; print(pyfftw.__version__)"`.
 
-### 4.1 설치 검증
+### 4.1 Installation Verification
 
 ```bash
 python -c "import thriftyx, numpy, scipy; print(thriftyx.__version__)"
@@ -123,20 +123,20 @@ python -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list_
 thriftyx --help
 ```
 
-장치 목록이 비어있으면 USB 연결/권한/`lsusb | grep Airspy` 확인.
+If the device list is empty, check the USB connection/permissions/`lsusb | grep Airspy`.
 
 ---
 
-## 5. 데이터 디렉터리
+## 5. Data Directory
 
-USB SSD를 `/var/lib/thriftyx`에 마운트하는 것을 권장한다(SD 카드 wear 회피).
+It is recommended to mount the USB SSD at `/var/lib/thriftyx` (to avoid SD card wear).
 
 ```bash
 sudo mkdir -p /var/lib/thriftyx/{card,toad,log}
 sudo chown -R $USER:$USER /var/lib/thriftyx
 ```
 
-`/etc/fstab` 예시 (UUID는 `lsblk -f`로 확인):
+`/etc/fstab` example (check the UUID with `lsblk -f`):
 
 ```
 UUID=XXXX-XXXX  /var/lib/thriftyx  ext4  defaults,noatime,nofail  0  2
@@ -144,16 +144,16 @@ UUID=XXXX-XXXX  /var/lib/thriftyx  ext4  defaults,noatime,nofail  0  2
 
 ---
 
-## 6. 캡처 설정
+## 6. Capture Configuration
 
-`rpi/thriftyx-capture.cfg.example`을 복사해서 사용:
+Copy and use `rpi/thriftyx-capture.cfg.example`:
 
 ```bash
 cp ~/thrifty-x/rpi/thriftyx-capture.cfg.example /var/lib/thriftyx/capture.cfg
-$EDITOR /var/lib/thriftyx/capture.cfg   # rxid, tuner_freq, gain 등 조정
+$EDITOR /var/lib/thriftyx/capture.cfg   # adjust rxid, tuner_freq, gain, etc.
 ```
 
-수동 시험 캡처:
+Manual test capture:
 
 ```bash
 source ~/thrifty-x/.venv/bin/activate
@@ -163,28 +163,28 @@ thriftyx capture /var/lib/thriftyx/card/test.card \
 
 ---
 
-## 7. systemd 서비스 등록
+## 7. systemd Service Registration
 
 ```bash
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.service /etc/systemd/system/
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.env.example /etc/default/thriftyx-capture@rx0
-sudo $EDITOR /etc/default/thriftyx-capture@rx0     # USER, paths 조정
+sudo $EDITOR /etc/default/thriftyx-capture@rx0     # adjust USER, paths
 sudo systemctl daemon-reload
 sudo systemctl enable --now thriftyx-capture@rx0.service
 journalctl -u thriftyx-capture@rx0 -f
 ```
 
-재부팅 후 자동 기동 검증:
+Verify automatic startup after reboot:
 
 ```bash
 sudo reboot
-# 부팅 후
+# After booting
 systemctl status thriftyx-capture@rx0
 ```
 
 ---
 
-## 8. 디스크 정리 (cron)
+## 8. Disk Cleanup (cron)
 
 ```bash
 sudo cp ~/thrifty-x/rpi/cleanup_old_captures.sh /usr/local/bin/
@@ -192,25 +192,25 @@ sudo chmod +x /usr/local/bin/cleanup_old_captures.sh
 ( crontab -l 2>/dev/null; echo "0 * * * * /usr/local/bin/cleanup_old_captures.sh" ) | crontab -
 ```
 
-기본 정책: `/var/lib/thriftyx/card/` 7일 초과 파일 삭제,
-`log/` 30일 초과 삭제. 환경변수로 조정 가능.
+Default policy: delete files older than 7 days in `/var/lib/thriftyx/card/`,
+delete files older than 30 days in `log/`. Adjustable via environment variables.
 
 ---
 
-## 9. 검증 체크리스트
+## 9. Validation Checklist
 
-`docs/rpi5_validation_checklist_ko.md` 의 항목을 모두 통과해야 현장
-배포 가능 상태로 판정한다. 필수 항목 1건이라도 실패하면 **No-Go**.
+All items in `docs/rpi5_validation_checklist.md` must pass for the node to be
+judged ready for field deployment. If even one required item fails, it is **No-Go**.
 
 ---
 
-## 10. 트러블슈팅
+## 10. Troubleshooting
 
-| 증상 | 원인 후보 | 조치 |
+| Symptom | Candidate Cause | Action |
 |---|---|---|
-| `libairspy not available` | apt 패키지 미설치 / 잘못된 경로 | `sudo apt install airspy libairspy-dev`, `ldconfig -p \| grep airspy` |
-| `airspy_open() failed: -2` | 권한/USB busy | plugdev 그룹, 다른 프로세스 점유 확인 (`lsof | grep airspy`) |
-| 6/10 MSPS에서 USB error 빈발 | 전원/케이블/허브 | 27W PD + 짧은 직결 케이블, `--packing` 활성화 |
-| 30~60초 후 throttling | 발열 | `vcgencmd get_throttled`, 액티브 쿨러 점검 |
-| 노드 간 타임스탬프 불일치 | 시간 동기 | `chronyc tracking`, NTP source 확인 |
-| 부팅 직후 서비스 1회 실패 | USB enumeration 지연 | `RestartSec=10`로 자동 재시도 (기본값) |
+| `libairspy not available` | apt package not installed / wrong path | `sudo apt install airspy libairspy-dev`, `ldconfig -p \| grep airspy` |
+| `airspy_open() failed: -2` | permissions/USB busy | check plugdev group, occupation by another process (`lsof | grep airspy`) |
+| Frequent USB errors at 6/10 MSPS | power/cable/hub | 27W PD + short direct cable, enable `--packing` |
+| Throttling after 30~60 seconds | heat | `vcgencmd get_throttled`, inspect active cooler |
+| Timestamp mismatch between nodes | time sync | `chronyc tracking`, check NTP source |
+| Service fails once right after boot | USB enumeration delay | automatic retry with `RestartSec=10` (default) |

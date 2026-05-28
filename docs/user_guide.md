@@ -1,7 +1,6 @@
 # Thrifty-X User Guide
 
 > Comprehensive operating manual for the Thrifty-X TDOA positioning system.
-> A Korean translation is available at [user_guide_ko.md](user_guide_ko.md).
 
 ## Table of Contents
 
