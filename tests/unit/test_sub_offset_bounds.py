@@ -32,7 +32,8 @@ import numpy as np
 import pytest
 
 from thriftyx import carrier_sync as thriftyx_cs
-from thriftyx.soa_estimator import _clip_offset
+from thriftyx.soa_estimator import (_clip_offset, parabolic_interpolation,
+                                    gaussian_interpolation)
 
 # The shipped package is ``thriftyx``. The legacy ``thrifty`` package is a
 # frozen upstream reference (not packaged, not imported by the active suite)
@@ -207,6 +208,41 @@ def test_correlation_offset_is_clipped(raw, expected):
 
     Note: the clip width is +-0.6, not +-0.5. The extra 0.1 of slack is
     deliberate to accommodate the parabolic/Gaussian interpolator's mild
-    boundary excursions. See ``thrifty/soa_estimator.py:16``.
+    boundary excursions. See ``thriftyx/soa_estimator.py:20``.
     """
     assert _clip_offset(raw) == expected
+
+
+# ----------------------------------------------------------------------
+# Case C (prompt): a correlation peak straddling two adjacent samples
+# interpolates within the spec bound. Exercises the actual
+# parabolic/Gaussian interpolators (not just _clip_offset).
+# ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("interp_fn", [parabolic_interpolation,
+                                       gaussian_interpolation])
+@pytest.mark.parametrize("true_off", [-0.49, -0.25, 0.0, 0.25, 0.49])
+def test_correlation_straddle_within_bound(interp_fn, true_off):
+    """A correlation peak centred at ``k + true_off`` recovers a sub-sample
+    offset inside [-0.5, 0.5].
+
+    Builds a Gaussian-shaped peak (the despread autocorrelation of a
+    band-limited code is locally Gaussian near its maximum), straddling
+    samples ``k`` and ``k+1``. Both 3-point interpolators must return a
+    bounded offset; the Gaussian interpolator is exact for a Gaussian.
+    """
+    k, n, sigma = 50, 101, 1.2
+    idx = np.arange(n)
+    corr_mag = np.exp(-((idx - (k + true_off)) ** 2) / (2 * sigma ** 2))
+    peak_idx = int(np.argmax(corr_mag))
+    assert peak_idx == k  # |true_off| < 0.5 keeps the argmax at k
+
+    got = interp_fn(corr_mag, peak_idx)
+    assert -0.5 <= got <= 0.5, (
+        "{} returned {:.6f} outside [-0.5, 0.5] for a straddle at "
+        "k+{:.2f}".format(interp_fn.__name__, got, true_off))
+    # And the production clip is a no-op inside the bound.
+    assert _clip_offset(got) == got
+
+    if interp_fn is gaussian_interpolation:
+        np.testing.assert_allclose(got, true_off, atol=1e-6)
