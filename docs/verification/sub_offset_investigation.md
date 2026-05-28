@@ -169,31 +169,10 @@ So a `print_stats` table column labelled "carrier offset" reading 0.845 maps
 directly to `CarrierSyncInfo.offset`, which is the unbounded
 `make_dirichlet_interpolator` return value.
 
-## 7. Recommended fix (do NOT apply in this PR)
+## 7. Fix applied (Option B - `curve_fit(bounds=...)`)
 
-Two complementary changes:
-
-**(a) Clip the return value to the spec bound.** Mirrors the C++ fastdet
-behaviour and is the minimal-risk change.
-
-```python
-# thrifty/carrier_sync.py (and thriftyx/carrier_sync.py)
-def _interpolator(fft_mag, peak_idx):
-    xdata = np.array(np.arange(-(width//2), width//2+1))
-    ydata = fft_mag[peak_idx + xdata]
-    initial_guess = (fft_mag[peak_idx], 0)
-    popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess)
-    amplitude, fit_offset = popt
-    fit_offset = max(-0.5, min(0.5, fit_offset))   # NEW
-    if return_amplitude:
-        return amplitude, fit_offset
-    else:
-        return fit_offset
-```
-
-**(b) Constrain `curve_fit` directly.** Cleaner: tells the optimiser that the
-non-physical region is off-limits, so it converges to the best in-bounds
-solution rather than the unconstrained global best.
+Both `thrifty/carrier_sync.py` and `thriftyx/carrier_sync.py` now pass
+explicit bounds to `scipy.optimize.curve_fit`:
 
 ```python
 popt, _ = curve_fit(
@@ -202,27 +181,54 @@ popt, _ = curve_fit(
 )
 ```
 
-Both should be evaluated against:
-- `tests/test_carrier_sync.py::test_dirichlet_interpolator` (existing test;
-  some parameters reach +/-0.56 and would need adjustment).
-- The new `test_sub_offset_bounds.py` reproducer suite (assertions would need
-  to be inverted to assert the bound is respected).
+The amplitude lower bound (`0.0`) prevents `curve_fit` from finding
+negative-amplitude solutions; the sub-bin offset bounds match the
+Krueger spec.
 
-**Paper impact.** Clipping changes every carrier-offset statistic in the
-field-test .toads files. The SoftwareX manuscript validation comparison
-between RTL and R2 should be re-run after either fix lands; numbers may shift
-by up to ~+/-0.5 of a bin (~76 Hz at 10 Msps / 65536 FFT) per affected
-detection.
+The experimental Dirichlet interpolator at
+`thrifty/experimental/carrier_interpolators.py:33` received the same
+treatment.
 
-## 8. Follow-up
+### Test changes that came with the fix
 
-- Open a separate fix PR (either approach above) with re-baselined
-  `test_carrier_sync.py::test_dirichlet_interpolator` and inverted assertions
-  in `test_sub_offset_bounds.py`.
-- Re-run the 5/14 field-test analysis pipeline on the fixed code, compare TX1
-  carrier-offset distribution before vs after, and refresh the figures used
-  by the SoftwareX manuscript.
-- Consider whether the C++ fastdet bound of +/-0.5 should also be widened to
-  +/-0.6 to match `_clip_offset`, or whether the +/-0.6 Python clip should be
-  tightened to +/-0.5. The current asymmetry (0.5 in fastdet, 0.6 in
-  soa_estimator) is undocumented.
+| File | Change |
+|---|---|
+| `tests/test_carrier_sync.py::test_dirichlet_interpolator` | Removed the `-0.51` and `0.56` parameters (true offsets outside the spec bound; they now clip to +-0.5). Loosened tolerance from `1e-8` to `1e-5` to absorb scipy's bounded-optimizer rounding when the true value sits on the boundary. |
+| `tests/test_carrier_sync.py::test_dirichlet_interpolator_clips_out_of_bounds` (new) | Documents the new clipping behaviour with four out-of-bound cases. |
+| `tests/unit/test_sub_offset_bounds.py::test_noisy_carrier_can_exceed_half_bin_bound` -> `test_noisy_carrier_stays_within_half_bin_bound` | Assertion inverted: every trial must respect `[-0.5, 0.5]`. Pre-fix this sweep produced `max |offset| ~ 1.07`. |
+| `tests/unit/test_sub_offset_bounds.py::test_dual_bin_plus_noise_exceeds_bound` -> `test_dual_bin_plus_noise_stays_within_bound` | Same inversion. |
+
+Result: `pytest tests/` reports `311 passed, 6 skipped`.
+
+### Why Option B over Option A (post-clip)
+
+Both end at the same output value, but Option B tells the optimizer
+the constraint up front so it converges to the best **in-bound**
+solution rather than the unconstrained global best (which would then
+get clipped). On noisy or dual-bin data this often gives a more
+accurate sub-bin estimate inside the bound than a post-clipped
+unconstrained fit.
+
+## 8. Paper impact
+
+Clipping changes every carrier-offset statistic in the field-test
+.toads files. The SoftwareX manuscript validation comparison between
+RTL and R2 should be re-run after this fix lands; numbers may shift
+by up to ~+/-0.5 of a bin (~76 Hz at 10 Msps / 65536 FFT) per
+previously-out-of-bound detection. TX1 (the affected case) is the
+primary one to revisit.
+
+## 9. Follow-up
+
+- **Re-run the 5/14 field-test analysis** on the fixed code. Compare
+  TX1 carrier-offset distribution before vs after, refresh the
+  figures used by the SoftwareX manuscript.
+- Once the threshold sweep (PR #42's template,
+  `docs/verification/threshold_sweep.md`) can be run with the fixed
+  sub_offset in place, revisit the 12.5% / 17.5% conversion-gap
+  question.
+- Consider whether the C++ fastdet bound of +/-0.5 should also be
+  widened to +/-0.6 to match `_clip_offset`, or whether the +/-0.6
+  Python clip should be tightened to +/-0.5. The current asymmetry
+  (0.5 in fastdet, 0.6 in `soa_estimator`) is undocumented and
+  outside the scope of this PR.

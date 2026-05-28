@@ -30,7 +30,8 @@ def make_dirichlet(block_len, carrier_len, width=6):
         xdata = np.array(np.arange(-(width//2), width//2+1))
         ydata = fft_mag[peak + xdata]
         initial_guess = (fft_mag[peak], 0)
-        popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess)
+        popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess,
+                            bounds=([0.0, -0.5], [np.inf, 0.5]))
         _, fit_offset = popt
         return fit_offset
 
