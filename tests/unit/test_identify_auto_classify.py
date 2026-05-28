@@ -145,3 +145,37 @@ def test_adjacency_threshold(module, gap, expected_n):
         np.full(500, 50 + gap),
     ])
     assert _n_transmitters(bins, module) == expected_n
+
+
+# ----------------------------------------------------------------------
+# Step 4 (prompt): soft nudge toward --map when >=2 TXs are auto-detected.
+# ----------------------------------------------------------------------
+
+def _detections(bins, rxid=0):
+    """Build minimal DetectionResults carrying only the carrier bin."""
+    from thriftyx import toads_data
+    out = []
+    for i, b in enumerate(bins):
+        carrier = toads_data.CarrierSyncInfo(bin=int(b), offset=0.0,
+                                             energy=10.0, noise=1.0)
+        out.append(toads_data.DetectionResult(
+            timestamp=float(i), block=i, soa=0.0,
+            carrier_info=carrier, corr_info=None, rxid=rxid))
+    return out
+
+
+def test_auto_classify_nudges_to_map_for_multi_tx(caplog):
+    """>=2 auto-classified transmitters emits a --map recommendation."""
+    dets = _detections(list(np.full(500, 50)) + list(np.full(500, 150)))
+    with caplog.at_level('WARNING'):
+        ti.auto_classify_transmitters(dets)
+    assert any('--map' in r.message for r in caplog.records), [
+        r.message for r in caplog.records]
+
+
+def test_auto_classify_no_nudge_for_single_tx(caplog):
+    """A single transmitter does not nag about --map."""
+    dets = _detections(list(np.full(500, 50)))
+    with caplog.at_level('WARNING'):
+        ti.auto_classify_transmitters(dets)
+    assert not any('--map' in r.message for r in caplog.records)
