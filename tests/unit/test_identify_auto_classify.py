@@ -33,7 +33,10 @@ import numpy as np
 import pytest
 
 from thriftyx import identify as ti
-from thrifty import identify as upstream_identify
+
+# The shipped package is ``thriftyx``. The legacy ``thrifty`` package is a
+# frozen upstream reference (not packaged, not imported by the active suite)
+# - see README. These tests therefore exercise ``thriftyx`` only.
 
 
 def _n_transmitters(freqs, module):
@@ -45,7 +48,7 @@ def _n_transmitters(freqs, module):
 # The six cases from the prompt. All pass against the current impl.
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("module", [ti, upstream_identify])
+@pytest.mark.parametrize("module", [ti])
 @pytest.mark.parametrize("name,bins,expected_n", [
     ("a_single_tx_single_bin",             [101],                            1),
     ("b_two_well_separated_single_bin",    [101, 200],                       2),
@@ -64,7 +67,7 @@ def test_prompt_cases(module, name, bins, expected_n):
 # Realistic-scale BatRF cases (each cluster ~1000 detections).
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("module", [ti, upstream_identify])
+@pytest.mark.parametrize("module", [ti])
 def test_batrf_tx1_split_tx2_single_bin(module):
     """TX1 energy on bins 101+102 split 50/50; TX2 clean on bin 128.
 
@@ -78,7 +81,7 @@ def test_batrf_tx1_split_tx2_single_bin(module):
     assert _n_transmitters(bins, module) == 2
 
 
-@pytest.mark.parametrize("module", [ti, upstream_identify])
+@pytest.mark.parametrize("module", [ti])
 def test_three_tx_each_with_three_bin_spread(module):
     bins = np.concatenate([
         np.full(300, 101), np.full(400, 102), np.full(300, 103),  # TX1
@@ -102,7 +105,7 @@ def test_three_tx_each_with_three_bin_spread(module):
 # quick checks, not a calibration-grade tool.
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("module", [ti, upstream_identify])
+@pytest.mark.parametrize("module", [ti])
 def test_extremely_uneven_populations_misses_weak_tx(module):
     """40:1 population imbalance causes the auto-classifier to miss the weak TX.
 
@@ -126,7 +129,7 @@ def test_extremely_uneven_populations_misses_weak_tx(module):
 # Adjacency boundary: when does the auto-classifier split?
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("module", [ti, upstream_identify])
+@pytest.mark.parametrize("module", [ti])
 @pytest.mark.parametrize("gap,expected_n", [
     (1, 1),   # adjacent bins -> single TX with width-2 cluster
     (2, 2),   # gap of one empty bin -> split
