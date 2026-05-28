@@ -40,6 +40,7 @@ include_directories(
 set(FASTCAPTURE_SOURCES
     fastcard.c
     airspy_reader.c
+    raw_reader.c
     rawconv.c
     cardet.c
     fft.c
