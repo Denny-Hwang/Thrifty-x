@@ -73,7 +73,15 @@ target_link_libraries(fastcapture_bin fastcapture_lib)
 # Installation
 install(TARGETS fastcapture_bin DESTINATION bin)
 install(TARGETS fastcapture_lib DESTINATION lib)
-install(FILES fastcard.h DESTINATION include)
+install(FILES
+    fastcard.h
+    cardet.h
+    rawconv.h
+    reader.h
+    fft.h
+    fargs.h
+    fargs_type.h
+    DESTINATION include)
 
 # pkg-config file
 configure_file(
