@@ -15,8 +15,8 @@ add_definitions(-Wno-unused-parameter)
 add_definitions(-Wno-unused)
 add_definitions(-Wsign-compare)
 
-# use c++11
-add_definitions(-std=c++11)
+# use GNU C++17 (required for VOLK headers with hex-float literals)
+add_definitions(-std=gnu++17)
 
 # the version number
 set(VERSION_INFO_MAJOR_VERSION 0)
