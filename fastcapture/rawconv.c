@@ -15,7 +15,6 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-#include <complex.h>
 
 #include "rawconv.h"
 
@@ -38,6 +37,7 @@ void rawconv_to_complex(rawconv_t *rawconv,
      * Must match thriftyx/block_data.py raw_to_complex(bit_depth=12).
      */
     for (size_t i = 0; i < len; ++i) {
-        output[i] = input[2*i] / 2048.0f + I * (input[2*i+1] / 2048.0f);
+        output[i].real = input[2*i] / 2048.0f;
+        output[i].imag = input[2*i+1] / 2048.0f;
     }
 }
