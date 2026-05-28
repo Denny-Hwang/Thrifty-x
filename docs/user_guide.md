@@ -504,6 +504,46 @@ keep the table below internally consistent.
 | `--airspy-serial 0x…` | – | Select a specific Airspy by 64-bit serial. |
 | `-d N` / `--device-index N` | 0 | Select RTL-SDR or Airspy by enumeration index. |
 
+### 5.5 Threshold Tuning
+
+`carrier_threshold` and `corr_threshold` are expressions in the noise
+estimate, e.g. the default `15 * snr`. The expression is parsed by
+`thriftyx.setting_parsers.threshold` and evaluated identically for every
+device — the threshold is `sqrt(const + snr·noise_rms² + stddev·stddev²)`
+in `carrier_detect._calculate_threshold` / `soa_estimator.calculate_threshold`.
+There is **no device-specific branching** in the threshold path: the same
+expression yields the same absolute threshold given the same noise stats,
+on RTL-SDR and Airspy alike (see
+[`docs/verification/threshold_path.md`](verification/threshold_path.md)).
+So a threshold change is a per-site tuning decision, not a code default.
+
+**When to lower `corr_threshold`:**
+
+- **RTL-SDR with an external LNA** (e.g. a +20 dB front-end): the default
+  `15 * snr` is often too strict and rejects real detections. Start from
+  **`--corr-threshold "10*snr"`** and verify the detection count against a
+  known-good capture.
+- **Airspy R2 with the same external LNA**: usually fine at the default
+  `15 * snr` (the 12-bit ADC has a quieter noise floor). Lower only if a
+  sweep shows detections are being clipped.
+
+These are **starting points to verify per site**, not hard rules. The
+in-repo default stays `15 * snr` because it suits the common
+no-external-amplifier case. To find the right value for a given site,
+sweep the expression on a representative capture and watch where the
+detection count plateaus:
+
+```bash
+for T in "8*snr" "10*snr" "12*snr" "15*snr"; do
+    echo -n "$T  ->  "
+    thriftyx detect capture.card --corr-threshold "$T" -o /tmp/t.toad --quiet
+    grep -c . /tmp/t.toad
+done
+```
+
+The plateau is the lowest threshold that does not also admit a rising
+tail of false positives; pick a value just above it.
+
 ---
 
 ## 6. Template System
