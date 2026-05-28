@@ -52,6 +52,13 @@ jobs:
           else
             sudo apt-get install -y libvolk2-dev
           fi
+      - name: Install fastcapture for fastdet link-time dependency
+        if: matrix.target == 'fastdet'
+        run: |
+          cmake -S fastcapture -B build/fastcapture
+          cmake --build build/fastcapture --config Release -j
+          sudo cmake --install build/fastcapture --prefix /usr/local
+
       - name: Configure ${{ matrix.target }}
         run: cmake -S ${{ matrix.target }} -B build/${{ matrix.target }}
       - name: Build ${{ matrix.target }}
