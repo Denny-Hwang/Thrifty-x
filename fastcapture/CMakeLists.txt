@@ -46,6 +46,7 @@ set(FASTCAPTURE_SOURCES
     circbuf.c
     reader.c
     card_reader.c
+    raw_reader.c
     fargs.c
     parse.c
     lib/base64.c
