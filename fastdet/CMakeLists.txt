@@ -4,7 +4,7 @@
 # This is a mess, I know.
 ##
 
-cmake_minimum_required (VERSION 2.6)
+cmake_minimum_required (VERSION 3.10)
 project (fastdet)
 enable_language(CXX)
 
