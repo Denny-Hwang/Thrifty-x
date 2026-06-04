@@ -4,7 +4,7 @@ pkg_check_modules (PC_FASTCARD fastcapture)
 find_path(
     FASTCARD_INCLUDE_DIRS
     NAMES fastcard.h
-    HINTS ${PC_FASTCARD_INCLUDE_DIRS}
+    HINTS ${PC_FASTCARD_INCLUDE_DIRS} ${PC_FASTCARD_INCLUDEDIR}
     PATHS /usr/include
           /usr/local/include
 )
