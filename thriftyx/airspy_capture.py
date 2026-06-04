@@ -52,11 +52,42 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _open_output(output_path):
-    """Open output file for writing, or return stdout."""
-    if output_path is None or output_path == '-':
-        return sys.stdout
-    return open(output_path, 'w')
+def _stdout_is_tty():
+    """Return ``True`` when stdout is an interactive terminal.
+
+    Defensive against a closed or non-standard stream (returns ``False``).
+    """
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _resolve_card_output(output_path):
+    """Resolve the destination for base64 .card lines (RTL/fastcard pattern).
+
+    Mirrors the RTL reference ``fastcard`` (``fastcapture/fastcard_cli.c``):
+    card data is emitted only when a destination is actually requested -- with
+    no ``-o`` flag fastcard leaves ``out == NULL`` and writes no card data at
+    all, printing diagnostics only.  Adapted to thriftyx's positional
+    ``output`` argument:
+
+      - explicit file path        -> open and return that file
+      - ``-``                     -> stdout (explicit request, e.g. piping)
+      - omitted, stdout is PIPED  -> stdout (so ``thriftyx capture | ...``
+                                     keeps working)
+      - omitted, stdout is a TTY  -> ``None`` (display-only: write nothing,
+                                     create no file)
+
+    Returns the open file object to write card data to, or ``None`` when card
+    output must be suppressed.  Carrier-detection diagnostics are emitted to
+    stderr by the capture loop regardless of this value.
+    """
+    if output_path is not None and output_path != '-':
+        return open(output_path, 'w')
+    if output_path is None and _stdout_is_tty():
+        return None
+    return sys.stdout
 
 
 def _bit_depth_for_device(device_type):
@@ -291,21 +322,26 @@ def _capture_rtlsdr(config, extra_args, output_file):
             threshold = _compute_threshold(fft_mag, thresh_coeffs, noise_rms)
             _print_detection_line(block_idx, peak_idx, peak_mag,
                                   threshold, noise_rms)
-            # Write v1 format line (raw uint8 bytes, no conversion loss)
-            _write_card_line(output_file, time.time(), block_idx, block_raw)
             detected_count += 1
-            pending_writes += 1
-            now = time.time()
-            if (pending_writes >= FLUSH_BLOCKS
-                    or (now - last_flush_t) >= FLUSH_INTERVAL_S):
-                output_file.flush()
-                pending_writes = 0
-                last_flush_t = now
+            # Card data is written only when a destination exists.
+            # Display-only runs (output_file is None) emit the stderr
+            # diagnostic above but no base64.
+            if output_file is not None:
+                # Write v1 format line (raw uint8 bytes, no conversion loss)
+                _write_card_line(output_file, time.time(), block_idx,
+                                 block_raw)
+                pending_writes += 1
+                now = time.time()
+                if (pending_writes >= FLUSH_BLOCKS
+                        or (now - last_flush_t) >= FLUSH_INTERVAL_S):
+                    output_file.flush()
+                    pending_writes = 0
+                    last_flush_t = now
 
         history_raw = new_raw[-block_history * 2:]
         block_idx += 1
 
-    if pending_writes:
+    if output_file is not None and pending_writes:
         try:
             output_file.flush()
         except Exception:
@@ -403,11 +439,15 @@ def _capture_airspy(config, extra_args, output_file):
             )
         device.set_bias_tee(bool(config.get('bias_tee', False)))
 
-        # Write v2 .card header
-        write_card_header(output_file, bit_depth=bit_depth,
-                          sample_rate=sample_rate)
+        # Write v2 .card header -- only when card data has a destination.
+        # When display-only (no output file + interactive TTY) output_file is
+        # None and nothing is written to disk or screen, matching fastcard's
+        # ``out == NULL`` behaviour when no ``-o`` is given.
+        if output_file is not None:
+            write_card_header(output_file, bit_depth=bit_depth,
+                              sample_rate=sample_rate)
 
-        # Print fastcard-compatible configuration header
+        # Print fastcard-compatible configuration header (always, to stderr)
         _print_capture_header(config, window, device_type=device_type)
 
         start_time = time.time()
@@ -486,23 +526,27 @@ def _capture_airspy(config, extra_args, output_file):
                     fft_mag, thresh_coeffs, noise_rms)
                 _print_detection_line(block_idx, peak_idx, peak_mag,
                                       threshold, noise_rms)
-                # Write v2 format line (raw int16 bytes)
-                _write_card_line(output_file, time.time(), block_idx,
-                                 block_raw)
                 detected_count += 1
-                pending_writes += 1
-                now = time.time()
-                if (pending_writes >= FLUSH_BLOCKS
-                        or (now - last_flush_t) >= FLUSH_INTERVAL_S):
-                    output_file.flush()
-                    pending_writes = 0
-                    last_flush_t = now
+                # Card data is written only when a destination exists.
+                # Display-only runs (output_file is None) emit the stderr
+                # diagnostic above but no base64.
+                if output_file is not None:
+                    # Write v2 format line (raw int16 bytes)
+                    _write_card_line(output_file, time.time(), block_idx,
+                                     block_raw)
+                    pending_writes += 1
+                    now = time.time()
+                    if (pending_writes >= FLUSH_BLOCKS
+                            or (now - last_flush_t) >= FLUSH_INTERVAL_S):
+                        output_file.flush()
+                        pending_writes = 0
+                        last_flush_t = now
 
             # Update history from the tail of the raw read buffer.
             history_raw = raw[-(block_history * 2):]
             blocks_processed += 1
 
-        if pending_writes:
+        if output_file is not None and pending_writes:
             try:
                 output_file.flush()
             except Exception:
@@ -600,19 +644,21 @@ def capture_cli(args=None):
                 logger.info("fastcard not found; using Python carrier "
                             "detection")
                 output_path = extra_args.get('output')
-                output_file = _open_output(output_path)
+                output_file = _resolve_card_output(output_path)
                 try:
                     _capture_rtlsdr(config, extra_args, output_file)
                 finally:
-                    if output_file not in (sys.stdout, sys.stderr):
+                    if (output_file is not None
+                            and output_file not in (sys.stdout, sys.stderr)):
                         output_file.close()
         elif device_type in ('airspy_mini', 'airspy_r2'):
             output_path = extra_args.get('output')
-            output_file = _open_output(output_path)
+            output_file = _resolve_card_output(output_path)
             try:
                 _capture_airspy(config, extra_args, output_file)
             finally:
-                if output_file not in (sys.stdout, sys.stderr):
+                if (output_file is not None
+                        and output_file not in (sys.stdout, sys.stderr)):
                     output_file.close()
         else:
             print("ERROR: Unknown device_type: {}".format(device_type),
