@@ -60,7 +60,7 @@ All documentation is in English.
 | Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` + `setup.py`; dynamic version |
-| Tests | Minimal | 32 test modules / 314 tests; lint + type-check + pytest + C builds gated in CI |
+| Tests | Minimal | 33 test modules / 336 tests; lint + type-check + pytest + C builds gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -388,12 +388,14 @@ Thrifty-x/
 │   ├── gold.py, matchmaker.py, tdoa_est.py, pos_est.py, ...
 │   └── hal/             #   Airspy/RTL-SDR HAL (ctypes-based)
 ├── fastcapture/         # ▶ Active C library binding to libairspy
+├── fastdet/             # ▶ Active C++ correlation detector (links fastcapture)
 ├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
-├── fastcard/            # ◌ Reference only — original librtlsdr C binding
 ├── tests/
-│   ├── unit/            #   23 unit-test modules
+│   ├── unit/            #   24 unit-test modules
 │   ├── integration/     #   1 integration test (block_data + mock capture)
 │   └── test_*.py        #   8 top-level pipeline-stage tests
+├── scripts/             # Standalone analysis helper scripts
+├── example/             # Example detector configs + template
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
 └── docs/                # User & deployment documentation
 ```

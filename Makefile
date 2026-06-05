@@ -7,7 +7,7 @@ help:
 	@echo "  test       to run unit tests"
 	@echo "  lint       to lint the source files"
 	@echo "  docs       to generate Sphinx html docs"
-	@echo "  dev        to install thrifty using setup.py in editable mode"
+	@echo "  dev        to install Thrifty-X in editable mode"
 	@echo "  venv       to setup a virtualenv"
 
 .PHONY: init
