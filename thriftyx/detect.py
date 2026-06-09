@@ -212,9 +212,9 @@ def detector_cli(detector_class, parser=None, extra_args=None):
         blocks = block_reader(args.input, config.block_size,
                               config.block_history, bit_depth=bit_depth)
     else:
-        # Pass bit_depth as a fallback hint: card_reader prefers the v2 header,
-        # but falls back to this value when the header is absent (e.g. files
-        # produced by the C fastcapture binary which lacks the #v2 line).
+        # Pass bit_depth as a fallback hint: card_reader prefers the
+        # ``#v2 bit_depth=…`` header when present and only uses this value
+        # for headerless (v1) files.
         blocks = card_reader(args.input, bit_depth=bit_depth)
 
     template = np.load(config.template)

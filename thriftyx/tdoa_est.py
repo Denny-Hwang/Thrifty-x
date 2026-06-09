@@ -26,6 +26,7 @@ import numpy as np
 from thriftyx import matchmaker
 from thriftyx import stat_tools
 from thriftyx import toads_data
+from thriftyx.setting_parsers import metric_float
 from thriftyx.settings import parse_kvconfig
 
 SPEED_OF_LIGHT = 2.997e8
@@ -447,10 +448,11 @@ def _main():
                              " used for estimating the TDOA of the mobile unit"
                              " transmission")
     parser.add_argument('-s', '--sample-rate', dest='sample_rate',
-                        type=float, default=None,
-                        help="nominal sample rate of receivers in Hz "
-                             "(e.g. 2.4e6 for RTL-SDR, 6e6 for Airspy Mini, "
-                             "10e6 for Airspy R2). If omitted, reads from "
+                        type=metric_float, default=None,
+                        help="nominal sample rate of receivers in Hz; "
+                             "metric suffixes accepted as in other commands "
+                             "(e.g. 2.4M for RTL-SDR, 6M for Airspy Mini, "
+                             "10M for Airspy R2). If omitted, reads from "
                              "detector.cfg (sample_rate or device_type).")
     parser.add_argument('-c', '--config', dest='config', default=None,
                         help="settings config file to read sample_rate from "

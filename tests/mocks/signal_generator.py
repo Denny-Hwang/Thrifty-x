@@ -34,10 +34,13 @@ def add_noise(signal: np.ndarray, snr_db: float, seed: int = 42) -> np.ndarray:
 
 
 def complex_to_int16(signal: np.ndarray) -> np.ndarray:
-    """Convert complex64 signal to interleaved int16 (full int16 range).
+    """Convert complex64 signal to interleaved int16, peak-scaled to ±32767.
 
-    Scales signal so that amplitude 1.0 maps to ±32767.
-    libairspy INT16_IQ format uses the full int16 range.
+    Test helper: maximises mock-signal SNR by using the whole int16
+    container.  Note this is NOT how libairspy scales real captures —
+    hardware samples stay in the native 12-bit envelope and are
+    normalised by /2048.0 (see thriftyx/block_data.py and
+    docs/verification/normalization_divisor.md).
     """
     max_val = np.max(np.abs(signal))
     if max_val > 0:

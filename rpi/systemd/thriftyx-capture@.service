@@ -3,13 +3,22 @@ Description=Thrifty-X capture service for receiver %i
 Documentation=https://github.com/Denny-Hwang/thrifty-x
 After=network-online.target time-sync.target
 Wants=network-online.target time-sync.target
+# Rate-limit restarts (these keys live in [Unit]; systemd ignores them
+# under [Service]).
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/thriftyx-capture@%i
-User=${THRIFTYX_USER}
+# systemd does NOT expand environment variables in User= or
+# WorkingDirectory= — they must be literal values (a ${VAR} here is a
+# fatal unit error and the service never starts).  Edit these two lines
+# (e.g. sudo systemctl edit thriftyx-capture@rx0) if your deployment
+# does not use the stock `pi` user / clone path.
+User=pi
 Group=plugdev
-WorkingDirectory=${THRIFTYX_HOME}
+WorkingDirectory=/home/pi/thrifty-x
 
 # Activate the project venv and run capture.
 # THRIFTYX_OUT should point to a USB SSD path, NOT the SD card.
@@ -22,8 +31,6 @@ ExecStart=/bin/bash -lc '\
 # Restart on any failure (incl. USB enumeration races at boot).
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 # Hardening — relax if blocking your setup.
 NoNewPrivileges=true

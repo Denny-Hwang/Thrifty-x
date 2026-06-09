@@ -13,10 +13,11 @@ Reference:
   North-West University, Potchefstroom Campus.
 
 Modifications in Thrifty-X:
-  - Replaced RTL-SDR hardware support with Airspy Mini and Airspy R2
+  - Extended hardware support to Airspy Mini and Airspy R2
+    (RTL-SDR remains supported)
   - Migrated codebase from Python 2 to Python 3.10+
   - Added Hardware Abstraction Layer (HAL) for SDR devices
-  - Updated I/Q sample processing from 8-bit to 12-bit
+  - Extended I/Q sample processing from 8-bit to 8/12-bit
   - Added configuration validation for Airspy hardware
   - Replaced GnuRadio/osmosdr visualization with matplotlib
   - Added type hints, dataclasses, and modern Python idioms
