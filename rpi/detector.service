@@ -3,6 +3,10 @@ Description=Thrifty-X (legacy) detect-from-fastcard pipeline
 Documentation=https://github.com/Denny-Hwang/thrifty-x
 After=network-online.target time-sync.target
 Wants=network-online.target time-sync.target
+# Rate-limit restarts (these keys live in [Unit]; systemd ignores them
+# under [Service]).
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 ExecStart=/home/pi/thrifty/rpi/fastdet.sh
@@ -14,8 +18,6 @@ Type=simple
 # Restart on transient failure (USB enumeration, brief stream stalls).
 Restart=on-failure
 RestartSec=120
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 # Hardening — same baseline as thriftyx-capture@.service.  Relax only
 # if a specific path conflicts with a deployment.

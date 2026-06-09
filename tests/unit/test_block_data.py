@@ -176,6 +176,28 @@ class TestCardReader:
         blocks = list(card_reader(stream, bit_depth=8))
         assert len(blocks) == 2
 
+    def test_v2_header_wins_over_stale_bit_depth_arg(self):
+        """A #v2 header overrides a conflicting explicit bit_depth.
+
+        Regression: the detect/analyze_detect CLIs always pass the
+        configured bit_depth (default 8); a 12-bit Airspy card must
+        still decode as 12-bit per its header, not as uint8 garbage
+        of twice the length.
+        """
+        stream = self._make_v2_card()
+        blocks = list(card_reader(stream, bit_depth=8))
+        assert len(blocks) == 2
+        for _, _, data in blocks:
+            assert len(data) == 16  # 32 int16 = 16 complex samples
+
+    def test_v1_headerless_uses_bit_depth_arg(self):
+        """Headerless (v1) files honour the explicit bit_depth arg."""
+        stream = self._make_v1_card()
+        blocks = list(card_reader(stream, bit_depth=12))
+        # 32 uint8 bytes reinterpreted as 16 int16 = 8 complex samples
+        _, _, data = blocks[0]
+        assert len(data) == 8
+
 
 class TestCardWriter:
     def test_roundtrip_v2(self):

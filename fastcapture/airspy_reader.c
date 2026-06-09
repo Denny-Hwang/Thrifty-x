@@ -47,7 +47,10 @@ static int _airspy_callback(airspy_transfer_t *transfer)
     if (!atomic_load(&state->running) || transfer->sample_count <= 0)
         return 0;
 
-    /* Airspy 12-bit ADC samples, scaled to full int16 range by libairspy */
+    /* Airspy 12-bit ADC samples in an int16 container.  libairspy does
+     * NOT left-shift to full int16 range — values stay in the native
+     * 12-bit envelope (see rawconv.c and
+     * docs/verification/normalization_divisor.md). */
     int16_t *src = (int16_t *)transfer->samples;
     size_t   n   = (size_t)(transfer->sample_count) * 2; /* I and Q */
 

@@ -44,7 +44,7 @@ All documentation is in English.
 | [docs/rpi5_deployment_report.md](docs/rpi5_deployment_report.md) | Pi 5 deployment analysis report |
 | [docs/rpi5_runbook.md](docs/rpi5_runbook.md) | Pi 5 operational runbook |
 | [docs/rpi5_validation_checklist.md](docs/rpi5_validation_checklist.md) | Pi 5 acceptance/validation checklist |
-| [docs/verification/](docs/verification/) | Engineering verification reports (sample format, sub-offset bounds, gain mode, threshold path, auto-classify) |
+| [docs/verification/](docs/verification/) | Engineering verification reports (sample format, sub-offset bounds, gain mode, threshold path, auto-classify, comprehensive A–Z refactoring review) |
 
 ## What's Changed from Original Thrifty
 
@@ -290,7 +290,7 @@ the figure in place; no per-block, per-plot pop-up windows.
 | `-m, --max N` | `20` | Process at most N detected blocks |
 | `-i, --blocks RANGE` | _(none)_ | Subset specific block indices (e.g. `0-10`) |
 | `-p, --plot LIST` | all | Comma-separated subset of plot families |
-| `--prefer-qt / --no-prefer-qt` | `--prefer-qt` | Whether to attempt the Qt viewer; matplotlib fallback is automatic if no Qt binding is available |
+| _(Qt preference)_ | Qt attempted by default | The Qt viewer is attempted first; matplotlib fallback is automatic if no Qt binding is available.  Use `--no-gui` to skip Qt entirely (`prefer_qt` is exposed on the Python API, not as a CLI flag) |
 | `--no-gui` | _(unset)_ | Force the matplotlib-only fallback (one figure per `(block, plot)`) |
 | `--export PREFIX` | _(unset)_ | Write PNGs to `PREFIX_block<N>/<plot>.png` instead of displaying |
 | `--save [PREFIX]` | _(unset)_ | Save detection signals (unsynced, synced, correlation, template, metadata) as `.npz` files with the given prefix (default `signals`) |

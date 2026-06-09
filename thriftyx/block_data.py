@@ -13,11 +13,14 @@ Supports both 8-bit unsigned (RTL-SDR legacy, v1 .card format) and
 """
 
 import base64
+import logging
 import time
 
 import numpy as np
 
 from thriftyx.signal_utils import Signal
+
+logger = logging.getLogger(__name__)
 
 _V2_HEADER_PREFIX = '#v2 '
 
@@ -179,7 +182,10 @@ def card_reader(stream, bit_depth=None):
     ----------
     stream : file-like object
     bit_depth : int or None
-        If None, auto-detect from file header.
+        Fallback bit depth for files without a ``#v2`` header (v1 files).
+        When the file carries a ``#v2 bit_depth=…`` header, the header
+        always wins; a conflicting explicit value is ignored with a
+        warning.  ``None`` means "headerless files are 8-bit (v1)".
 
     Yields
     ------
@@ -202,8 +208,15 @@ def card_reader(stream, bit_depth=None):
                 if '=' in kv:
                     k, v = kv.split('=', 1)
                     metadata[k] = v
-            if detected_bit_depth is None and 'bit_depth' in metadata:
-                detected_bit_depth = int(metadata['bit_depth'])
+            if 'bit_depth' in metadata:
+                header_bit_depth = int(metadata['bit_depth'])
+                if (detected_bit_depth is not None
+                        and detected_bit_depth != header_bit_depth):
+                    logger.warning(
+                        "card bit_depth=%d from #v2 header overrides "
+                        "configured bit_depth=%d",
+                        header_bit_depth, detected_bit_depth)
+                detected_bit_depth = header_bit_depth
             continue
         if not line or line[0] == '#' or line[0] == '\n':
             continue

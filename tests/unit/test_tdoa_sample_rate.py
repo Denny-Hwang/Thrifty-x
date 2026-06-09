@@ -50,3 +50,27 @@ def test_fallback_when_config_missing(tmp_path):
 def test_fallback_when_config_empty(tmp_path):
     cfg = _write_cfg(tmp_path, "# comment only\n")
     assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 2.4e6
+
+
+def test_cli_flag_accepts_metric_suffix():
+    """`tdoa -s 2.4M` must parse like every other command's -s flag.
+
+    Regression: the argparse type used to be a bare float, rejecting
+    metric-suffixed values that capture/detect accept.
+    """
+    import argparse
+
+    from thriftyx.setting_parsers import metric_float
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--sample-rate', dest='sample_rate',
+                        type=metric_float, default=None)
+    assert parser.parse_args(['-s', '2.4M']).sample_rate == 2.4e6
+    assert parser.parse_args(['-s', '2400000']).sample_rate == 2.4e6
+
+    # And the real wiring in tdoa_est._main uses metric_float:
+    import inspect
+
+    from thriftyx import tdoa_est
+    src = inspect.getsource(tdoa_est._main)
+    assert 'metric_float' in src

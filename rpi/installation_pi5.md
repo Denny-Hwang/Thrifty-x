@@ -168,7 +168,11 @@ thriftyx capture /var/lib/thriftyx/card/test.card \
 ```bash
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.service /etc/systemd/system/
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.env.example /etc/default/thriftyx-capture@rx0
-sudo $EDITOR /etc/default/thriftyx-capture@rx0     # adjust USER, paths
+sudo $EDITOR /etc/default/thriftyx-capture@rx0     # adjust paths
+# The unit assumes user `pi` and /home/pi/thrifty-x.  For a different
+# user/path, override User= and WorkingDirectory= (systemd cannot read
+# them from the env file):
+#   sudo systemctl edit thriftyx-capture@rx0
 sudo systemctl daemon-reload
 sudo systemctl enable --now thriftyx-capture@rx0.service
 journalctl -u thriftyx-capture@rx0 -f

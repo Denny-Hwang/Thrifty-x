@@ -116,10 +116,11 @@ def test_signal_generator_carrier():
 
 
 def test_complex_to_int16_range():
-    """complex_to_int16 should produce values in the full int16 range.
+    """complex_to_int16 should peak-scale into the full int16 container.
 
-    libairspy INT16_IQ left-shifts 12-bit ADC values into the full int16
-    range, so amplitude-1.0 signals correctly produce values up to ±32767.
+    This pins the *test helper's* scaling contract only.  Real Airspy
+    captures are NOT left-shifted by libairspy; they remain in the
+    native 12-bit envelope (normalised by /2048.0 in block_data).
     """
     signal = np.exp(1j * np.linspace(0, 2*np.pi, 64)).astype(np.complex64)
     raw = complex_to_int16(signal)
