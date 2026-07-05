@@ -14,6 +14,8 @@ A centralized interface for accessing Thrifty-X modules with CLI interfaces.
 import sys
 import importlib
 
+from thriftyx.exceptions import ThriftyXError
+
 
 HELP = """usage: thriftyx <command> [<args>]
 
@@ -100,7 +102,23 @@ def _main():
                 file=sys.stderr
             )
             sys.exit(2)
-        module._main()
+        try:
+            module._main()
+        except KeyboardInterrupt:
+            print("thriftyx {}: interrupted".format(command),
+                  file=sys.stderr)
+            sys.exit(130)
+        except FileNotFoundError as exc:
+            # Missing template.npy, .card input, config file, ... — a
+            # routine operator error; no traceback needed.
+            print("thriftyx {}: file not found: {}".format(
+                command, exc.filename or exc), file=sys.stderr)
+            sys.exit(1)
+        except ThriftyXError as exc:
+            # Typed project errors (config syntax, device errors, ...)
+            # carry a user-facing message already.
+            print("thriftyx {}: {}".format(command, exc), file=sys.stderr)
+            sys.exit(1)
     else:
         print("thriftyx: {} is not a thriftyx command. See 'thriftyx --help'."
               .format(command), file=sys.stderr)

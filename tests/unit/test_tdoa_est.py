@@ -52,7 +52,8 @@ def test_tdoa_dtype_round_trips_through_numpy():
     """A row using TDOA_DTYPE survives a NumPy structured-array round-trip."""
     row = np.array([(1, 2, 1.5e-5, 30.0, 0.99, 7, 11)],
                    dtype=list(zip(tdoa_est.TDOA_DTYPE['names'],
-                                  tdoa_est.TDOA_DTYPE['formats'])))
+                                  tdoa_est.TDOA_DTYPE['formats'],
+                                  strict=True)))
     assert int(row['rx0'][0]) == 1
     assert int(row['rx1'][0]) == 2
     assert abs(float(row['tdoa'][0]) - 1.5e-5) < 1e-12

@@ -18,6 +18,11 @@ from thriftyx.signal_utils import Signal
 
 
 def _clip_offset(offset, max_=0.6):
+    # NaN compares False against both bounds and would pass through a
+    # plain comparison clip; force it to 0 so it cannot reach the .toad
+    # output (e.g. from a flat/saturated correlation peak).
+    if np.isnan(offset):
+        return 0.0
     return -max_ if offset < -max_ else max_ if offset > max_ else offset
 
 
@@ -180,7 +185,12 @@ def parabolic_interpolation(corr_mag, peak_idx):
         return 0
 
     a, b, c = corr_mag[peak_idx-1], corr_mag[peak_idx], corr_mag[peak_idx+1]
-    offset = 0.5 * (c - a) / (2 * b - a - c)
+    denom = 2 * b - a - c
+    if abs(denom) < 1e-12:
+        # Flat peak (e.g. clipped/saturated correlation): no curvature to
+        # interpolate against; same guard as gaussian_interpolation.
+        return 0
+    offset = 0.5 * (c - a) / denom
     return offset
 
 

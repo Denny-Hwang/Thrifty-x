@@ -118,7 +118,7 @@ class TestBlockReader:
         blocks = list(block_reader(stream, size, history, bit_depth=12))
         assert len(blocks) >= 2
         # Each block should have 'size' samples
-        for ts, idx, data in blocks:
+        for _ts, _idx, data in blocks:
             assert len(data) == size
 
 

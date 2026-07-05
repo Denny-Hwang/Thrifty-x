@@ -143,7 +143,7 @@ def solve(tdoa_groups, rx_pos):
                 coords, snr = solve_1d(tdoas, rx_pos)
             else:
                 coords, snr = solve_numerically(tdoas, rx_pos)
-            rx_pairs = zip(tdoas['rx0'], tdoas['rx1'])
+            rx_pairs = zip(tdoas['rx0'], tdoas['rx1'], strict=True)
             dop_est = dop(coords, rx_pos, rx_pairs)
             results.append((group_id, timestamp, tx, dop_est, snr) +
                            tuple(coords))

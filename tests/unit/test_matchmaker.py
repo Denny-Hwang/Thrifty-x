@@ -17,7 +17,7 @@ def test_save_and_load_matches():
     buf.seek(0)
     loaded = load_matches(buf)
     assert len(loaded) == 3
-    for orig, loaded_match in zip(matches, loaded):
+    for orig, loaded_match in zip(matches, loaded, strict=True):
         assert list(loaded_match) == orig
 
 

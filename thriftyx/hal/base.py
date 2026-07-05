@@ -11,7 +11,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable
+from typing import Callable, Literal
 
 import numpy as np
 
@@ -113,11 +113,12 @@ class SDRDevice(ABC):
     def is_capturing(self) -> bool:
         """Whether async capture is active."""
 
-    def __enter__(self):
+    def __enter__(self) -> 'SDRDevice':
         self.open()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: object, exc_val: object,
+                 exc_tb: object) -> Literal[False]:
         try:
             if self.is_open:
                 if self.is_capturing:

@@ -68,7 +68,7 @@ def test_module_for_command_is_importable_and_has_main(command):
     module = importlib.import_module(cli.MODULES[command])
     assert hasattr(module, '_main'), (
         f"Module {cli.MODULES[command]} backs '{command}' but has no _main().")
-    assert callable(getattr(module, '_main'))
+    assert callable(module._main)
 
 
 def test_no_args_prints_help_and_exits_nonzero(capsys, monkeypatch):

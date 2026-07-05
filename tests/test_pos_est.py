@@ -36,7 +36,7 @@ def test_solve_numerically():
 
 def test_dop():
     tdoa_array = gen_tdoa_data(RX_POS, TX_POS)
-    rx_pairs = list(zip(tdoa_array['rx0'], tdoa_array['rx1']))
+    rx_pairs = list(zip(tdoa_array['rx0'], tdoa_array['rx1'], strict=True))
     dop_val = pos_est.dop(TX_POS, RX_POS, rx_pairs)
     assert dop_val > 0
 

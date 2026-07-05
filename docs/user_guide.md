@@ -43,7 +43,7 @@ hardware support and modernizing the codebase.
 | Gain control | Single tuner_gain | Per-stage LNA + Mixer + VGA on Airspy |
 | C library | fastcard (librtlsdr) | fastcapture (libairspy) |
 | Visualization | GNU Radio / osmosdr | matplotlib (FuncAnimation) |
-| Packaging | setup.py only | pyproject.toml + setup.py |
+| Packaging | setup.py only | pyproject.toml (PEP 621) |
 
 **License:** GPL-3.0-only (same as the original Thrifty).
 

@@ -143,9 +143,14 @@ try:
 
 except (OSError, AttributeError) as e:
     _lib_error = str(e)
+    # Reset to None on *partial* binding failure too (AttributeError from
+    # a required symbol missing on an old libairspy): a half-bound library
+    # object would leave later calls untyped and silently ignore e.g. a
+    # user-pinned --airspy-serial.  All-or-nothing is safer.
+    _lib = None
     warnings.warn(
-        f"libairspy not found ({e}). Airspy hardware will not be available. "
-        "Unit tests can still run using MockSDRDevice.",
+        f"libairspy not found or incompatible ({e}). Airspy hardware will "
+        "not be available. Unit tests can still run using MockSDRDevice.",
         ImportWarning,
         stacklevel=2
     )
@@ -212,7 +217,7 @@ def libairspy_version() -> str:
         return str(raw)
 
 
-def _rate_is_supported(rate: int, supported) -> bool:
+def _rate_is_supported(rate: int, supported: 'tuple[int, ...] | list[int]') -> bool:
     """Return True when ``rate`` matches one of the supported rates within
     the small tolerance that absorbs libairspy rounding noise."""
     rate = int(rate)
@@ -237,7 +242,7 @@ def list_airspy_serials() -> list[int]:
     return [int(buf[i]) for i in range(min(got, count))]
 
 
-def parse_airspy_serial(value) -> int:
+def parse_airspy_serial(value: 'int | str') -> int:
     """Convert a CLI serial argument to ``uint64`` for ``airspy_open_sn``.
 
     Accepts:
@@ -286,11 +291,14 @@ class AirspyMiniDevice(SDRDevice):
 
     _SUPPORTED_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
 
-    def __init__(self, serial=None, device_index=None, ppm=0.0):
+    def __init__(self, serial: 'int | str | None' = None,
+                 device_index: 'int | None' = None,
+                 ppm: float = 0.0) -> None:
         self._handle = ctypes.c_void_p(None)
         self._open = False
         self._capturing = False
-        self._callback_ref = None  # keep reference to prevent GC
+        # keep reference to prevent GC of the ctypes trampoline
+        self._callback_ref: object = None
         self._serial = "unknown"
         self._requested_serial = serial
         self._requested_index = device_index
@@ -303,18 +311,39 @@ class AirspyMiniDevice(SDRDevice):
         self._ppm = float(ppm)
         # Persistent streaming state for read_sync()
         self._stream_started = False
-        self._stream_chunks = collections.deque()
+        self._stream_chunks: collections.deque[np.ndarray] = \
+            collections.deque()
         self._stream_total = 0  # total int16 values buffered
         self._stream_lock = threading.Lock()
         self._stream_event = threading.Event()
-        self._user_callback = None  # for start_capture() async mode
+        # for start_capture() async mode
+        self._user_callback: 'Callable[[np.ndarray], None] | None' = None
         # Cumulative count of IQ sample pairs that libairspy reported as
         # dropped (e.g. due to USB overflow).  Exposed as a public
         # attribute so that higher-level code (_capture_airspy) can
         # adjust block indices to reflect real elapsed time.
         self.dropped_samples = 0
+        # Bounded internal stream buffer: at most ``max_buffer_seconds``
+        # of samples are queued for read_sync(); beyond that, incoming
+        # chunks are dropped (counted below) instead of growing RSS
+        # without bound when the consumer is persistently too slow.
+        self.max_buffer_seconds = 4.0
+        self._max_stream_values: int | None = None  # set by _start_rx()
+        self._buffer_full_logged = False
+        # IQ pairs dropped by *this* layer because the bounded buffer was
+        # full (in addition to hardware/USB drops).  Also folded into
+        # ``dropped_samples`` so block-index accounting stays honest.
+        self.software_dropped_samples = 0
+        # First exception raised inside the RX callback (ctypes swallows
+        # them otherwise); surfaced by read_sync()/stop_capture().
+        self._callback_error: BaseException | None = None
+        # read_sync() timeout in seconds (public so tests and slow-host
+        # deployments can tune it).
+        self.read_timeout = 10.0
+        # Last configured sample rate (used to size the bounded buffer).
+        self._sample_rate: int | None = None
 
-    def _resolve_open_serial(self):
+    def _resolve_open_serial(self) -> 'int | None':
         """Return a uint64 serial to open with, or ``None`` for default open."""
         if self._requested_serial is not None:
             return parse_airspy_serial(self._requested_serial)
@@ -450,6 +479,7 @@ class AirspyMiniDevice(SDRDevice):
         ret = lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
+        self._sample_rate = int(rate)
 
     def set_center_freq(self, freq: int) -> None:
         lib = self._check_open()
@@ -584,9 +614,13 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceConfigError(
                 f"{name} gain {value} out of range [{lo}, {hi}]")
 
-    def apply_gain_mode(self, mode: str, *, lna=None, mixer=None, vga=None,
-                         lna_agc=False, mixer_agc=False,
-                         combined=None) -> None:
+    def apply_gain_mode(self, mode: str, *,
+                         lna: 'int | None' = None,
+                         mixer: 'int | None' = None,
+                         vga: 'int | None' = None,
+                         lna_agc: bool = False,
+                         mixer_agc: bool = False,
+                         combined: 'int | None' = None) -> None:
         """Apply one of the three top-level gain configurations.
 
         Parameters
@@ -653,8 +687,45 @@ class AirspyMiniDevice(SDRDevice):
         self._start_rx()
 
     def stop_capture(self) -> None:
+        if self._callback_error is not None:
+            # Don't raise on the cleanup path, but don't lose it either.
+            logger.error("Airspy RX callback had failed: %r",
+                         self._callback_error)
+            self._callback_error = None
         self._stop_rx()
         self._user_callback = None
+
+    def _on_samples(self, arr: np.ndarray) -> None:
+        """Route one chunk of interleaved int16 samples.
+
+        Runs on the libairspy callback thread.  Either forwards to the
+        user callback (``start_capture`` mode) or appends to the bounded
+        internal stream buffer (``read_sync`` mode).
+        """
+        if self._user_callback is not None:
+            self._user_callback(arr)
+            return
+        with self._stream_lock:
+            cap = self._max_stream_values
+            if cap is not None and self._stream_total + len(arr) > cap:
+                # Bounded buffer: the consumer is persistently too slow.
+                # Drop the *newest* chunk (the same end of the stream
+                # where USB overflow drops occur) and account for it so
+                # downstream block-index math stays honest.
+                dropped_pairs = len(arr) // 2
+                self.software_dropped_samples += dropped_pairs
+                self.dropped_samples += dropped_pairs
+                if not self._buffer_full_logged:
+                    logger.warning(
+                        "read_sync buffer full (%d int16 values, "
+                        "%.1f s cap); dropping samples — consumer too "
+                        "slow", cap, self.max_buffer_seconds)
+                    self._buffer_full_logged = True
+                return
+            self._buffer_full_logged = False
+            self._stream_chunks.append(arr)
+            self._stream_total += len(arr)
+            self._stream_event.set()
 
     def _start_rx(self) -> None:
         """Start the Airspy RX stream (called once, shared by both modes)."""
@@ -662,25 +733,34 @@ class AirspyMiniDevice(SDRDevice):
             return
         lib = self._check_open()
 
-        def _c_callback(transfer_ptr):
-            t = transfer_ptr.contents
-            count = t.sample_count * 2  # I and Q interleaved
-            buf = (ctypes.c_int16 * count).from_address(
-                ctypes.cast(t.samples, ctypes.c_void_p).value)
-            arr = np.frombuffer(buf, dtype=np.int16).copy()
-            # Track samples dropped by hardware (USB overflow, etc.)
-            if t.dropped_samples > 0:
-                self.dropped_samples += t.dropped_samples
-                logger.debug("Airspy dropped %d samples (total %d)",
-                             t.dropped_samples, self.dropped_samples)
-            # Route to user callback or internal stream buffer
-            if self._user_callback is not None:
-                self._user_callback(arr)
-            else:
-                with self._stream_lock:
-                    self._stream_chunks.append(arr)
-                    self._stream_total += len(arr)
-                    self._stream_event.set()
+        # Size the bounded read_sync buffer from the configured sample
+        # rate (int16 values = pairs * 2); fall back to the highest Mini
+        # rate when set_sample_rate has not been called yet.
+        rate = self._sample_rate or max(self._supported_sample_rates)
+        self._max_stream_values = int(rate * 2 * self.max_buffer_seconds)
+        self._callback_error = None
+
+        def _c_callback(transfer_ptr):  # type: ignore[no-untyped-def]
+            try:
+                t = transfer_ptr.contents
+                count = t.sample_count * 2  # I and Q interleaved
+                buf = (ctypes.c_int16 * count).from_address(
+                    ctypes.cast(t.samples, ctypes.c_void_p).value)
+                arr = np.frombuffer(buf, dtype=np.int16).copy()
+                # Track samples dropped by hardware (USB overflow, etc.)
+                if t.dropped_samples > 0:
+                    self.dropped_samples += t.dropped_samples
+                    logger.debug("Airspy dropped %d samples (total %d)",
+                                 t.dropped_samples, self.dropped_samples)
+                self._on_samples(arr)
+            except Exception as exc:
+                # ctypes would only print the traceback and carry on,
+                # silently degrading the capture.  Record the first
+                # error so read_sync()/stop_capture() can surface it.
+                if self._callback_error is None:
+                    self._callback_error = exc
+                    logger.exception("Airspy RX callback failed")
+                self._stream_event.set()  # wake a blocked read_sync()
             return 0
 
         self._callback_ref = _CALLBACK_TYPE(_c_callback)
@@ -696,6 +776,8 @@ class AirspyMiniDevice(SDRDevice):
             self._capturing = False
         self._stream_started = False
         self.dropped_samples = 0
+        self.software_dropped_samples = 0
+        self._buffer_full_logged = False
         with self._stream_lock:
             self._stream_chunks.clear()
             self._stream_total = 0
@@ -734,9 +816,14 @@ class AirspyMiniDevice(SDRDevice):
             self._stream_started = True
 
         needed = num_samples * 2  # int16 values (I + Q interleaved)
-        deadline = time.monotonic() + 10.0
+        deadline = time.monotonic() + self.read_timeout
 
         while True:
+            if self._callback_error is not None:
+                exc = self._callback_error
+                self._callback_error = None
+                raise DeviceCaptureError(
+                    f"Airspy RX callback failed: {exc!r}") from exc
             with self._stream_lock:
                 if self._stream_total >= needed:
                     parts = []
@@ -760,7 +847,7 @@ class AirspyMiniDevice(SDRDevice):
                 with self._stream_lock:
                     have = self._stream_total // 2
                 raise DeviceCaptureError(
-                    f"read_sync timed out after 10 s: "
+                    f"read_sync timed out after {self.read_timeout:g} s: "
                     f"collected {have}/{num_samples} samples")
             self._stream_event.wait(timeout=min(wait_time, 0.05))
             self._stream_event.clear()
@@ -773,7 +860,7 @@ class AirspyMiniDevice(SDRDevice):
     def is_capturing(self) -> bool:
         return self._capturing
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             if self._open:
                 self.close()

@@ -228,7 +228,7 @@ def card_reader(stream, bit_depth=None):
             raise ValueError(
                 "Malformed .card line: expected 'timestamp index data', "
                 "got: {!r}".format(line.rstrip('\n'))
-            )
+            ) from None
         raw_bytes = base64.b64decode(encoded)
 
         # Default: if not set from header, use bit_depth arg or fall back to 8

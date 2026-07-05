@@ -134,6 +134,15 @@ PLAUSIBLE = credible failure path, not executed.
 
 ## 6. Recommended next steps (priority order)
 
+> **Resolution update (same branch, follow-up commit):** N1, N2, N3,
+> N4, N5, N6, N7, N8, N9 (matrix + strict smoke), N10, N11 (mypy
+> per-module strict + ruff bugbear), N15, O1 (bounded read_sync buffer
+> with software-drop accounting), and O2 (all-or-nothing libairspy
+> binding) are **fixed**; O3 is partially addressed by the new
+> streaming-core unit tests (`tests/unit/test_airspy_streaming_core.py`).
+> Still open: full O3 (RTL/fastcard path tests), ruff `UP`/`I`
+> mechanical sweep (~190 auto-fixable sites), N12–N14 (info-level).
+
 1. **N1 + N2 + N3** — small, high-leverage correctness fixes
    (swap two lines in `airspy_reader.c`; one type in
    `corr_detector.h/cpp`; one guard + NaN-safe clip in
