@@ -97,6 +97,56 @@ def _bit_depth_for_device(device_type):
     return 8  # RTL-SDR
 
 
+# Lowest supported rate per Airspy device, used when the user did not set
+# --sample-rate explicitly.  The DEFINITIONS default (2.4M) is only valid
+# for RTL-SDR and would otherwise fail validation out of the box.
+_DEVICE_DEFAULT_RATES = {
+    'airspy_mini': 3_000_000,
+    'airspy_r2': 2_500_000,
+}
+
+
+def _apply_device_default_rate(config):
+    """Substitute a device-appropriate default sample rate.
+
+    Only applies when ``sample_rate`` was *not* set explicitly (CLI flag
+    or config file) and the selected device is an Airspy.  Explicit
+    values — valid or not — are left for the validator to judge.
+    Returns a (possibly new) settings Namespace.
+    """
+    explicit = getattr(config, 'explicit_keys', frozenset())
+    if 'sample_rate' in explicit:
+        return config
+    # Only ever replace the stock RTL-SDR default.  Any other value —
+    # even from a programmatic caller that did not populate
+    # explicit_keys — is treated as intentional and left alone.
+    stock_def = settings_module.DEFINITIONS['sample_rate']
+    stock_rate = stock_def.parser(stock_def.default)
+    if int(config.sample_rate) != int(stock_rate):
+        return config
+    device_type = config.get('device_type')
+    default_rate = _DEVICE_DEFAULT_RATES.get(device_type)
+    if default_rate is None:
+        return config
+    logger.info(
+        "sample_rate not set; using %s default %.1f Msps instead of the "
+        "RTL-SDR default %.1f Msps",
+        device_type, default_rate / 1e6, config.sample_rate / 1e6)
+    values = dict(config)
+    values['sample_rate'] = float(default_rate)
+    # Re-run the block-parameter auto-adjust for the new rate.  The
+    # capture command does not request chip_rate, so supply its default
+    # (the adjust helper is a no-op without it).
+    if 'chip_rate' not in values:
+        chip_def = settings_module.DEFINITIONS['chip_rate']
+        values['chip_rate'] = chip_def.parser(chip_def.default)
+    values = settings_module._auto_adjust_block_params(values)
+    values.pop('chip_rate', None)
+    new_config = settings_module.Namespace(values)
+    new_config.explicit_keys = explicit
+    return new_config
+
+
 def _compute_threshold(fft_mag, thresh_coeffs, noise_rms):
     """Compute detection threshold for display.
 
@@ -618,6 +668,10 @@ def capture_cli(args=None):
                     'lna_agc', 'mixer_agc', 'ppm', 'packing']
     config, extra_args = settings_module.load_args(parser, setting_keys,
                                                     argv=args)
+
+    # Derive a usable default sample rate for Airspy devices (the stock
+    # 2.4M default is RTL-SDR-only and would fail validation).
+    config = _apply_device_default_rate(config)
 
     # Validate configuration
     try:

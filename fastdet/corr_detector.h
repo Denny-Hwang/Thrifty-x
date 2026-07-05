@@ -39,7 +39,10 @@ class CorrDetector {
   protected:
     void set_template(const std::vector<float> &template_samples);
     void set_window(size_t block_len, size_t history_len, size_t template_len);
-    float estimate_noise(size_t peak_mag, float signal_energy);
+    // peak_power must stay a float: normalised correlation powers are
+    // typically < 1.0 and an integer parameter would truncate them to 0,
+    // biasing the noise estimate (and hence the threshold) upward.
+    float estimate_noise(float peak_power, float signal_energy);
 
   private:
     size_t len_;

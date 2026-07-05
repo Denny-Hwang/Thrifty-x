@@ -39,9 +39,25 @@ version = {attr = "thriftyx.__version__"}
 target-version = "py310"
 line-length = 88
 
+[tool.ruff.lint]
+# Default E/F subset plus bugbear (real bug patterns: mutable defaults,
+# silent zip truncation, blind excepts, ...).  UP/I are candidates for a
+# follow-up mechanical PR (~190 auto-fixable sites).
+extend-select = ["B"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+
+# Modules that have completed the type-hint rollout are held to the
+# stricter bar so they cannot silently regress to untyped defs.
+[[tool.mypy.overrides]]
+module = [
+    "thriftyx.hal.*",
+    "thriftyx.config_validator",
+    "thriftyx.setting_parsers",
+]
+disallow_untyped_defs = true

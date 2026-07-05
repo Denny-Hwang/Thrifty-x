@@ -135,7 +135,7 @@ def test_card_reader():
                         b"1000.5425 10 r0+Om5==\n"
                         b"1000.5442 20 aaaaaa==")
     blocks = list(block_data.card_reader(stream))
-    timestamps, indices, data = zip(*blocks)
+    timestamps, indices, data = zip(*blocks, strict=True)
     chars = [tuple(block_data.complex_to_raw(x)) for x in data]
 
     assert timestamps == (1000.5425, 1000.5442)

@@ -24,11 +24,15 @@ different algorithm if necessary.
 """
 
 
+import logging
+
 import numpy as np
 from scipy.optimize import curve_fit
 
 from thriftyx import toads_data
 from thriftyx import carrier_detect
+
+logger = logging.getLogger(__name__)
 
 
 class Synchronizer:
@@ -206,8 +210,16 @@ def make_dirichlet_interpolator(block_len, carrier_len,
         # Krueger Section 4.4.2 spec. Without bounds, curve_fit on noisy
         # data can return arbitrarily-large offsets (PR #39 reproducer
         # documented max |offset| ~ 1.07 on synthetic noisy CW).
-        popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess,
-                            bounds=([0.0, -0.5], [np.inf, 0.5]))
+        try:
+            popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess,
+                                bounds=([0.0, -0.5], [np.inf, 0.5]))
+        except (RuntimeError, ValueError) as exc:
+            # Non-convergence or NaN/inf in the window: a single bad
+            # block must not abort a long-running detect; fall back to
+            # the bin centre (offset 0).
+            logger.warning("Dirichlet sub-bin fit failed at peak_idx=%d "
+                           "(%s); using offset 0", peak_idx, exc)
+            return (fft_mag[peak_idx], 0) if return_amplitude else 0
         amplitude, fit_offset = popt
         if return_amplitude:
             return amplitude, fit_offset

@@ -48,7 +48,7 @@ _SI_PREFIXES = {
 }
 
 
-def metric_float(string):
+def metric_float(string: str) -> float:
     """Parse a float with an optional metric prefix as suffix.
 
     Examples
@@ -69,7 +69,7 @@ def metric_float(string):
     return float(quantity_str) * multiplier
 
 
-def freq_range(string):
+def freq_range(string: str) -> tuple[float, float, bool]:
     """Parse carrier frequency range given as a string.
 
     Parameters
@@ -122,7 +122,8 @@ def freq_range(string):
     return start, stop, unit_hz
 
 
-def normalize_freq_range(range_, bin_freq):
+def normalize_freq_range(range_: tuple[float, float, bool],
+                         bin_freq: float) -> tuple[int, int]:
     """Normalize a frequency range to discrete frequency bin values.
 
     Parameters
@@ -146,7 +147,7 @@ def normalize_freq_range(range_, bin_freq):
         return start, stop
 
 
-def threshold(string):
+def threshold(string: str) -> tuple[float, float, float]:
     """Parse threshold formula given as a string.
 
     Parameters

@@ -19,7 +19,8 @@ _REGISTRY: dict[str, type[SDRDevice]] = {
 }
 
 
-def create_device(device_type: str = 'airspy_mini', **kwargs) -> SDRDevice:
+def create_device(device_type: str = 'airspy_mini',
+                  **kwargs: object) -> SDRDevice:
     """Create an SDR device instance.
 
     Parameters

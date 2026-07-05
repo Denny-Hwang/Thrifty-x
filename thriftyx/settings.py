@@ -347,7 +347,8 @@ def add_argparse_arguments(parser, keys, definitions=None):
                                 help=help_str)
 
 
-def load(args=None, config_file=None, definitions=None):
+def load(args=None, config_file=None, definitions=None,
+         return_explicit=False):
     """Load settings from config file and/or command-line arguments.
 
     Returns the default values if neither config_file nor args are specified.
@@ -364,11 +365,15 @@ def load(args=None, config_file=None, definitions=None):
         Key-value config file to load settings from.
     definitions : dict
         Setting definitions (defaults to DEFINITIONS).
+    return_explicit : bool
+        When True, also return the set of keys that were set explicitly
+        (via config file or args) rather than filled from defaults.
 
     Returns
     -------
     dict
-        Map of setting keys to setting values.
+        Map of setting keys to setting values.  When ``return_explicit``
+        is True, a ``(values, explicit_keys)`` tuple instead.
 
     Raises
     ------
@@ -389,6 +394,7 @@ def load(args=None, config_file=None, definitions=None):
     strings = {key: setting.default
                for key, setting in definitions.items()
                if setting.default is not None}
+    explicit = set()
 
     # Load config
     if config_file is not None:
@@ -397,6 +403,7 @@ def load(args=None, config_file=None, definitions=None):
             if key not in definitions:
                 raise SettingKeyError("Unknown setting: {}".format(key))
         strings.update(config_settings)
+        explicit.update(config_settings)
 
     # Override values from arguments
     if args is not None:
@@ -404,6 +411,7 @@ def load(args=None, config_file=None, definitions=None):
             if key not in definitions:
                 raise SettingKeyError("Unknown setting: {}".format(key))
         strings.update(args)
+        explicit.update(args)
 
     # Parse
     values = {k: definitions[k].parser(v) for k, v in strings.items()}
@@ -411,6 +419,8 @@ def load(args=None, config_file=None, definitions=None):
     # Auto-adjust block parameters for higher sample rates
     values = _auto_adjust_block_params(values)
 
+    if return_explicit:
+        return values, explicit
     return values
 
 
@@ -481,10 +491,15 @@ def load_args(parser, keys, argv=None, definitions=None):
                     if k in keys and v is not None}
         extra_args = {k: v for k, v in args.items() if k not in keys}
 
-        settings = load(key_args, config_file, definitions)
+        settings, explicit = load(key_args, config_file, definitions,
+                                  return_explicit=True)
         subset = {k: v for k, v in settings.items() if k in keys}
 
     settings_obj = Namespace(subset)
+    # Record which of the requested keys were set explicitly (CLI flag or
+    # config file) so callers can distinguish them from filled defaults.
+    # Stored as an attribute only — it does not appear in dict iteration.
+    settings_obj.explicit_keys = frozenset(k for k in explicit if k in keys)
     args_obj = Namespace(extra_args)
     return settings_obj, args_obj
 

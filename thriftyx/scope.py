@@ -217,7 +217,7 @@ def scope_cli(args=None):
             counts = np.bincount(raw.astype(np.int32), minlength=hist_bins)
         else:
             counts, _ = np.histogram(raw, bins=hist_bins, range=hist_range)
-        for bar, count in zip(h_bars, counts):
+        for bar, count in zip(h_bars, counts, strict=True):
             bar.set_height(count)
         ax_hist.set_ylim(0, max(np.max(counts), 1) * 1.1)
 

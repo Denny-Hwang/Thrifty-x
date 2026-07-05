@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -92,7 +93,14 @@ double CorrDetector::interpolate_parabolic(float* peak_power) {
     double a = sqrt((double)*(peak_power-1));
     double b = sqrt((double)*(peak_power));
     double c = sqrt((double)*(peak_power+1));
-    double offset = (c - a) / (4*b - 2*a - 2*c);
+    double denom = 4*b - 2*a - 2*c;
+    if (fabs(denom) < 1e-12) {
+        return 0;  // flat peak: no curvature to interpolate against
+    }
+    double offset = (c - a) / denom;
+    if (std::isnan(offset)) {
+        return 0;  // NaN compares false against both clip bounds
+    }
 
     if (offset < -0.5) offset = -0.5;
     if (offset > 0.5) offset = 0.5;
@@ -104,10 +112,23 @@ double CorrDetector::interpolate_gaussian(float* peak_power) {
     // Apply Gaussian interpolation to carrier / correlation peak.
     // WARNING: we're not checking the boundaries!
 
-    double a = log(sqrt((double)*(peak_power-1)));
-    double b = log(sqrt((double)*(peak_power)));
-    double c = log(sqrt((double)*(peak_power+1)));
-    double offset = (c - a) / (4*b - 2*a - 2*c);
+    double pa = (double)*(peak_power-1);
+    double pb = (double)*(peak_power);
+    double pc = (double)*(peak_power+1);
+    if (pa <= 0 || pb <= 0 || pc <= 0) {
+        return 0;  // log() undefined; NaN would escape the clip below
+    }
+    double a = log(sqrt(pa));
+    double b = log(sqrt(pb));
+    double c = log(sqrt(pc));
+    double denom = 4*b - 2*a - 2*c;
+    if (fabs(denom) < 1e-12) {
+        return 0;  // flat peak
+    }
+    double offset = (c - a) / denom;
+    if (std::isnan(offset)) {
+        return 0;
+    }
 
     if (offset < -0.5) offset = -0.5;
     if (offset > 0.5) offset = 0.5;
@@ -115,7 +136,7 @@ double CorrDetector::interpolate_gaussian(float* peak_power) {
     return offset;
 }
 
-float CorrDetector::estimate_noise(size_t peak_power, float signal_energy) {
+float CorrDetector::estimate_noise(float peak_power, float signal_energy) {
     float signal_corr_energy = signal_energy * template_energy_;
     float noise_power = (signal_corr_energy - peak_power) / len_;
     if (noise_power < 0) {

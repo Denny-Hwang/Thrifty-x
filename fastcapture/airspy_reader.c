@@ -125,10 +125,14 @@ static int _airspy_reader_stop(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
     atomic_store(&state->running, 0);
+    /* Unblock a callback thread waiting in circbuf_put() BEFORE calling
+     * airspy_stop_rx(): stop_rx joins the USB consumer thread, so if the
+     * callback is blocked on a full ring buffer (slow consumer) the join
+     * would never return.  Cancel first, then stop. */
+    circbuf_cancel(&state->circbuf);
     if (state->device) {
         airspy_stop_rx(state->device);
     }
-    circbuf_cancel(&state->circbuf);
     return 0;
 }
 

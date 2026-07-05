@@ -44,7 +44,7 @@ def test_device_info_frozen():
         sample_format=SampleFormat.INT16,
         max_gain_stages={},
     )
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         info.name = "Changed"  # frozen dataclass
 
 
