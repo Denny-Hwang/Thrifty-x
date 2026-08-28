@@ -288,14 +288,22 @@ def parse_airspy_serial(value: 'int | str') -> int:
     is_hex = text.startswith('0x')
     if is_hex:
         text = text[2:]
+    def _checked(value_int: int) -> int:
+        # Airspy serials are unsigned 64-bit; silently masking a typo'd
+        # negative or over-long value would select the wrong device.
+        if not 0 <= value_int <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError(
+                f"Airspy serial {text!r} out of the unsigned 64-bit range")
+        return value_int
+
     # Heuristic: if string contains any non-decimal digit, treat as hex.
     if is_hex or any(c in 'abcdef' for c in text):
-        return int(text, 16) & 0xFFFFFFFFFFFFFFFF
+        return _checked(int(text, 16))
     # If purely numeric and exactly 16 chars, treat as hex (e.g. board ID
     # printed by `airspy_info`).
     if len(text) == 16 and all(c in '0123456789abcdef' for c in text):
-        return int(text, 16) & 0xFFFFFFFFFFFFFFFF
-    return int(text) & 0xFFFFFFFFFFFFFFFF
+        return _checked(int(text, 16))
+    return _checked(int(text))
 
 
 class AirspyMiniDevice(SDRDevice):
@@ -857,18 +865,20 @@ class AirspyMiniDevice(SDRDevice):
             Interleaved int16 I/Q array of length ``num_samples * 2``.
         """
         self._check_open()
-        if num_samples <= 0:
-            # np.concatenate([]) would raise; an empty request has an
-            # obvious empty answer.
-            return np.empty(0, dtype=np.int16)
         # If start_capture() is already running with a user callback, the
         # internal stream queue would never receive data — and silently
         # clobbering the user callback (the previous behaviour) hides the
-        # mistake.  Refuse the call instead.
+        # mistake.  Refuse the call instead (checked before the empty
+        # early-return so the misuse is reported consistently even for
+        # a zero-length request).
         if self._capturing and self._user_callback is not None:
             raise DeviceCaptureError(
                 "read_sync() cannot be used while start_capture() is "
                 "active with a user callback. Call stop_capture() first.")
+        if num_samples <= 0:
+            # np.concatenate([]) would raise; an empty request has an
+            # obvious empty answer.
+            return np.empty(0, dtype=np.int16)
         if not self._stream_started:
             self._user_callback = None  # use internal buffer mode
             self._start_rx()

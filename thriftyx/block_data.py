@@ -237,8 +237,28 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                     k, v = kv.split('=', 1)
                     header[k] = v
             if 'bit_depth' in header:
-                header_bit_depth = int(header['bit_depth'])
-                if (data_seen and detected_bit_depth is not None
+                try:
+                    header_bit_depth = int(header['bit_depth'])
+                except ValueError:
+                    logger.warning(
+                        "ignoring unparseable #v2 header value "
+                        "bit_depth=%r", header['bit_depth'])
+                    header.pop('bit_depth')
+                    header_bit_depth = None
+                if header_bit_depth is None:
+                    pass
+                elif (data_seen and detected_bit_depth is None):
+                    # A header after headerless (v1) data: a v1+v2
+                    # concatenation.  Decoding switches to the header's
+                    # width from here on — correct per-section, but
+                    # worth telling the operator about.
+                    logger.warning(
+                        "#v2 header found after headerless (v1) data; "
+                        "decoding switches to bit_depth=%d from this "
+                        "point (concatenated v1+v2 cards?)",
+                        header_bit_depth)
+                    detected_bit_depth = header_bit_depth
+                elif (data_seen and detected_bit_depth is not None
                         and detected_bit_depth != header_bit_depth):
                     # Concatenated cards: switching decode width
                     # mid-stream would corrupt everything after the
@@ -264,7 +284,13 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                     "byte-swapped", header['endian'])
             metadata.update(header)
             if 'sample_rate' in header and expected_sample_rate:
-                header_rate = float(header['sample_rate'])
+                try:
+                    header_rate = float(header['sample_rate'])
+                except ValueError:
+                    logger.warning(
+                        "ignoring unparseable #v2 header value "
+                        "sample_rate=%r", header['sample_rate'])
+                    header_rate = 0.0
                 if header_rate > 0 and abs(
                         header_rate - float(expected_sample_rate)
                         ) > 0.001 * header_rate:

@@ -1,5 +1,14 @@
 # Raspberry Pi 3 Installation Guide
 
+> **LEGACY DOCUMENT** — this guide targets the original Thrifty on
+> Pi 3 / Raspbian Jessie with RTL-SDR and clones the *upstream*
+> repository into `~/thrifty`. Current Thrifty-X deployments should
+> follow [installation_pi5.md](installation_pi5.md) instead. Note that
+> this repository's `rpi/detector.service` expects the clone at
+> `/home/pi/thrifty-x` (and runs the Airspy `fastdet.sh`); if you
+> follow this legacy guide verbatim, adjust the unit's
+> `ExecStart`/`WorkingDirectory` paths to match your clone location.
+
 ## Prepare SD-card
 On Linux PC:
 ```

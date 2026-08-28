@@ -189,11 +189,19 @@ void circbuf_cancel(circbuf_t* circbuf) {
 }
 
 unsigned* circbuf_histogram(circbuf_t* circbuf) {
-    // TODO: lock and copy to buffer
-    return circbuf->histogram;
+    // Take the mutex so a caller racing the producer sees consistent
+    // values.  The returned pointer stays owned by the circbuf; the
+    // caller must not read it concurrently with a live producer (the
+    // stats printers only run after the stream has been stopped).
+    pthread_mutex_lock(&circbuf->mutex);
+    unsigned *histogram = circbuf->histogram;
+    pthread_mutex_unlock(&circbuf->mutex);
+    return histogram;
 }
 
 unsigned circbuf_overflows(circbuf_t* circbuf) {
-    // TODO: lock
-    return circbuf->num_overflows;
+    pthread_mutex_lock(&circbuf->mutex);
+    unsigned overflows = circbuf->num_overflows;
+    pthread_mutex_unlock(&circbuf->mutex);
+    return overflows;
 }

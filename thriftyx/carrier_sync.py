@@ -201,7 +201,10 @@ def make_dirichlet_interpolator(block_len, carrier_len,
     def _interpolator(fft_mag, peak_idx):
         """Curve fitting of Dirichlet kernel to FFT."""
         half = width // 2
-        if len(fft_mag) < width:
+        # The window spans 2*half+1 points (for even `width` that is
+        # width+1); guard on the actual window size so the modulo wrap
+        # below cannot duplicate a bin on a degenerate tiny FFT.
+        if len(fft_mag) < 2 * half + 1:
             return (fft_mag[peak_idx], 0) if return_amplitude else 0
         xdata = np.array(np.arange(-half, half+1))
         # FFT bins are circular: wrap the fit window at both spectrum
@@ -255,7 +258,9 @@ def make_polyfit_interpolator(width):
 
     def _interpolator(fft_mag, peak_idx):
         half = width // 2
-        if len(fft_mag) < width:
+        # Guard on the actual window size (2*half+1 points; width+1 for
+        # even `width`) so the modulo wrap cannot duplicate a bin.
+        if len(fft_mag) < 2 * half + 1:
             return 0
         xdata = np.array(np.arange(-half, half+1))
         # Circular wrap at the spectrum edges (FFT bins are periodic).

@@ -306,22 +306,10 @@ err:
 }
 
 
-void airspy_reader_close(reader_t *reader)
-{
-    if (!reader || !reader->context) return;
-    airspy_state_t *state = (airspy_state_t *)reader->context;
-    atomic_store(&state->running, 0);
-    /* Cancel before stop: see _airspy_reader_stop for the join-vs-
-     * blocked-producer deadlock this prevents. */
-    circbuf_cancel(&state->circbuf);
-    if (state->device) {
-        airspy_stop_rx(state->device);
-        airspy_close(state->device);
-    }
-    circbuf_destroy(&state->circbuf);
-    free(state);
-    reader->context = NULL;
-}
+/* Note: there is deliberately no separate airspy_reader_close() —
+ * teardown goes through the reader_t vtable (reader->free ==
+ * _airspy_reader_free).  A standalone close combined with reader_free
+ * would double-free the state. */
 
 void airspy_reader_print_stats(reader_t *reader, FILE *out)
 {

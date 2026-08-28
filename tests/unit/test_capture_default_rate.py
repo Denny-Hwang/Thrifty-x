@@ -90,3 +90,48 @@ class TestExplicitKeysPlumbing:
         parser = argparse.ArgumentParser()
         cfg, _ = settings.load_args(parser, ['sample_rate'], argv=[])
         assert 'explicit_keys' not in dict(cfg)
+
+
+class TestApplyDeviceDefaultBitDepth:
+    """Dedicated tests for _apply_device_default_bit_depth (previously
+    verified only empirically)."""
+
+    @staticmethod
+    def _bd_cfg(device_type, bit_depth, explicit=frozenset()):
+        from thriftyx.airspy_capture import _apply_device_default_bit_depth
+        ns = Namespace({'device_type': device_type, 'bit_depth': bit_depth})
+        ns.explicit_keys = frozenset(explicit)
+        return _apply_device_default_bit_depth(ns)
+
+    def test_airspy_gets_12_from_stock_default(self):
+        cfg = self._bd_cfg('airspy_mini', 8)
+        assert cfg['bit_depth'] == 12
+
+    def test_r2_gets_12_from_stock_default(self):
+        cfg = self._bd_cfg('airspy_r2', 8)
+        assert cfg['bit_depth'] == 12
+
+    def test_rtlsdr_keeps_8(self):
+        cfg = self._bd_cfg('rtlsdr', 8)
+        assert cfg['bit_depth'] == 8
+
+    def test_explicit_value_left_for_validator(self):
+        cfg = self._bd_cfg('airspy_mini', 8, explicit={'bit_depth'})
+        assert cfg['bit_depth'] == 8
+
+    def test_explicit_keys_survive(self):
+        from thriftyx.airspy_capture import _apply_device_default_bit_depth
+        ns = Namespace({'device_type': 'airspy_mini', 'bit_depth': 8})
+        ns.explicit_keys = frozenset({'tuner_freq'})
+        out = _apply_device_default_bit_depth(ns)
+        assert out.explicit_keys == frozenset({'tuner_freq'})
+
+    def test_stock_airspy_config_validates_without_warnings(self):
+        from thriftyx import config_validator
+        from thriftyx.airspy_capture import (_apply_device_default_bit_depth,
+                                             _apply_device_default_rate)
+        cfg = _cfg('airspy_mini', 2.4e6, tuner_freq=433.83e6, bit_depth=8)
+        cfg = _apply_device_default_rate(cfg)
+        cfg = _apply_device_default_bit_depth(cfg)
+        warnings = config_validator.validate_config(cfg)
+        assert warnings == []
