@@ -325,8 +325,31 @@ promise it, so this is recorded as a scoping clarification.
 > emergency purge spares files newer than `ACTIVE_GRACE_MIN`;
 > `soak_test.sh` enforces `MAX_DISK_GROWTH_MB` and flags an
 > unmonitored throttle signal; `heartbeat.py` documents
-> `last_detection_ts` as last-write time. Still open: the Info/nit
-> list only.
+> `last_detection_ts` as last-write time.
+>
+> **Fourth resolution update (follow-up PR): the Info/nit list is
+> resolved.** README test counts corrected (37 modules, ~390 tests,
+> with a note that the exact count varies with optional deps). The v2
+> card header now records `endian=little` and `block_size=N` (both the
+> Python `write_card_header` and C `fargs_print_card_header`);
+> `card_reader` warns on a foreign `endian` and
+> `diag/check_card_format.py` already prefers the header's
+> `block_size` over its 65536 guess. A mid-file `#v2` header that
+> tries to change `bit_depth` (concatenated cards) is ignored with a
+> warning — first header wins — and the behaviour is documented in the
+> docstring. `card_writer`'s dead `sample_rate` parameter is removed.
+> `fargs.c` rejects `-b` values over 65536 (the uint16 argmax would
+> wrap) or non-powers-of-two. HAL: a second `start_capture()` raises
+> instead of silently swapping the user callback; the RX callback
+> verifies `transfer.sample_type == INT16_IQ` before reinterpreting
+> bytes; the `airspy_open_sn`-fallback branch is annotated as
+> fake-support (it is unreachable against the all-or-nothing real
+> binding, but live for partially-populated test fakes, so it stays);
+> the `-d` help text no longer claims to be RTL-SDR-only. The
+> validator applies the R820T/2 RTL-SDR range (24 MHz–1.766 GHz) to
+> `rtlsdr` instead of the Airspy range. `_raw_reader`'s misleading
+> `chunk_bytes - len(chunk)` expression is simplified. All findings
+> from this validation report are now resolved.
 
 1. **C1–C3** — convert `raw_reader.c`/`card_reader.c` to the int16
    layout and fix `fastdet -x` export size; add a C round-trip test to

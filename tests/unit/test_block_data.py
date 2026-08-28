@@ -282,3 +282,49 @@ class TestBlockReaderZeroHistory:
         blocks = list(block_reader(stream, size=8, history=0, bit_depth=8))
         assert len(blocks) == 4
         assert all(len(data) == 8 for _, _, data in blocks)
+
+
+class TestV2HeaderMetadata:
+    """Info-level findings: endian/block_size recorded in the header,
+    endian mismatch warning, and first-header-wins for bit_depth."""
+
+    def test_header_records_endian_and_block_size(self):
+        buf = io.StringIO()
+        write_card_header(buf, bit_depth=12, sample_rate=6_000_000,
+                          block_size=16384)
+        line = buf.getvalue()
+        assert 'endian=little' in line
+        assert 'block_size=16384' in line
+
+    def test_header_block_size_optional(self):
+        buf = io.StringIO()
+        write_card_header(buf, bit_depth=12, sample_rate=6_000_000)
+        assert 'block_size' not in buf.getvalue()
+
+    def test_foreign_endian_warns(self, caplog):
+        import logging
+        raw = np.zeros(32, dtype=np.int16)
+        encoded = base64.b64encode(raw.tobytes()).decode('ascii')
+        stream = io.StringIO(
+            '#v2 bit_depth=12 sample_rate=6000000 endian=big\n'
+            f'0.000000 0 {encoded}\n')
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream))
+        assert len(blocks) == 1
+        assert any('endian' in r.message for r in caplog.records)
+
+    def test_midfile_bit_depth_change_ignored(self, caplog):
+        import logging
+        raw12 = np.zeros(32, dtype=np.int16)
+        enc12 = base64.b64encode(raw12.tobytes()).decode('ascii')
+        stream = io.StringIO(
+            '#v2 bit_depth=12 sample_rate=6000000\n'
+            f'0.000000 0 {enc12}\n'
+            '#v2 bit_depth=8 sample_rate=2400000\n'
+            f'1.000000 1 {enc12}\n')
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream))
+        # Both blocks decode as int16 (16 complex samples each); the
+        # mid-file header did not switch the tail to 8-bit (32 samples).
+        assert [len(b[2]) for b in blocks] == [16, 16]
+        assert any('mid-file' in r.message for r in caplog.records)

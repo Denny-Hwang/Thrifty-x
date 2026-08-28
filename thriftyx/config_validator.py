@@ -22,6 +22,9 @@ RTLSDR_RATES = frozenset({
     2_560_000, 2_800_000, 3_200_000,
 })
 DEVICE_FREQ_RANGE = (24_000_000, 1_800_000_000)
+# R820T/2 RTL-SDR dongles tune ~24 MHz-1.766 GHz; applying the Airspy
+# range to them would accept frequencies the tuner cannot reach.
+RTLSDR_FREQ_RANGE = (24_000_000, 1_766_000_000)
 GAIN_LIMITS_MINI = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
 # R2 uses the same R820T2 tuner as the Mini: LNA index range is 0-14.
 GAIN_LIMITS_R2 = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
@@ -80,14 +83,16 @@ def validate_config(config: dict) -> list[str]:
                     f"sample_rate {sample_rate} not supported by {device_type}. "
                     f"Valid rates: {sorted(valid_rates)}")
 
-    # 3. center_freq within 24 MHz – 1.8 GHz
+    # 3. center_freq within the tuner's range (per device type)
     freq = config.get('tuner_freq')
     if freq is not None:
         freq = int(freq)
-        min_f, max_f = DEVICE_FREQ_RANGE
+        min_f, max_f = (RTLSDR_FREQ_RANGE if device_type == 'rtlsdr'
+                        else DEVICE_FREQ_RANGE)
         if not (min_f <= freq <= max_f):
             raise ConfigValidationError(
-                f"tuner_freq {freq} Hz out of range [{min_f}, {max_f}] Hz")
+                f"tuner_freq {freq} Hz out of range [{min_f}, {max_f}] Hz "
+                f"for {device_type}")
 
     # 4. block_size must be power of 2
     block_size = config.get('block_size')

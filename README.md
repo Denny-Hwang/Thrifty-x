@@ -60,7 +60,7 @@ All documentation is in English.
 | Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` (PEP 621); dynamic version |
-| Tests | Minimal | 36 test modules / 373 tests; lint + type-check + pytest (3.10 & 3.13) + C builds gated in CI |
+| Tests | Minimal | 37 test modules (≈390 tests — the exact count varies with optional dependencies); lint + type-check + pytest (3.10 & 3.13) + C builds & int16 card round-trip gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -423,7 +423,7 @@ Thrifty-x/
 ├── fastdet/             # ▶ Active C++ correlation detector (links fastcapture)
 ├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
 ├── tests/
-│   ├── unit/            #   27 unit-test modules
+│   ├── unit/            #   28 unit-test modules
 │   ├── integration/     #   1 integration test (block_data + mock capture)
 │   └── test_*.py        #   8 top-level pipeline-stage tests
 ├── scripts/             # Standalone analysis helper scripts

@@ -524,7 +524,8 @@ def _capture_airspy(config, extra_args, output_file):
         # ``out == NULL`` behaviour when no ``-o`` is given.
         if output_file is not None:
             write_card_header(output_file, bit_depth=bit_depth,
-                              sample_rate=sample_rate)
+                              sample_rate=sample_rate,
+                              block_size=block_size)
 
         # Print fastcard-compatible configuration header (always, to stderr)
         _print_capture_header(config, window, device_type=device_type)
@@ -689,7 +690,10 @@ def capture_cli(args=None):
     parser.add_argument('--fastcard', dest='fastcard', default='fastcard',
                         help="Path to fastcard binary")
     parser.add_argument('-d', '--device-index', dest='device_index',
-                        type=int, default=0, help="RTL-SDR device index")
+                        type=int, default=0,
+                        help="0-based device enumeration index (any device "
+                             "type; for Airspy, --airspy-serial takes "
+                             "precedence)")
 
     setting_keys = ['device_type', 'sample_rate', 'tuner_freq',
                     'tuner_gain', 'block_size', 'block_history',

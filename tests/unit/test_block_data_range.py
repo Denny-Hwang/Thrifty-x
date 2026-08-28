@@ -155,8 +155,7 @@ def test_v2_card_roundtrip_preserves_normalization():
 
     buf = io.StringIO()
     write_card_header(buf, bit_depth=12, sample_rate=10_000_000)
-    card_writer(buf, 0.0, 0, sig.astype(np.complex64),
-                bit_depth=12, sample_rate=10_000_000)
+    card_writer(buf, 0.0, 0, sig.astype(np.complex64), bit_depth=12)
     buf.seek(0)
     blocks = list(card_reader(buf))
     assert len(blocks) == 1
