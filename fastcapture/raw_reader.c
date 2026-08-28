@@ -19,18 +19,20 @@ int raw_reader_next(raw_reader_t* state) {
 
     size_t new_len = state->settings.block_size - history_size;
 
-    memcpy(output->raw_samples,
-           output->raw_samples + new_len,
-           history_size * 2);
+    // raw_samples is int16_t I/Q: one pair = 2 values (4 bytes).
+    // memmove: source and destination overlap when history > new data.
+    memmove(output->raw_samples,
+            output->raw_samples + new_len * 2,
+            history_size * 2 * sizeof(int16_t));
 
     // Read new data
-    size_t read = fread(output->raw_samples + history_size,
-                        2,
-                        new_len,
+    size_t read = fread(output->raw_samples + history_size * 2,
+                        sizeof(int16_t),
+                        new_len * 2,
                         state->file);
 
 
-    if (read != new_len) {
+    if (read != new_len * 2) {
         if (!feof(state->file)) {
             perror("Short read");
             return -1;

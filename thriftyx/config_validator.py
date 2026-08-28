@@ -23,7 +23,8 @@ RTLSDR_RATES = frozenset({
 })
 DEVICE_FREQ_RANGE = (24_000_000, 1_800_000_000)
 GAIN_LIMITS_MINI = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
-GAIN_LIMITS_R2 = {'lna': (0, 15), 'mixer': (0, 15), 'vga': (0, 15)}
+# R2 uses the same R820T2 tuner as the Mini: LNA index range is 0-14.
+GAIN_LIMITS_R2 = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
 
 ALL_VALID_DEVICES = ('rtlsdr', 'airspy_mini', 'airspy_r2')
 

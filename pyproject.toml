@@ -18,7 +18,7 @@ dependencies = [
 fft = ["pyfftw>=0.13"]
 analysis = ["matplotlib>=3.6"]
 gui = ["matplotlib>=3.6", "PyQt5>=5.15"]
-dev = ["pytest>=7.0", "pytest-cov", "mypy", "ruff"]
+dev = ["pytest>=7.0", "pytest-cov", "mypy", "ruff>=0.16,<0.17"]
 all = ["thriftyx[fft,analysis,gui,dev]"]
 
 [project.scripts]
@@ -40,10 +40,14 @@ target-version = "py310"
 line-length = 88
 
 [tool.ruff.lint]
-# Default E/F subset plus bugbear (real bug patterns: mutable defaults,
-# silent zip truncation, blind excepts, ...).  UP/I are candidates for a
-# follow-up mechanical PR (~190 auto-fixable sites).
-extend-select = ["B"]
+# Pin the rule set explicitly instead of relying on ruff's default
+# `select`, which grows new rule groups across releases and would make
+# the CI lint gate drift (ruff 0.16 added UP/I/LOG/... by default).
+# E4/E7/E9/F is the historical default subset; E501 enforces the
+# line-length above; B is bugbear (real bug patterns: mutable defaults,
+# silent zip truncation, blind excepts, ...).  UP/I are candidates for
+# a follow-up mechanical PR (~190 auto-fixable sites).
+select = ["E4", "E7", "E9", "E501", "F", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,9 +28,11 @@ int card_reader_next(card_reader_t* state) {
 
     size_t new_len = state->settings.block_size - history_size;
 
-    memcpy(output->raw_samples,
-           output->raw_samples + new_len,
-           history_size * 2);
+    // raw_samples is int16_t I/Q: one pair = 2 values (4 bytes).
+    // memmove: source and destination overlap when history > new data.
+    memmove(output->raw_samples,
+            output->raw_samples + new_len * 2,
+            history_size * 2 * sizeof(int16_t));
 
     // Read new data
     char c;
@@ -66,12 +68,16 @@ int card_reader_next(card_reader_t* state) {
     }
 
     // fgets will terminate string
-    unsigned long num = Base64decode((char*)output->raw_samples, state->base64,
-                                     2*state->settings.block_size);
-    if (num != 2*state->settings.block_size) {
+    // v2 card format: block_size I/Q pairs of int16 = 4 bytes per pair.
+    // Base64decode needs headroom beyond the payload for its trailing
+    // NUL; raw_samples is allocated with 5 spare bytes (reader.c).
+    size_t block_bytes = 2 * state->settings.block_size * sizeof(int16_t);
+    long num = Base64decode((char*)output->raw_samples, state->base64,
+                            block_bytes + 4);
+    if (num < 0 || (size_t)num != block_bytes) {
         fprintf(stderr, "card_reader: block length is %ld, expected %zu\n",
                 num,
-                2*state->settings.block_size);
+                block_bytes);
         return -6;
     }
 
@@ -89,7 +95,8 @@ reader_t * card_reader_new(reader_settings_t settings,
     }
     state->settings = settings;
     state->file = file;
-    state->base64_len = (2*settings.block_size+2)/3*4;
+    // v2 card format: base64 of block_size int16 I/Q pairs (4 bytes/pair)
+    state->base64_len = (2*settings.block_size*sizeof(int16_t)+2)/3*4;
     // base64 buffer: leave space for \n and \0
     state->base64 = (char*) malloc(state->base64_len + 2);
     if (state->base64 == NULL) {

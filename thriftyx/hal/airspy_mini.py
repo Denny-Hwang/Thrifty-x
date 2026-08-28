@@ -255,10 +255,13 @@ def parse_airspy_serial(value: 'int | str') -> int:
     if value is None:
         raise ValueError("Airspy serial value is None")
     text = str(value).strip().lower().replace('_', '')
-    if text.startswith('0x'):
+    # An explicit 0x prefix always means hex, even when the remaining
+    # digits happen to be all-decimal (e.g. "0x12345678").
+    is_hex = text.startswith('0x')
+    if is_hex:
         text = text[2:]
     # Heuristic: if string contains any non-decimal digit, treat as hex.
-    if any(c in 'abcdef' for c in text):
+    if is_hex or any(c in 'abcdef' for c in text):
         return int(text, 16) & 0xFFFFFFFFFFFFFFFF
     # If purely numeric and exactly 16 chars, treat as hex (e.g. board ID
     # printed by `airspy_info`).

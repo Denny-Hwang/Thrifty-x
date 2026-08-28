@@ -265,6 +265,21 @@ promise it, so this is recorded as a scoping clarification.
 
 ## 6. Recommended next steps (priority order)
 
+> **Resolution update (same branch, follow-up commit):** items 1–3
+> below are **fixed**: C1–C3 (int16 layout in `raw_reader.c`,
+> `card_reader.c`, `fastdet.cpp` card export; round-trip verified
+> against a built binary and now gated in CI by
+> `scripts/c_card_roundtrip_check.py`), M1–M3 (serial-prefix parse
+> order, R2 LNA range 0–14, R2 `_sample_rate` bookkeeping; covered by
+> the new `tests/unit/test_airspy_r2.py`), and M9 (ruff constrained to
+> `>=0.16,<0.17` with an explicit `lint.select`; the four `E501` lines
+> wrapped). While validating, a pre-existing test-hygiene defect
+> surfaced: `test_airspy_streaming_core._streaming_device` leaked
+> fake-state devices whose `__del__` → `close()` → `airspy_stop_rx(NULL)`
+> segfaults the suite on any machine with libairspy installed (CI never
+> installs it, so the gate was blind); fixed by shadowing `close` on
+> the fake-state device. M4–M8 and the minor list remain open.
+
 1. **C1–C3** — convert `raw_reader.c`/`card_reader.c` to the int16
    layout and fix `fastdet -x` export size; add a C round-trip test to
    CI (write card → re-read) so the gate proves more than compilation.
