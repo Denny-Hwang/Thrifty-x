@@ -47,7 +47,9 @@ def _raw_block_reader(stream, block_size, bit_depth=12):
     chunk_bytes = block_size * bytes_per_sample * 2  # *2 for I+Q
     dtype = np.int16 if bit_depth == 12 else np.uint8
     chunk = b""
-    for raw in _raw_reader(stream, chunk_bytes - len(chunk)):
+    # Note: the read size is fixed; the remainder logic below handles
+    # short reads by accumulating into `chunk`.
+    for raw in _raw_reader(stream, chunk_bytes):
         chunk += raw
         if len(chunk) < chunk_bytes:
             continue
@@ -196,6 +198,15 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
         is still processed, but carrier frequencies and SoA→TDOA
         scaling will be wrong if the configured rate is used downstream.
 
+    Notes
+    -----
+    The first ``#v2`` header fixes the file's bit depth: a later header
+    that tries to *change* it mid-file (e.g. two cards concatenated with
+    ``cat``) is ignored with a warning, since silently switching decode
+    width mid-stream would corrupt every block after the seam.  A header
+    recording a non-little ``endian`` is warned about (decoding assumes
+    the native byte order, and all supported targets are little-endian).
+
     Yields
     ------
     timestamp : float
@@ -204,6 +215,7 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     """
     detected_bit_depth = bit_depth
     metadata = {}
+    data_seen = False
 
     while True:
         line = stream.readline()
@@ -217,21 +229,40 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
         if (line.startswith('#v2')
                 and (line.rstrip('\r\n') == '#v2' or line[3] in ' \t')):
             # Parse v2 metadata
+            header = {}
             for kv in line[3:].strip().split():
                 if '=' in kv:
                     k, v = kv.split('=', 1)
-                    metadata[k] = v
-            if 'bit_depth' in metadata:
-                header_bit_depth = int(metadata['bit_depth'])
-                if (detected_bit_depth is not None
+                    header[k] = v
+            if 'bit_depth' in header:
+                header_bit_depth = int(header['bit_depth'])
+                if (data_seen and detected_bit_depth is not None
                         and detected_bit_depth != header_bit_depth):
+                    # Concatenated cards: switching decode width
+                    # mid-stream would corrupt everything after the
+                    # seam.  First header wins.
                     logger.warning(
-                        "card bit_depth=%d from #v2 header overrides "
-                        "configured bit_depth=%d",
-                        header_bit_depth, detected_bit_depth)
-                detected_bit_depth = header_bit_depth
-            if 'sample_rate' in metadata and expected_sample_rate:
-                header_rate = float(metadata['sample_rate'])
+                        "ignoring mid-file #v2 header changing "
+                        "bit_depth %d -> %d (concatenated cards?); "
+                        "the first header stays in effect",
+                        detected_bit_depth, header_bit_depth)
+                    header.pop('bit_depth')
+                else:
+                    if (detected_bit_depth is not None
+                            and detected_bit_depth != header_bit_depth):
+                        logger.warning(
+                            "card bit_depth=%d from #v2 header overrides "
+                            "configured bit_depth=%d",
+                            header_bit_depth, detected_bit_depth)
+                    detected_bit_depth = header_bit_depth
+            if header.get('endian', 'little') != 'little':
+                logger.warning(
+                    "card records endian=%s but decoding assumes the "
+                    "native (little-endian) byte order; samples may be "
+                    "byte-swapped", header['endian'])
+            metadata.update(header)
+            if 'sample_rate' in header and expected_sample_rate:
+                header_rate = float(header['sample_rate'])
                 if header_rate > 0 and abs(
                         header_rate - float(expected_sample_rate)
                         ) > 0.001 * header_rate:
@@ -270,11 +301,11 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                 "(%s); complete blocks before it are unaffected",
                 idx, exc)
             continue
+        data_seen = True
         yield float(timestamp), int(idx), Signal(data)
 
 
-def card_writer(stream, timestamp, block_idx, block, bit_depth=8,
-                sample_rate=2_400_000):
+def card_writer(stream, timestamp, block_idx, block, bit_depth=8):
     """Write a single block to .card format.
 
     Parameters
@@ -285,14 +316,14 @@ def card_writer(stream, timestamp, block_idx, block, bit_depth=8,
     block : :class:`numpy.ndarray` of complex64
     bit_depth : int
         8 for RTL-SDR (default), 12 for Airspy.
-    sample_rate : int
     """
     raw = complex_to_raw(block, bit_depth=bit_depth)
     encoded = base64.b64encode(raw.tobytes()).decode('ascii')
     stream.write(f"{timestamp:.6f} {block_idx} {encoded}\n")
 
 
-def write_card_header(stream, bit_depth=8, sample_rate=2_400_000):
+def write_card_header(stream, bit_depth=8, sample_rate=2_400_000,
+                      block_size=None):
     """Write v2 .card file header.
 
     Parameters
@@ -301,6 +332,16 @@ def write_card_header(stream, bit_depth=8, sample_rate=2_400_000):
     bit_depth : int
         8 for RTL-SDR (default), 12 for Airspy.
     sample_rate : int
+    block_size : int or None
+        Samples per block; recorded so tooling (e.g.
+        ``diag/check_card_format.py``) does not have to guess it.
+
+    Notes
+    -----
+    ``endian=little`` records the int16 byte order explicitly.  All
+    supported targets (Pi, x86) are little-endian; readers on other
+    hosts can detect the mismatch instead of decoding garbage.
     """
+    extra = f" block_size={block_size}" if block_size else ""
     stream.write(f"{_V2_HEADER_PREFIX}bit_depth={bit_depth} "
-                 f"sample_rate={sample_rate}\n")
+                 f"sample_rate={sample_rate} endian=little{extra}\n")

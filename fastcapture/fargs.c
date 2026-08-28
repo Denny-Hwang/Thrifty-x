@@ -144,6 +144,14 @@ int fargs_parse_opt(fargs_t *fargs,
             if (*endptr != '\0' || fargs->block_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
+            /* The carrier argmax is stored in a uint16_t (cardet.c,
+             * corr_detector.cpp), so an FFT longer than 65536 bins
+             * would silently wrap peak indices.  Also enforce the
+             * documented power-of-two requirement (FFT length). */
+            if (fargs->block_len > 65536
+                    || (fargs->block_len & (fargs->block_len - 1)) != 0) {
+                return FARGS_INVALID_VALUE;
+            }
             break;
         case 'h':
             fargs->history_len = strtoul(arg, &endptr, 10);
@@ -228,9 +236,12 @@ void fargs_print_card_header(fargs_t *fa,
                              bool sdr,
                              const char* tool) {
     /* v2 machine-readable header: parsed by thriftyx/block_data.card_reader
-     * to select int16 (12-bit Airspy) sample decoding automatically. */
-    fprintf(out, "#v2 bit_depth=12 sample_rate=%u\n",
-            sdr ? fa->sdr_sample_rate : 0);
+     * to select int16 (12-bit Airspy) sample decoding automatically.
+     * endian/block_size mirror the Python write_card_header so tooling
+     * does not have to guess them. */
+    fprintf(out, "#v2 bit_depth=12 sample_rate=%u endian=little "
+            "block_size=%zu\n",
+            sdr ? fa->sdr_sample_rate : 0, fa->block_len);
     fprintf(out,
             "# arguments: { carrier_bin: '%d-%d', threshold: '%gc+%gs', "
             "block_size: %zu, history_size: %zu }\n",

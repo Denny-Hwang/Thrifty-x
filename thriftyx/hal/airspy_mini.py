@@ -405,6 +405,10 @@ class AirspyMiniDevice(SDRDevice):
                     f"airspy_open_sn(0x{sn:016X}) failed with code {ret}. "
                     "Is the requested Airspy device connected?")
         else:
+            # Note: against a real bound libairspy this branch is only
+            # reached with sn=None (airspy_open_sn is a required symbol
+            # of the all-or-nothing binding); the sn-not-None warning
+            # path exists for partially-populated test fakes.
             if sn is not None:
                 logger.warning(
                     "airspy_open_sn unavailable in this libairspy build; "
@@ -721,6 +725,12 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceCaptureError(
                 "Cannot start_capture() while read_sync() streaming is active. "
                 "Call stop_capture() first.")
+        if self._capturing:
+            # A second start_capture() used to silently swap the user
+            # callback mid-stream; make the misuse loud instead.
+            raise DeviceCaptureError(
+                "Capture is already active. Call stop_capture() before "
+                "starting a new capture.")
         self._user_callback = callback
         self._start_rx()
 
@@ -781,6 +791,13 @@ class AirspyMiniDevice(SDRDevice):
         def _c_callback(transfer_ptr):  # type: ignore[no-untyped-def]
             try:
                 t = transfer_ptr.contents
+                # Cheap defence: the bytes below are reinterpreted as
+                # int16 I/Q, which is only valid for INT16_IQ transfers.
+                if t.sample_type != AIRSPY_SAMPLE_INT16_IQ:
+                    raise DeviceCaptureError(
+                        f"unexpected sample_type {t.sample_type} in RX "
+                        f"transfer (expected INT16_IQ="
+                        f"{AIRSPY_SAMPLE_INT16_IQ})")
                 count = t.sample_count * 2  # I and Q interleaved
                 buf = (ctypes.c_int16 * count).from_address(
                     ctypes.cast(t.samples, ctypes.c_void_p).value)
