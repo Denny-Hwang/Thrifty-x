@@ -38,6 +38,8 @@ typedef struct {
     reader_t            *reader;   /* back-pointer for dispatch */
     block_t             *output;   /* block whose raw_samples we fill */
     size_t               history_size; /* history length in I/Q pairs */
+    atomic_ullong        dropped_samples; /* libairspy-reported drops */
+    atomic_int           drop_warned;     /* one-shot stderr warning */
 } airspy_state_t;
 
 
@@ -46,6 +48,22 @@ static int _airspy_callback(airspy_transfer_t *transfer)
     airspy_state_t *state = (airspy_state_t *)transfer->ctx;
     if (!atomic_load(&state->running) || transfer->sample_count <= 0)
         return 0;
+
+    /* A dropped-sample report means a stream discontinuity: block
+     * boundaries after this point no longer line up with wall-clock
+     * sample counts, which invalidates downstream SoA indexing.  Keep
+     * an account and warn the operator once — silence here would let a
+     * TDOA deployment record subtly wrong data for hours. */
+    if (transfer->dropped_samples > 0) {
+        atomic_fetch_add(&state->dropped_samples,
+                         (unsigned long long)transfer->dropped_samples);
+        if (!atomic_exchange(&state->drop_warned, 1)) {
+            fprintf(stderr,
+                    "airspy: dropped samples detected (stream "
+                    "discontinuity); SoA/block indices are unreliable "
+                    "from this point\n");
+        }
+    }
 
     /* Airspy 12-bit ADC samples in an int16 container.  libairspy does
      * NOT left-shift to full int16 range — values stay in the native
@@ -148,6 +166,10 @@ static void _airspy_reader_free(void *context)
     airspy_state_t *state = (airspy_state_t *)context;
     if (!state) return;
     atomic_store(&state->running, 0);
+    /* Same ordering hazard as _airspy_reader_stop: airspy_stop_rx()
+     * joins the USB consumer thread, which may be blocked in
+     * circbuf_put() on a full ring buffer.  Cancel first. */
+    circbuf_cancel(&state->circbuf);
     if (state->device) {
         airspy_stop_rx(state->device);
         airspy_close(state->device);
@@ -230,10 +252,14 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     reader->free = (reader_func_void_t)_airspy_reader_free;
 
     ret = airspy_start_rx(state->device, _airspy_callback, state);
-    if (ret != AIRSPY_SUCCESS) goto err;
+    if (ret != AIRSPY_SUCCESS) goto err_circbuf;
 
     return 0;
 
+err_circbuf:
+    /* The ring buffer was initialized before this point; destroy it so
+     * a start_rx failure does not leak block_size*16 bytes. */
+    circbuf_destroy(&state->circbuf);
 err:
     fprintf(stderr, "airspy device configuration failed: %s\n",
             airspy_error_name(ret));
@@ -248,6 +274,9 @@ void airspy_reader_close(reader_t *reader)
     if (!reader || !reader->context) return;
     airspy_state_t *state = (airspy_state_t *)reader->context;
     atomic_store(&state->running, 0);
+    /* Cancel before stop: see _airspy_reader_stop for the join-vs-
+     * blocked-producer deadlock this prevents. */
+    circbuf_cancel(&state->circbuf);
     if (state->device) {
         airspy_stop_rx(state->device);
         airspy_close(state->device);
@@ -255,4 +284,32 @@ void airspy_reader_close(reader_t *reader)
     circbuf_destroy(&state->circbuf);
     free(state);
     reader->context = NULL;
+}
+
+void airspy_reader_print_stats(reader_t *reader, FILE *out)
+{
+    if (!reader || !reader->context || !out) return;
+    airspy_state_t *state = (airspy_state_t *)reader->context;
+
+    unsigned long long dropped = atomic_load(&state->dropped_samples);
+    unsigned overflows = circbuf_overflows(&state->circbuf);
+    fprintf(out,
+            "airspy reader: dropped samples (libairspy): %llu; "
+            "ring-buffer overflow events: %u\n",
+            dropped, overflows);
+    if (dropped > 0 || overflows > 0) {
+        fprintf(out,
+                "WARNING: the sample stream had discontinuities; "
+                "block/SoA indices after the first drop are "
+                "unreliable for TDOA use\n");
+    }
+
+    unsigned *histogram = circbuf_histogram(&state->circbuf);
+    if (histogram != NULL) {
+        fprintf(out, "ring-buffer occupancy histogram:");
+        for (int i = 0; i < CIRCBUF_HISTOGRAM_LEN; ++i) {
+            fprintf(out, " %u", histogram[i]);
+        }
+        fprintf(out, "\n");
+    }
 }

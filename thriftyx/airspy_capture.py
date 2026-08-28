@@ -140,7 +140,7 @@ def _apply_device_default_rate(config):
     if 'chip_rate' not in values:
         chip_def = settings_module.DEFINITIONS['chip_rate']
         values['chip_rate'] = chip_def.parser(chip_def.default)
-    values = settings_module._auto_adjust_block_params(values)
+    values = settings_module._auto_adjust_block_params(values, explicit)
     values.pop('chip_rate', None)
     new_config = settings_module.Namespace(values)
     new_config.explicit_keys = explicit

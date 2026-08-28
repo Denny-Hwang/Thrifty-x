@@ -109,3 +109,51 @@ def test_loadargs(tmpdir):
     assert config['xyzzy'] == 'xyz'
     assert config['foo'] == 2.3
     assert args['a'] == 'extra'
+
+
+class TestAutoAdjustBlockParams:
+    """Auto-adjust must only rewrite default-derived block parameters.
+
+    Regression tests for the M4 finding: explicitly-configured
+    block_size / block_history were silently replaced based on a
+    hardcoded 1023-chip template estimate.
+    """
+
+    def test_defaults_untouched_at_stock_rate(self):
+        values = settings.load(None, None)
+        assert values['block_size'] == 16384
+        assert values['block_history'] == 4920
+
+    def test_defaults_adjusted_at_6msps(self, caplog):
+        import logging as _logging
+        with caplog.at_level(_logging.WARNING):
+            values = settings.load({'sample_rate': '6M'}, None)
+        # 6 Msps: template ~6140 > default history 4920 -> both adjusted.
+        assert values['block_history'] > 4920
+        assert values['block_size'] >= 2 * values['block_history']
+        assert any('Auto-adjusted' in r.message for r in caplog.records)
+
+    def test_explicit_history_kept_with_warning(self, caplog):
+        import logging as _logging
+        args = {'sample_rate': '6M', 'block_history': '4920'}
+        with caplog.at_level(_logging.WARNING):
+            values = settings.load(args, None)
+        assert values['block_history'] == 4920
+        assert any('block_history' in r.message and 'keeping' in r.message
+                   for r in caplog.records)
+
+    def test_explicit_block_size_kept_with_warning(self, caplog):
+        import logging as _logging
+        args = {'sample_rate': '6M', 'block_size': '16384'}
+        with caplog.at_level(_logging.WARNING):
+            values = settings.load(args, None)
+        assert values['block_size'] == 16384
+        assert any('block_size' in r.message and 'keeping' in r.message
+                   for r in caplog.records)
+
+    def test_explicit_via_config_file_kept(self):
+        config = io.StringIO("sample_rate: 6M\nblock_history: 4920\n"
+                             "block_size: 16384\n")
+        values = settings.load(None, config)
+        assert values['block_history'] == 4920
+        assert values['block_size'] == 16384
