@@ -39,9 +39,16 @@ if [ "${USE_PCT}" -ge "${DISK_PURGE_PCT}" ]; then
     logger -t thriftyx-cleanup "disk ${USE_PCT}% >= ${DISK_PURGE_PCT}% — emergency purge oldest .card files"
     # Delete oldest .card files until below warn threshold
     while [ "$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')" -ge "${DISK_WARN_PCT}" ]; do
+        [ -d card ] || break
+        # awk 'NR==1' (not `head -1`) so the whole stream is consumed:
+        # with `set -o pipefail`, head exiting early would kill sort
+        # with SIGPIPE (status 141) and `set -e` would abort the purge
+        # exactly when the disk is full of card files (>~1500 entries).
+        # `|| true` also tolerates a find error mid-loop (e.g. the
+        # directory disappearing) instead of aborting the script.
         OLDEST="$(find card -type f -name '*.card' -mmin "+${ACTIVE_GRACE_MIN}" \
                   -printf '%T@ %p\n' 2>/dev/null \
-                  | sort -n | head -1 | awk '{print $2}')"
+                  | sort -n | awk 'NR==1 {print $2}')" || true
         [ -z "${OLDEST}" ] && break
         rm -f "${OLDEST}"
     done

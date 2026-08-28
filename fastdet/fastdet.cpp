@@ -149,7 +149,11 @@ int main(int argc, char **argv) {
             info.flush();
         }
 
-        if (card.file() != NULL && card.file() != stdout) {
+        // Also on stdout ('-x -'): a piped card without the '#v2'
+        // header would be silently decoded as 8-bit by the Python
+        // card_reader.  Header lines are '#' comments, so they are
+        // safe to interleave on a pipe.
+        if (card.file() != NULL) {
             fargs_print_card_header(args.get(), card.file(),
                                     input_from_sdr, argp_program_version);
         }

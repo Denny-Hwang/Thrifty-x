@@ -212,7 +212,14 @@ int airspy_reader_open(const airspy_reader_config_t *config,
             free(state);
             return -1;
         }
-        if ((int)config->device_index >= found) {
+        /* Defensive clamp: entries beyond the buffer were not written. */
+        if (found > 32) {
+            found = 32;
+        }
+        /* Compare unsigned: casting device_index to int would let a
+         * value >= 2^31 wrap negative, bypass the check, and index
+         * serials[] out of bounds. */
+        if (config->device_index >= (uint32_t)found) {
             fprintf(stderr,
                     "airspy device index %u out of range: only %d "
                     "device(s) found\n",

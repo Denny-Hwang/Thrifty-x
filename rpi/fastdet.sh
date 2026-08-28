@@ -10,10 +10,13 @@
 set -e
 
 echo "Waiting for chrony to discipline the clock"
-# Step immediately, then block until the offset is within tolerance.
-# Same approach as ntp-after-online.sh; capture must not start on an
-# undisciplined clock or TDOA alignment is meaningless.
-sudo chronyc makestep > /dev/null
+# Block until the offset is within tolerance.  waitsync needs no
+# privileges, so this works under a systemd unit with
+# NoNewPrivileges=true (sudo would fail there).  Forcing an immediate
+# clock STEP (chronyc makestep, root-only) is the job of
+# rpi/ntp-after-online.service — enable it alongside this unit.
+# Capture must not start on an undisciplined clock or TDOA alignment
+# is meaningless.
 chronyc waitsync 60 0.1
 
 echo "Starting fastdet"

@@ -328,3 +328,46 @@ class TestV2HeaderMetadata:
         # mid-file header did not switch the tail to 8-bit (32 samples).
         assert [len(b[2]) for b in blocks] == [16, 16]
         assert any('mid-file' in r.message for r in caplog.records)
+
+
+class TestCorruptCardSummary:
+    """R7 polish: capped per-line warnings + end-of-stream summary, and
+    short-block detection via the header's recorded block_size."""
+
+    @staticmethod
+    def _line(idx, n_int16, fill=1):
+        raw = np.full(n_int16, fill, dtype=np.int16)
+        encoded = base64.b64encode(raw.tobytes()).decode('ascii')
+        return f"{float(idx):.6f} {idx} {encoded}\n"
+
+    def test_all_corrupt_file_logs_error_summary(self, caplog):
+        import logging
+        lines = ['#v2 bit_depth=12 sample_rate=6000000\n']
+        for i in range(8):
+            good = self._line(i, 32)
+            lines.append(good[:len(good) // 2].rstrip() + '\n')
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(io.StringIO(''.join(lines))))
+        assert blocks == []
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any('NO valid blocks' in r.message for r in errors)
+        # Per-line warnings are capped (5) + 1 summary, not 8 warnings.
+        warns = [r for r in caplog.records
+                 if 'corrupt/truncated .card line for block' in r.message]
+        assert len(warns) == 5
+
+    def test_short_block_caught_by_header_block_size(self, caplog):
+        import logging
+        lines = ['#v2 bit_depth=12 sample_rate=6000000 block_size=16\n',
+                 self._line(0, 32),   # 16 complex samples: OK
+                 self._line(1, 12)]   # 6 samples: "lucky" truncation
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(io.StringIO(''.join(lines))))
+        assert [idx for _, idx, _ in blocks] == [0]
+        assert any('block_size=16' in r.message for r in caplog.records)
+
+    def test_no_block_size_header_accepts_any_length(self):
+        lines = ['#v2 bit_depth=12 sample_rate=6000000\n',
+                 self._line(0, 12)]
+        blocks = list(card_reader(io.StringIO(''.join(lines))))
+        assert len(blocks) == 1 and len(blocks[0][2]) == 6

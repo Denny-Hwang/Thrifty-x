@@ -1,4 +1,15 @@
 #!/bin/bash
+# Legacy RTL-SDR capture+detect pipeline (see rpi/detector.cfg).
+#
+# REQUIREMENT: `thrifty capture` with device_type=rtlsdr prefers a
+# binary named `fastcard` (the ORIGINAL Thrifty C capture tool built
+# against librtlsdr) on PATH.  This repository's C tree builds
+# `fastcapture`, whose only live-SDR input is "airspy" — it is NOT a
+# substitute here.  Without the upstream fastcard binary, capture
+# falls back to reading raw samples from stdin, which this pipeline
+# does not provide, and the run exits with "fastcard died
+# prematurely".  For Airspy hardware use rpi/fastdet.sh or the
+# systemd units under rpi/systemd/ instead.
 
 set -e
 
