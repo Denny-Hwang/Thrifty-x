@@ -216,6 +216,13 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     detected_bit_depth = bit_depth
     metadata = {}
     data_seen = False
+    # Whether detected_bit_depth came from an actual '#v2' header (as
+    # opposed to the caller's fallback argument).  Only a header-derived
+    # width is protected by first-header-wins: the CLI always passes an
+    # integer fallback, so without this distinction the FIRST real
+    # header of a v1+v2 concatenation would be ignored and the v2 tail
+    # decoded as uint8.
+    header_seen = False
     corrupt_lines = 0
     _CORRUPT_WARN_LIMIT = 5
 
@@ -237,12 +244,35 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                     k, v = kv.split('=', 1)
                     header[k] = v
             if 'bit_depth' in header:
-                header_bit_depth = int(header['bit_depth'])
-                if (data_seen and detected_bit_depth is not None
+                try:
+                    header_bit_depth = int(header['bit_depth'])
+                except ValueError:
+                    logger.warning(
+                        "ignoring unparseable #v2 header value "
+                        "bit_depth=%r", header['bit_depth'])
+                    header.pop('bit_depth')
+                    header_bit_depth = None
+                if header_bit_depth is None:
+                    pass
+                elif data_seen and not header_seen:
+                    # First actual header, but only after headerless
+                    # (v1) data — a v1+v2 concatenation.  The prior
+                    # section was decoded with the caller's fallback
+                    # (correct for v1 content); the header's width
+                    # takes over from here.  Loud, not silent.
+                    if detected_bit_depth != header_bit_depth:
+                        logger.warning(
+                            "#v2 header found after headerless (v1) "
+                            "data; decoding switches to bit_depth=%d "
+                            "from this point (concatenated v1+v2 "
+                            "cards?)", header_bit_depth)
+                    detected_bit_depth = header_bit_depth
+                    header_seen = True
+                elif (data_seen and header_seen
                         and detected_bit_depth != header_bit_depth):
-                    # Concatenated cards: switching decode width
-                    # mid-stream would corrupt everything after the
-                    # seam.  First header wins.
+                    # A later header contradicting the first one:
+                    # switching decode width mid-stream would corrupt
+                    # everything after the seam.  First header wins.
                     logger.warning(
                         "ignoring mid-file #v2 header changing "
                         "bit_depth %d -> %d (concatenated cards?); "
@@ -257,6 +287,7 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                             "configured bit_depth=%d",
                             header_bit_depth, detected_bit_depth)
                     detected_bit_depth = header_bit_depth
+                    header_seen = True
             if header.get('endian', 'little') != 'little':
                 logger.warning(
                     "card records endian=%s but decoding assumes the "
@@ -264,7 +295,13 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                     "byte-swapped", header['endian'])
             metadata.update(header)
             if 'sample_rate' in header and expected_sample_rate:
-                header_rate = float(header['sample_rate'])
+                try:
+                    header_rate = float(header['sample_rate'])
+                except ValueError:
+                    logger.warning(
+                        "ignoring unparseable #v2 header value "
+                        "sample_rate=%r", header['sample_rate'])
+                    header_rate = 0.0
                 if header_rate > 0 and abs(
                         header_rate - float(expected_sample_rate)
                         ) > 0.001 * header_rate:

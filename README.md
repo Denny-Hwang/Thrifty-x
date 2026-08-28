@@ -449,7 +449,7 @@ Thrifty-X ships with a complete Pi 5 + Bookworm deployment layout under
 | `rpi/systemd/` | Capture/heartbeat unit templates |
 | `rpi/detector.service` | systemd unit for the detector service |
 | `rpi/thriftyx-capture.cfg.example` | Capture config template (sample rate, gain, packing, ppm) |
-| `rpi/heartbeat.py` | Periodic health probe written to a known path |
+| `rpi/heartbeat.py` | Periodic health probe: JSON to stdout/journald, optional POST to `THRIFTYX_HEARTBEAT_URL` |
 | `rpi/soak_test.sh` | 24-hour stability test |
 | `rpi/update_node.sh` | **Idempotent** in-place upgrade script (safe to re-run) |
 | `rpi/cleanup_old_captures.sh` | Retention policy for `.card` files |

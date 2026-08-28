@@ -158,12 +158,16 @@ def _apply_device_default_rate(config):
     values['sample_rate'] = float(default_rate)
     # Re-run the block-parameter auto-adjust for the new rate.  The
     # capture command does not request chip_rate, so supply its default
-    # (the adjust helper is a no-op without it).
-    if 'chip_rate' not in values:
-        chip_def = settings_module.DEFINITIONS['chip_rate']
-        values['chip_rate'] = chip_def.parser(chip_def.default)
-    values = settings_module._auto_adjust_block_params(values, explicit)
-    values.pop('chip_rate', None)
+    # (the adjust helper is a no-op without it).  When BOTH block
+    # parameters are explicit the re-run could only repeat the
+    # too-small warnings that load() already emitted (explicit values
+    # are never rewritten), so skip it to avoid duplicate warnings.
+    if not {'block_size', 'block_history'} <= explicit:
+        if 'chip_rate' not in values:
+            chip_def = settings_module.DEFINITIONS['chip_rate']
+            values['chip_rate'] = chip_def.parser(chip_def.default)
+        values = settings_module._auto_adjust_block_params(values, explicit)
+        values.pop('chip_rate', None)
     new_config = settings_module.Namespace(values)
     new_config.explicit_keys = explicit
     return new_config

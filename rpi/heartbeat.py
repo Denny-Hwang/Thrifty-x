@@ -6,7 +6,7 @@ Emits a single JSON line per invocation. Intended to run on a systemd
 timer (default 60 s). Always logs to stdout (journald-friendly); if
 ``THRIFTYX_HEARTBEAT_URL`` is set, also POSTs the payload there.
 
-Schema is the one defined in docs/rpi5_runbook_ko.md §4.
+Schema is the one defined in docs/rpi5_runbook.md §4.
 """
 
 from __future__ import annotations

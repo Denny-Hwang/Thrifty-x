@@ -125,8 +125,28 @@ garbage `bit_depth=` header values raise without file context;
 > added). R8: `detect.sh` documents the upstream-`fastcard`
 > requirement and points Airspy users to `fastdet.sh`/systemd units.
 > Adjacent nits fixed: `fargs_type.h` stale "0-15 R2" comment,
-> `serials[32]` clamp. The remaining nit list (cosmetic only) is
-> intentionally left as-is.
+> `serials[32]` clamp.
+>
+> **Second resolution update (follow-up PR): the remaining nit list is
+> also resolved.** `read_sync` reports the start_capture misuse before
+> the zero-length early return; the interpolator window guards use the
+> actual window size (2·half+1) so even widths cannot duplicate a
+> wrapped bin; `parse_airspy_serial` rejects negative and >64-bit
+> values instead of masking; fastdet displays a saturated 99 dB
+> instead of `inf dB` when the clamped noise is 0; `circbuf`'s stats
+> accessors take the mutex; the caller-less `airspy_reader_close` is
+> removed (teardown goes through the reader vtable, documented); the
+> legacy `rpi/installation.md` carries a LEGACY banner noting the
+> `/home/pi/thrifty-x` unit paths; `heartbeat.py`'s docstring cites
+> the existing runbook and README describes its real output
+> (stdout/journald/URL); the capture path no longer emits duplicate
+> too-small warnings when both block parameters are explicit; a `#v2`
+> header appearing after headerless v1 data warns about the
+> concatenation before switching width; unparseable `bit_depth=` /
+> `sample_rate=` header values are ignored with a warning instead of
+> raising; and `_apply_device_default_bit_depth` plus all of the above
+> gained dedicated regression tests. Nothing from the validation
+> campaign remains open.
 
 ## 3. Per-area verdict summary
 

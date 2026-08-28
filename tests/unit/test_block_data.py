@@ -371,3 +371,67 @@ class TestCorruptCardSummary:
                  self._line(0, 12)]
         blocks = list(card_reader(io.StringIO(''.join(lines))))
         assert len(blocks) == 1 and len(blocks[0][2]) == 6
+
+
+class TestHeaderEdgeWarnings:
+    """Nit polish: v1+v2 concatenation warning and garbage header
+    values tolerated with a warning instead of raising."""
+
+    @staticmethod
+    def _v1_line(idx, n_uint8=32):
+        raw = np.zeros(n_uint8, dtype=np.uint8)
+        encoded = base64.b64encode(raw.tobytes()).decode('ascii')
+        return f"{float(idx):.6f} {idx} {encoded}\n"
+
+    @staticmethod
+    def _v2_line(idx, n_int16=32):
+        raw = np.zeros(n_int16, dtype=np.int16)
+        encoded = base64.b64encode(raw.tobytes()).decode('ascii')
+        return f"{float(idx):.6f} {idx} {encoded}\n"
+
+    def test_v1_then_v2_concat_warns_and_switches(self, caplog):
+        import logging
+        stream = io.StringIO(
+            self._v1_line(0, n_uint8=24)
+            + '#v2 bit_depth=12 sample_rate=6000000\n'
+            + self._v2_line(1))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream))
+        # v1 section decodes as 8-bit (24 bytes -> 12 complex samples),
+        # v2 tail as 12-bit (32 int16 -> 16 complex) — per-section
+        # correct, but no longer silent.
+        assert [len(b[2]) for b in blocks] == [12, 16]
+        assert any('after headerless' in r.message for r in caplog.records)
+
+    def test_garbage_bit_depth_ignored_with_warning(self, caplog):
+        import logging
+        stream = io.StringIO('#v2 bit_depth=twelve sample_rate=6000000\n'
+                             + self._v1_line(0))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream))
+        assert len(blocks) == 1          # falls back to 8-bit decoding
+        assert any('unparseable' in r.message for r in caplog.records)
+
+    def test_garbage_sample_rate_ignored_with_warning(self, caplog):
+        import logging
+        stream = io.StringIO('#v2 bit_depth=12 sample_rate=fast\n'
+                             + self._v2_line(0))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream, expected_sample_rate=6e6))
+        assert len(blocks) == 1
+        assert any('unparseable' in r.message for r in caplog.records)
+
+    def test_v1_then_v2_concat_switches_even_with_cli_fallback(self, caplog):
+        # Regression (Codex review on PR #68): detect/analyze_detect
+        # always pass an integer bit_depth fallback, which must NOT be
+        # confused with a header-derived width — the FIRST real header
+        # still wins at the v1+v2 seam.
+        import logging
+        stream = io.StringIO(
+            self._v1_line(0, n_uint8=24)
+            + '#v2 bit_depth=12 sample_rate=6000000\n'
+            + self._v2_line(1))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream, bit_depth=8))
+        assert [len(b[2]) for b in blocks] == [12, 16]
+        assert any('after headerless' in r.message for r in caplog.records)

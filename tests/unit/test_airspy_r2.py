@@ -160,3 +160,14 @@ def test_r2_set_sample_rate_rejects_mini_rates(r2_dev):
         dev.set_sample_rate(3_000_000)
     dev.set_sample_rate(10_000_000)
     assert dev._sample_rate == 10_000_000
+
+
+def test_parse_serial_rejects_out_of_range_values():
+    """A typo'd negative or >64-bit serial must raise, not silently
+    wrap/mask to a different device's serial."""
+    with pytest.raises(ValueError):
+        parse_airspy_serial('-5')
+    with pytest.raises(ValueError):
+        parse_airspy_serial('0x1FFFFFFFFFFFFFFFF')  # 65 bits
+    # Boundary value is still accepted.
+    assert parse_airspy_serial('0xFFFFFFFFFFFFFFFF') == 0xFFFFFFFFFFFFFFFF

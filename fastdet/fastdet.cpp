@@ -228,8 +228,15 @@ int main(int argc, char **argv) {
             }
 
             if (info.file() != NULL) {
-                float carrier_snr_db = 10 * log10(carrier.detection.max /
-                                                  carrier.detection.noise);
+                // The noise estimate is clamped at 0 for very strong
+                // carriers (cardet.c); display a saturated 99 dB
+                // instead of the mathematically-correct but noisy
+                // looking "inf dB".
+                float carrier_snr_db =
+                    (carrier.detection.noise > 0)
+                        ? 10 * log10(carrier.detection.max /
+                                     carrier.detection.noise)
+                        : 99.0f;
 
                 info.printf("block #%" PRId64 ": carrier @ %3u %+.1f = "
                             "%4.0f / %2.0f [>%2.0f] = %2.0f dB",

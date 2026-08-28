@@ -51,13 +51,6 @@ int airspy_reader_open(const airspy_reader_config_t *config,
                        reader_t *reader);
 
 /**
- * Close the Airspy device and free resources.
- *
- * @param reader  Reader instance to close.
- */
-void airspy_reader_close(reader_t *reader);
-
-/**
  * Print capture statistics (libairspy dropped samples, ring-buffer
  * overflow events, occupancy histogram) to a stream.
  *
