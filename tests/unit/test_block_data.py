@@ -420,3 +420,18 @@ class TestHeaderEdgeWarnings:
             blocks = list(card_reader(stream, expected_sample_rate=6e6))
         assert len(blocks) == 1
         assert any('unparseable' in r.message for r in caplog.records)
+
+    def test_v1_then_v2_concat_switches_even_with_cli_fallback(self, caplog):
+        # Regression (Codex review on PR #68): detect/analyze_detect
+        # always pass an integer bit_depth fallback, which must NOT be
+        # confused with a header-derived width — the FIRST real header
+        # still wins at the v1+v2 seam.
+        import logging
+        stream = io.StringIO(
+            self._v1_line(0, n_uint8=24)
+            + '#v2 bit_depth=12 sample_rate=6000000\n'
+            + self._v2_line(1))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream, bit_depth=8))
+        assert [len(b[2]) for b in blocks] == [12, 16]
+        assert any('after headerless' in r.message for r in caplog.records)
