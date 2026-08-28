@@ -13,6 +13,7 @@ Supports both 8-bit unsigned (RTL-SDR legacy, v1 .card format) and
 """
 
 import base64
+import binascii
 import logging
 import time
 
@@ -165,11 +166,14 @@ def block_reader(stream, size, history, bit_depth=8):
     for block_idx, block in enumerate(_raw_block_reader(stream, new,
                                                           bit_depth=bit_depth)):
         new_data = raw_to_complex(block, bit_depth=bit_depth)
-        data = np.concatenate([data[-history:], new_data])
+        # history == 0 must carry over nothing: data[-0:] would slice
+        # the ENTIRE previous block and grow every block (legacy bug).
+        prev = data[-history:] if history > 0 else data[:0]
+        data = np.concatenate([prev, new_data])
         yield time.time(), block_idx, Signal(data)
 
 
-def card_reader(stream, bit_depth=None):
+def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     """Read blocks from .card file.
 
     Supports both v1 (uint8, RTL-SDR) and v2 (int16, Airspy) formats.
@@ -186,6 +190,11 @@ def card_reader(stream, bit_depth=None):
         When the file carries a ``#v2 bit_depth=…`` header, the header
         always wins; a conflicting explicit value is ignored with a
         warning.  ``None`` means "headerless files are 8-bit (v1)".
+    expected_sample_rate : float or None
+        The sample rate the caller is configured for.  When the ``#v2``
+        header records a different rate, a warning is logged — the file
+        is still processed, but carrier frequencies and SoA→TDOA
+        scaling will be wrong if the configured rate is used downstream.
 
     Yields
     ------
@@ -202,9 +211,13 @@ def card_reader(stream, bit_depth=None):
             break
         if isinstance(line, bytes):
             line = line.decode()
-        if line.startswith(_V2_HEADER_PREFIX):
+        # Accept '#v2' followed by any whitespace (or end of line), not
+        # only the canonical '#v2 ' — a hand-edited tab or bare '#v2'
+        # header must not silently fall through to 8-bit decoding.
+        if (line.startswith('#v2')
+                and (line.rstrip('\r\n') == '#v2' or line[3] in ' \t')):
             # Parse v2 metadata
-            for kv in line[len(_V2_HEADER_PREFIX):].strip().split():
+            for kv in line[3:].strip().split():
                 if '=' in kv:
                     k, v = kv.split('=', 1)
                     metadata[k] = v
@@ -217,6 +230,17 @@ def card_reader(stream, bit_depth=None):
                         "configured bit_depth=%d",
                         header_bit_depth, detected_bit_depth)
                 detected_bit_depth = header_bit_depth
+            if 'sample_rate' in metadata and expected_sample_rate:
+                header_rate = float(metadata['sample_rate'])
+                if header_rate > 0 and abs(
+                        header_rate - float(expected_sample_rate)
+                        ) > 0.001 * header_rate:
+                    logger.warning(
+                        "card was captured at %.6g sps but the configured "
+                        "sample_rate is %.6g sps; carrier frequencies and "
+                        "SoA/TDOA scaling will be wrong unless the "
+                        "configured rate matches the capture",
+                        header_rate, float(expected_sample_rate))
             continue
         if not line or line[0] == '#' or line[0] == '\n':
             continue
@@ -229,13 +253,23 @@ def card_reader(stream, bit_depth=None):
                 "Malformed .card line: expected 'timestamp index data', "
                 "got: {!r}".format(line.rstrip('\n'))
             ) from None
-        raw_bytes = base64.b64decode(encoded)
 
         # Default: if not set from header, use bit_depth arg or fall back to 8
         bd = detected_bit_depth if detected_bit_depth is not None else 8
         dtype = np.int16 if bd == 12 else np.uint8
-        raw = np.frombuffer(raw_bytes, dtype=dtype)
-        data = raw_to_complex(raw, bit_depth=bd)
+        try:
+            raw_bytes = base64.b64decode(encoded)
+            raw = np.frombuffer(raw_bytes, dtype=dtype)
+            data = raw_to_complex(raw, bit_depth=bd)
+        except (binascii.Error, ValueError) as exc:
+            # A power loss mid-write (the capture loop batches flushes)
+            # leaves a truncated final line; salvage the complete blocks
+            # instead of aborting the whole run.
+            logger.warning(
+                "skipping corrupt/truncated .card line for block %s "
+                "(%s); complete blocks before it are unaffected",
+                idx, exc)
+            continue
         yield float(timestamp), int(idx), Signal(data)
 
 

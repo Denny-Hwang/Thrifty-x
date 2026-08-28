@@ -10,6 +10,11 @@ TOAD_DAYS="${TOAD_RETENTION_DAYS:-30}"
 LOG_DAYS="${LOG_RETENTION_DAYS:-30}"
 DISK_WARN_PCT="${DISK_WARN_PCT:-80}"
 DISK_PURGE_PCT="${DISK_PURGE_PCT:-90}"
+# Emergency purge never touches files modified in the last N minutes:
+# the capture service's current output is often the only/oldest card
+# file, and unlinking it loses live data without freeing space (the
+# writer keeps its fd open).
+ACTIVE_GRACE_MIN="${ACTIVE_GRACE_MIN:-10}"
 
 # Defensive: refuse to operate on an empty or root path even if a
 # misconfigured environment file sets THRIFTYX_OUT="" or "/".  The
@@ -34,7 +39,8 @@ if [ "${USE_PCT}" -ge "${DISK_PURGE_PCT}" ]; then
     logger -t thriftyx-cleanup "disk ${USE_PCT}% >= ${DISK_PURGE_PCT}% — emergency purge oldest .card files"
     # Delete oldest .card files until below warn threshold
     while [ "$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')" -ge "${DISK_WARN_PCT}" ]; do
-        OLDEST="$(find card -type f -name '*.card' -printf '%T@ %p\n' 2>/dev/null \
+        OLDEST="$(find card -type f -name '*.card' -mmin "+${ACTIVE_GRACE_MIN}" \
+                  -printf '%T@ %p\n' 2>/dev/null \
                   | sort -n | head -1 | awk '{print $2}')"
         [ -z "${OLDEST}" ] && break
         rm -f "${OLDEST}"

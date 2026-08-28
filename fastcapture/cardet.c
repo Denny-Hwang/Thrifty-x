@@ -22,6 +22,12 @@ bool cardet_detect(cardet_settings_t *settings,
     float noise_power = 0;
     if (sum != 0) {
         noise_power = (sum - 2*max) / (settings->fft_len - 1);
+        // A strong carrier can make (sum - 2*max) negative; clamp at 0
+        // so the threshold never drops below threshold_constant.
+        // Matches the Python implementation (carrier_detect.py).
+        if (noise_power < 0) {
+            noise_power = 0;
+        }
     }
     float threshold = settings->threshold_constant + \
                       settings->threshold_snr * noise_power;

@@ -95,3 +95,54 @@ def test_dirichlet_interpolator_clips_out_of_bounds(true_offset, expected):
         block_len, carrier_len, width)
     got = interpolator(signal_fft, peak_idx)
     np.testing.assert_allclose(got, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_freq_shift_matches_legacy_phase():
+    """time-domain freq_shift is sample-identical to original Thrifty.
+
+    The legacy implementation used freqs = arange(n)/n - 0.5; dropping
+    the -0.5 only changes a constant phase factor, but the escape hatch
+    is documented as "the original algorithm" so pin exact parity.
+    """
+    n = 64
+    shift = 3.7
+    signal = np.exp(2j * np.pi * np.arange(n) / n * 5).astype(np.complex64)
+    freqs = np.arange(n) * 1. / n - 0.5
+    expected = np.fft.fft(signal * np.exp(2j * np.pi * shift * freqs))
+    got = carrier_sync.freq_shift(Signal(signal), shift)
+    np.testing.assert_allclose(np.asarray(got), expected,
+                               atol=1e-4, rtol=1e-4)
+
+
+def test_parabolic_interpolator_wraps_at_edges():
+    """FFT bins are circular: edge peaks interpolate using wrapped
+    neighbours instead of bailing out with offset 0 (or crashing)."""
+    n = 32
+    fft_mag = np.ones(n)
+    # Peak at bin 0 whose true maximum lies slightly towards bin n-1
+    # (i.e. a small negative sub-bin offset through the wrap).
+    fft_mag[n - 1] = 5.0
+    fft_mag[0] = 8.0
+    fft_mag[1] = 4.0
+    offset = carrier_sync.parabolic_interpolator(fft_mag, 0)
+    assert offset < 0
+
+    # Peak at the top edge: must not raise, must interpolate.
+    fft_mag = np.ones(n)
+    fft_mag[n - 2] = 4.0
+    fft_mag[n - 1] = 8.0
+    fft_mag[0] = 5.0
+    offset = carrier_sync.parabolic_interpolator(fft_mag, n - 1)
+    assert offset > 0
+
+
+def test_dirichlet_interpolator_handles_edge_peak():
+    """The Dirichlet fit window wraps at the spectrum edges too."""
+    n = 64
+    interp = carrier_sync.make_dirichlet_interpolator(block_len=n,
+                                                      carrier_len=n, width=7)
+    fft_mag = np.ones(n)
+    fft_mag[0] = 10.0
+    # Must not raise and must return a bounded sub-bin offset.
+    offset = interp(fft_mag, 0)
+    assert -0.5 <= offset <= 0.5

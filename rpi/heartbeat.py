@@ -18,7 +18,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
 from urllib import request as _urlrequest
 
@@ -81,6 +80,13 @@ def _service_state(unit: str) -> str:
 
 
 def _last_detection_ts(card_dir: Path) -> str | None:
+    """mtime of the newest .card file, as an ISO-8601 UTC string.
+
+    Strictly this is the time of the last *write* to a card file — a
+    proxy for "the capture pipeline is still producing detections",
+    not the timestamp of an individual detection.  The JSON key name
+    is kept for compatibility with existing consumers.
+    """
     try:
         files = list(card_dir.glob('*.card'))
     except OSError:

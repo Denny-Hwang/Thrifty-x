@@ -74,6 +74,7 @@ fastcard_t* fastcard_new(fargs_t* args) {
         sdr_config.mixer_gain = args->sdr_mixer_gain;
         sdr_config.vga_gain = args->sdr_vga_gain;
         sdr_config.bias_tee = args->sdr_bias_tee;
+        sdr_config.device_index = args->sdr_dev_index;
 
         fc->reader = malloc(sizeof(reader_t));
         if (fc->reader == NULL) {

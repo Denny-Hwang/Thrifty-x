@@ -74,6 +74,28 @@ performance reasons and can be flipped from the command line:
 | Carrier frequency shift | time-domain (`exp(2πj·Δf·t)`) | **`integer`** — `np.roll` in the frequency domain; ~2× faster, ~+0.03 m RMSE | `--freq-shift-method time_domain` |
 | SoA sub-sample interpolation | Gaussian | **`parabolic`** — equivalent accuracy per the original paper, cheaper | `--soa-interpolation gaussian` |
 
+In addition, the port fixes several latent bugs in the original code.
+These can make outputs differ from a legacy run in corner cases, always
+in the direction of correctness:
+
+- **Strong-signal noise estimates are clamped at 0** instead of going
+  NaN (`carrier_detect`, `soa_estimator`) — very clean carriers that
+  the original silently *failed to detect* (NaN threshold) are now
+  detected with `noise=0`.
+- **Detection sorting is fixed** (`matchmaker`, `tdoa_est`): the
+  original's Python-2 `cmp=` lambdas returned booleans and produced an
+  invalid order, corrupting the beacon-window extraction. Byte-for-byte
+  reproduction of legacy `.match`/`.tdoa` output is therefore not
+  guaranteed.
+- **`tdoa -s` resolves the sample rate** from CLI → `detector.cfg` →
+  `device_type` default instead of the original's hardcoded 2.4 MSPS.
+- **Degenerate correlation peaks** (flat/saturated) yield offset 0
+  instead of NaN/inf in the `.toad` output, and a failed Dirichlet fit
+  falls back to the bin centre instead of aborting the detect run.
+- **Carrier sub-bin interpolation wraps circularly at spectrum edges**
+  (FFT bins are periodic): at the DC edge this matches the original's
+  wrapped indexing; at the high edge the original crashed.
+
 ## Supported Hardware
 
 | Device | Sample Rates | Frequency Range | ADC | 12-bit USB packing |

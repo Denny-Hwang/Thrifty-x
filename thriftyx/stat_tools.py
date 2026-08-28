@@ -44,7 +44,12 @@ def is_outlier(points, thresh=3.5):
     med_abs_deviation = np.median(diff)
 
     if med_abs_deviation == 0:
-        return np.zeros(len(diff), dtype=bool)
+        # Degenerate case: the majority of points are identical.  Match
+        # the original Thrifty semantics (diff/0 -> inf > thresh): any
+        # point that deviates from the median IS an outlier.  Returning
+        # all-False here would let deviating beacon pairs into the
+        # clock-drift fit.
+        return diff > 0
 
     modified_z_score = 0.6745 * diff / med_abs_deviation
 

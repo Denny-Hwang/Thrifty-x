@@ -32,6 +32,7 @@ typedef struct {
     uint8_t  mixer_gain;    /**< Mixer gain index (0-15) */
     uint8_t  vga_gain;      /**< VGA/IF gain index (0-15) */
     uint8_t  bias_tee;      /**< Bias tee enable (0/1) */
+    uint32_t device_index;  /**< 0-based enumeration index (0 = first) */
 } airspy_reader_config_t;
 
 /**

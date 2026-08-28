@@ -213,3 +213,72 @@ class TestCardWriter:
         assert len(blocks) == 1
         ts, idx, data = blocks[0]
         assert idx == 0
+
+
+class TestCardReaderRobustness:
+    """Regression tests for MINOR data-path findings: truncated tail
+    lines, header-prefix tolerance, sample-rate mismatch warning, and
+    the history=0 block_reader guard."""
+
+    @staticmethod
+    def _v2_lines(num_blocks=3, header='#v2 bit_depth=12 sample_rate=6000000\n'):
+        lines = [header]
+        for i in range(num_blocks):
+            raw = np.full(32, i + 1, dtype=np.int16)
+            encoded = base64.b64encode(raw.tobytes()).decode('ascii')
+            lines.append(f"{float(i):.6f} {i} {encoded}\n")
+        return lines
+
+    def test_truncated_final_line_salvages_complete_blocks(self, caplog):
+        import logging
+        lines = self._v2_lines(3)
+        # Simulate a power loss mid-write: chop the final line's payload.
+        lines[-1] = lines[-1][:len(lines[-1]) // 2].rstrip() + '\n'
+        stream = io.StringIO(''.join(lines))
+        with caplog.at_level(logging.WARNING):
+            blocks = list(card_reader(stream))
+        assert [idx for _, idx, _ in blocks] == [0, 1]
+        assert any('truncated' in r.message or 'corrupt' in r.message
+                   for r in caplog.records)
+
+    def test_tab_separated_v2_header_recognized(self):
+        stream = io.StringIO(''.join(
+            self._v2_lines(1, header='#v2\tbit_depth=12\tsample_rate=6000000\n')))
+        blocks = list(card_reader(stream))
+        assert len(blocks) == 1
+        # int16 payload of 32 values -> 16 complex samples (12-bit decode);
+        # an 8-bit misread would have produced 32 samples.
+        assert len(blocks[0][2]) == 16
+
+    def test_bare_v2_header_recognized_as_header(self):
+        # A bare '#v2' line has no metadata but must not decode as v1
+        # data lines either; the file's data is still readable via the
+        # bit_depth argument.
+        lines = self._v2_lines(1, header='#v2\n')
+        stream = io.StringIO(''.join(lines))
+        blocks = list(card_reader(stream, bit_depth=12))
+        assert len(blocks) == 1
+        assert len(blocks[0][2]) == 16
+
+    def test_sample_rate_mismatch_warns(self, caplog):
+        import logging
+        stream = io.StringIO(''.join(self._v2_lines(1)))
+        with caplog.at_level(logging.WARNING):
+            list(card_reader(stream, expected_sample_rate=2.4e6))
+        assert any('sample_rate' in r.message for r in caplog.records)
+
+    def test_sample_rate_match_no_warning(self, caplog):
+        import logging
+        stream = io.StringIO(''.join(self._v2_lines(1)))
+        with caplog.at_level(logging.WARNING):
+            list(card_reader(stream, expected_sample_rate=6e6))
+        assert not any('captured at' in r.message for r in caplog.records)
+
+
+class TestBlockReaderZeroHistory:
+    def test_history_zero_keeps_block_size_constant(self):
+        raw = np.zeros(8 * 2 * 4, dtype=np.uint8)  # 4 blocks of 8 pairs
+        stream = io.BytesIO(raw.tobytes())
+        blocks = list(block_reader(stream, size=8, history=0, bit_depth=8))
+        assert len(blocks) == 4
+        assert all(len(data) == 8 for _, _, data in blocks)

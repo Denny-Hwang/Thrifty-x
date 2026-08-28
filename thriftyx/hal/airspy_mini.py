@@ -109,9 +109,16 @@ try:
         except AttributeError:
             pass
 
-    # Library version string is useful for diagnostics.  Older libairspy
-    # builds use a struct; modern builds expose ``airspy_lib_version`` as
-    # well.  We bind the struct variant only when available.
+    # Library version is useful for diagnostics.  The real libairspy API
+    # is ``void airspy_lib_version(airspy_lib_version_t*)`` — bind it
+    # when present.  ``airspy_lib_version_string`` does not exist in
+    # upstream libairspy; it is kept as a fallback for test fakes and
+    # hypothetical vendor builds.
+    try:
+        _lib.airspy_lib_version.restype = None
+        _lib.airspy_lib_version.argtypes = [ctypes.c_void_p]
+    except AttributeError:
+        pass
     try:
         _lib.airspy_lib_version_string.restype = ctypes.c_char_p
         _lib.airspy_lib_version_string.argtypes = []
@@ -197,13 +204,34 @@ GAIN_MODES = ('manual', 'linearity', 'sensitivity')
 _SAMPLE_RATE_TOLERANCE_HZ = 100
 
 
+class _AirspyLibVersion(ctypes.Structure):
+    """Mirror of libairspy's ``airspy_lib_version_t``."""
+    _fields_ = [
+        ('major_version', ctypes.c_uint32),
+        ('minor_version', ctypes.c_uint32),
+        ('revision', ctypes.c_uint32),
+    ]
+
+
 def libairspy_version() -> str:
     """Return the runtime libairspy version string, or ``"unknown"``.
 
     Useful in startup logs to disambiguate behaviour between distros that
-    ship different libairspy builds.
+    ship different libairspy builds.  Uses the real
+    ``airspy_lib_version(airspy_lib_version_t*)`` API; the string
+    variant is a fallback for test fakes.
     """
-    if _lib is None or not hasattr(_lib, 'airspy_lib_version_string'):
+    if _lib is None:
+        return "unknown"
+    if hasattr(_lib, 'airspy_lib_version'):
+        try:
+            info = _AirspyLibVersion()
+            _lib.airspy_lib_version(ctypes.byref(info))
+            return (f"{info.major_version}.{info.minor_version}"
+                    f".{info.revision}")
+        except Exception:
+            return "unknown"
+    if not hasattr(_lib, 'airspy_lib_version_string'):
         return "unknown"
     try:
         raw = _lib.airspy_lib_version_string()
@@ -651,9 +679,16 @@ class AirspyMiniDevice(SDRDevice):
             if vga is not None:
                 self.set_gain('vga', int(vga))
             # AGC applied after manual values so per-stage settings act
-            # as a starting point when AGC is later disabled.
-            self.set_lna_agc(bool(lna_agc))
-            self.set_mixer_agc(bool(mixer_agc))
+            # as a starting point when AGC is later disabled.  On a
+            # libairspy build lacking the AGC symbols, requesting
+            # AGC *off* is already the hardware state — skip the call
+            # instead of failing every manual-mode capture; only an
+            # explicit AGC *on* request must still raise.
+            lib = self._check_open()
+            if bool(lna_agc) or hasattr(lib, 'airspy_set_lna_agc'):
+                self.set_lna_agc(bool(lna_agc))
+            if bool(mixer_agc) or hasattr(lib, 'airspy_set_mixer_agc'):
+                self.set_mixer_agc(bool(mixer_agc))
             return
         if combined is None:
             raise DeviceConfigError(
@@ -805,6 +840,10 @@ class AirspyMiniDevice(SDRDevice):
             Interleaved int16 I/Q array of length ``num_samples * 2``.
         """
         self._check_open()
+        if num_samples <= 0:
+            # np.concatenate([]) would raise; an empty request has an
+            # obvious empty answer.
+            return np.empty(0, dtype=np.int16)
         # If start_capture() is already running with a user callback, the
         # internal stream queue would never receive data — and silently
         # clobbering the user callback (the previous behaviour) hides the
