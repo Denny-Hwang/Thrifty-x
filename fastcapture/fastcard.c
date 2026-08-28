@@ -11,8 +11,12 @@
 
 
 fastcard_t* fastcard_new(fargs_t* args) {
-    if (args->history_len > args->block_len) {
-        fprintf(stderr, "History length cannot be larger than block length.\n");
+    /* '>=': history == block_len means zero new samples per block —
+     * the file readers would then loop forever re-emitting the same
+     * block (fread of 0 items never reaches the EOF branch). */
+    if (args->history_len >= args->block_len) {
+        fprintf(stderr,
+                "History length must be smaller than block length.\n");
         return NULL;
     }
 

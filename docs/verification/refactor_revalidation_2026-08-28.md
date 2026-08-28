@@ -105,6 +105,29 @@ switches decode width at the first header silently (arguably correct);
 garbage `bit_depth=` header values raise without file context;
 `_apply_device_default_bit_depth` lacks a dedicated unit test.
 
+> **Resolution update (same branch, follow-up commit): R1–R8 are
+> fixed.** R1: `fastdet.sh` drops `sudo chronyc makestep` (stepping is
+> `ntp-after-online.service`'s job; `waitsync` is unprivileged), and
+> `detector.service` replaces `ProtectHome=read-only` with
+> `ReadWritePaths=/home/pi/detector` so the unit can run its own
+> script under `NoNewPrivileges`; Description corrected. R2: the purge
+> loop uses `awk 'NR==1'` (whole-stream consumer — no SIGPIPE under
+> `pipefail`), guards `[ -d card ]`, and tolerates find errors;
+> re-reproduced with 3000 files: purge now proceeds (was exit 141,
+> 0 purged). R3: README example corrected to 12278. R4: the `-d`
+> range check compares unsigned and clamps `found` to the buffer size.
+> R5: both CLIs emit the `#v2` header on stdout too (verified:
+> `-o -` output starts with the header). R6: `fastcard_new` rejects
+> `history >= block_len` (verified against the built binary).
+> R7: per-line corrupt warnings capped at 5 with an end-of-stream
+> summary (ERROR when nothing was salvaged), and short blocks are
+> caught against the header's recorded `block_size` (regression tests
+> added). R8: `detect.sh` documents the upstream-`fastcard`
+> requirement and points Airspy users to `fastdet.sh`/systemd units.
+> Adjacent nits fixed: `fargs_type.h` stale "0-15 R2" comment,
+> `serials[32]` clamp. The remaining nit list (cosmetic only) is
+> intentionally left as-is.
+
 ## 3. Per-area verdict summary
 
 | Area | Fixes re-verified | Verdict |

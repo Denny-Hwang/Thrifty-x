@@ -216,6 +216,8 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     detected_bit_depth = bit_depth
     metadata = {}
     data_seen = False
+    corrupt_lines = 0
+    _CORRUPT_WARN_LIMIT = 5
 
     while True:
         line = stream.readline()
@@ -295,14 +297,42 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
         except (binascii.Error, ValueError) as exc:
             # A power loss mid-write (the capture loop batches flushes)
             # leaves a truncated final line; salvage the complete blocks
-            # instead of aborting the whole run.
-            logger.warning(
-                "skipping corrupt/truncated .card line for block %s "
-                "(%s); complete blocks before it are unaffected",
-                idx, exc)
+            # instead of aborting the whole run.  Cap the per-line
+            # warnings so a systematically corrupt file does not flood
+            # the log; the count is summarised after the loop.
+            corrupt_lines += 1
+            if corrupt_lines <= _CORRUPT_WARN_LIMIT:
+                logger.warning(
+                    "skipping corrupt/truncated .card line for block %s "
+                    "(%s); complete blocks before it are unaffected",
+                    idx, exc)
             continue
+        # A truncation that happens to land on a whole number of
+        # samples decodes without error but yields a short block; the
+        # header's recorded block_size catches it.
+        if 'block_size' in metadata:
+            try:
+                expected_len = int(metadata['block_size'])
+            except ValueError:
+                expected_len = None
+            if expected_len and len(data) != expected_len:
+                corrupt_lines += 1
+                if corrupt_lines <= _CORRUPT_WARN_LIMIT:
+                    logger.warning(
+                        "skipping short .card line for block %s: %d "
+                        "samples, header says block_size=%d "
+                        "(truncated write?)",
+                        idx, len(data), expected_len)
+                continue
         data_seen = True
         yield float(timestamp), int(idx), Signal(data)
+
+    if corrupt_lines:
+        log = logger.error if not data_seen else logger.warning
+        log("%d corrupt/truncated .card line(s) skipped%s",
+            corrupt_lines,
+            "" if data_seen else " — NO valid blocks were recovered "
+            "from this file")
 
 
 def card_writer(stream, timestamp, block_idx, block, bit_depth=8):

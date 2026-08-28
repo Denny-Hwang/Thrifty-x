@@ -1,5 +1,5 @@
 [Unit]
-Description=Thrifty-X (legacy) detect-from-fastcard pipeline
+Description=Thrifty-X fastdet detector (C capture+detect via fastdet.sh)
 Documentation=https://github.com/Denny-Hwang/thrifty-x
 After=network-online.target time-sync.target
 Wants=network-online.target time-sync.target
@@ -19,11 +19,15 @@ Type=simple
 Restart=on-failure
 RestartSec=120
 
-# Hardening — same baseline as thriftyx-capture@.service.  Relax only
-# if a specific path conflicts with a deployment.
+# Hardening — adapted from thriftyx-capture@.service.  Unlike that
+# unit (which writes under /var/lib/thriftyx), fastdet.sh works in
+# /home/pi/detector, so ProtectHome would make the unit kill itself:
+# instead /home stays accessible and only the system dirs are
+# read-only.  NoNewPrivileges is safe because fastdet.sh performs no
+# sudo (clock stepping is ntp-after-online.service's job).
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=read-only
+ReadWritePaths=/home/pi/detector
 PrivateTmp=true
 
 # Logging
