@@ -29,6 +29,11 @@ def _streaming_device():
     dev._capturing = True
     dev._stream_started = True
     dev._check_open = lambda: None  # bypass the _lib presence check
+    # Shadow close() so __del__ can never reach the real libairspy with
+    # this fake state: with libairspy installed, close() -> _stop_rx()
+    # would call airspy_stop_rx(NULL) at GC time and segfault the test
+    # run (the flags above claim an open, capturing device).
+    dev.close = lambda: None
     return dev
 
 

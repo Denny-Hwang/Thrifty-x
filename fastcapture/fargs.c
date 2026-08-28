@@ -58,7 +58,7 @@ const fargs_option_t fargs_options[] = {
     {"sample-rate", 's', "<sps>", 0,
         "Sample rate [default: 6M]", 3},
     {"gain", 'g', "<index>", 0,
-        "LNA gain index (0-14 Mini, 0-15 R2) [default: 0]", 3},
+        "LNA gain index (0-14) [default: 0]", 3},
     {"mixer-gain", 'M', "<index>", 0,
         "Mixer gain index (0-15) [default: 0]", 3},
     {"vga-gain", 'V', "<index>", 0,

@@ -12,7 +12,8 @@ from thriftyx.hal.base import SDRDevice, DeviceInfo, SampleFormat
 from thriftyx.hal.airspy_mini import (AirspyMiniDevice, list_airspy_serials,
                                        parse_airspy_serial)
 from thriftyx.hal.airspy_r2 import AirspyR2Device
-from thriftyx.hal.device_factory import create_device, register_device, available_devices
+from thriftyx.hal.device_factory import (create_device, register_device,
+                                         available_devices)
 
 __all__ = [
     'SDRDevice',

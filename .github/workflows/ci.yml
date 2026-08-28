@@ -80,3 +80,12 @@ jobs:
           BIN=build/${{ matrix.target }}/${{ matrix.target == 'fastcapture' && 'fastcapture' || 'fastdet' }}
           test -x "$BIN"
           "$BIN" --help >/dev/null
+      - name: Functional round-trip check (int16 v2 card format)
+        # Guards the int16 file-reader layout: raw int16 -> card must
+        # reproduce the input samples exactly, and the C card reader
+        # must re-read fastcapture's own output byte-identically.
+        # Stdlib-only Python, no package install needed.
+        if: matrix.target == 'fastcapture'
+        run: |
+          python3 scripts/c_card_roundtrip_check.py \
+            --binary build/fastcapture/fastcapture

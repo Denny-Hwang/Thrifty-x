@@ -13,7 +13,8 @@ import base64
 
 import numpy as np
 
-from thriftyx.block_data import (raw_to_complex, card_reader, card_writer, write_card_header)
+from thriftyx.block_data import (raw_to_complex, card_reader, card_writer,
+                                 write_card_header)
 from tests.mocks.mock_device import MockSDRDevice
 from tests.mocks.signal_generator import generate_carrier, complex_to_int16
 

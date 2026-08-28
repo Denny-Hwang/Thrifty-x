@@ -39,11 +39,13 @@ def solve_1d(tdoa_array, rx_pos):
     rx0, rx1 = rx_keys[0], rx_keys[1]
 
     if len(rx_pos) != 2:
-        raise EstimationError(f"solve_1d requires exactly 2 receivers, got {len(rx_pos)}")
+        raise EstimationError(
+            f"solve_1d requires exactly 2 receivers, got {len(rx_pos)}")
     if len(rx_pos[rx0]) != 1:
         raise EstimationError("solve_1d requires 1D receiver positions")
     if len(tdoa_array) != 1:
-        raise EstimationError(f"solve_1d requires exactly 1 TDOA, got {len(tdoa_array)}")
+        raise EstimationError(
+            f"solve_1d requires exactly 1 TDOA, got {len(tdoa_array)}")
 
     tdoa_pos = tdoa_array['tdoa'][0] * SPEED_OF_LIGHT
     rx_dist = rx_pos[rx0] + rx_pos[rx1]

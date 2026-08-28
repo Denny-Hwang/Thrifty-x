@@ -124,7 +124,8 @@ int main(int argc, char **argv) {
                                  arg_corr_thresh_const,
                                  arg_corr_thresh_snr);
 
-        vector<char> base64((2*args->block_len+2)/3*4 + 10);
+        // v2 card format: block_len int16 I/Q pairs = 4 bytes per pair
+        vector<char> base64((2*args->block_len*sizeof(int16_t)+2)/3*4 + 10);
 
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
@@ -210,7 +211,7 @@ int main(int argc, char **argv) {
                 if (card.file() != NULL) {
                     Base64encode(base64.data(),
                                  (const char*) carrier.block->raw_samples,
-                                 args->block_len * 2);
+                                 args->block_len * 2 * sizeof(int16_t));
                     card.printf("%ld.%06ld %" PRId64 " %s\n",
                                 carrier.block->timestamp.tv_sec,
                                 carrier.block->timestamp.tv_usec,

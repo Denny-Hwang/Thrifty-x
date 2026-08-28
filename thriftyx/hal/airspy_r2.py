@@ -17,7 +17,9 @@ from thriftyx.exceptions import DeviceConfigError
 _DEVICE_NAME = "Airspy R2"
 _SUPPORTED_SAMPLE_RATES = (2_500_000, 10_000_000)
 _FREQUENCY_RANGE = (24_000_000, 1_800_000_000)
-_GAIN_STAGES = {'lna': (0, 15), 'mixer': (0, 15), 'vga': (0, 15)}
+# Same R820T2 tuner as the Mini: LNA index range is 0-14 (libairspy
+# silently clamps larger values), Mixer/VGA are 0-15.
+_GAIN_STAGES = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
 
 VALID_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
 
@@ -63,6 +65,9 @@ class AirspyR2Device(AirspyMiniDevice):
         ret = lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
+        # Record the configured rate: _start_rx sizes the bounded
+        # read_sync buffer from it (falls back to max supported rate).
+        self._sample_rate = int(rate)
 
     def set_center_freq(self, freq: int) -> None:
         lib = self._check_open()

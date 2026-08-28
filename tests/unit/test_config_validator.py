@@ -167,14 +167,14 @@ def test_rtlsdr_gains_not_validated():
     assert isinstance(warnings, list)
 
 
-def test_r2_lna_gain_15_accepted():
-    """Airspy R2 supports LNA gain 0-15 (wider than Mini's 0-14)."""
+def test_r2_lna_gain_15_rejected():
+    """Airspy R2 uses the same R820T2 tuner as the Mini: LNA is 0-14."""
     config = _valid_mini_config()
     config['device_type'] = 'airspy_r2'
     config['sample_rate'] = 10_000_000
     config['lna_gain'] = 15
-    warnings = validate_config(config)
-    assert isinstance(warnings, list)
+    with pytest.raises(ConfigValidationError, match='lna_gain'):
+        validate_config(config)
 
 
 def test_mini_lna_gain_15_rejected():
