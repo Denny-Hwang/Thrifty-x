@@ -273,13 +273,28 @@ def compute_block_params(sample_rate, chip_rate,
     return block_size, block_history, template_len
 
 
-def _auto_adjust_block_params(values):
+def _auto_adjust_block_params(values, explicit=None):
     """Auto-adjust block_history and block_size when too small for sample rate.
 
-    Called after parsing all settings.  Only enlarges parameters that are
-    insufficient for the estimated template length; explicitly large values
-    set by the user are left untouched.
+    Called after parsing all settings.  Only enlarges *default-derived*
+    parameters that are insufficient for the estimated template length:
+    a value the user set explicitly (config file or CLI) is never
+    rewritten — a warning is logged instead, because the estimate below
+    assumes a ``DEFAULT_CODE_LENGTH``-chip Gold code and may not match
+    the actual template.
+
+    Adjustments are logged at WARNING level: changing ``block_size``
+    changes the FFT length and bin width, which the operator should see.
+
+    Parameters
+    ----------
+    values : dict
+        Parsed setting values (mutated in place).
+    explicit : set or None
+        Keys that were set explicitly rather than filled from defaults.
+        ``None`` is treated as "nothing explicit" (legacy behavior).
     """
+    explicit = explicit if explicit is not None else frozenset()
     sample_rate = values.get('sample_rate')
     chip_rate = values.get('chip_rate')
     if sample_rate is None or chip_rate is None:
@@ -289,12 +304,22 @@ def _auto_adjust_block_params(values):
 
     block_history = values.get('block_history')
     if block_history is not None and block_history < template_len - 1:
-        old = block_history
-        values['block_history'] = rec_history
-        logging.info(
-            "Auto-adjusted block_history %d -> %d "
-            "(template_len=%d at %.1f Msps)",
-            old, rec_history, template_len, sample_rate / 1e6)
+        if 'block_history' in explicit:
+            logging.warning(
+                "block_history %d is smaller than the estimated template "
+                "length %d at %.1f Msps (assuming a %d-chip code); keeping "
+                "the configured value — correlation may fail. "
+                "Recommended: %d",
+                block_history, template_len, sample_rate / 1e6,
+                DEFAULT_CODE_LENGTH, rec_history)
+        else:
+            values['block_history'] = rec_history
+            logging.warning(
+                "Auto-adjusted default block_history %d -> %d "
+                "(template_len=%d at %.1f Msps). Set block_history "
+                "explicitly to override.",
+                block_history, rec_history, template_len,
+                sample_rate / 1e6)
 
     block_history = values.get('block_history', rec_history)
     block_size = values.get('block_size')
@@ -302,14 +327,25 @@ def _auto_adjust_block_params(values):
         min_block = max(template_len + block_history + 1,
                         2 * block_history)
         if block_size < min_block:
-            new_size = 1
-            while new_size < min_block:
-                new_size *= 2
-            logging.info(
-                "Auto-adjusted block_size %d -> %d "
-                "(template_len=%d, block_history=%d)",
-                block_size, new_size, template_len, block_history)
-            values['block_size'] = new_size
+            if 'block_size' in explicit:
+                logging.warning(
+                    "block_size %d is smaller than the recommended "
+                    "minimum %d for block_history=%d and estimated "
+                    "template length %d (assuming a %d-chip code); "
+                    "keeping the configured value.",
+                    block_size, min_block, block_history, template_len,
+                    DEFAULT_CODE_LENGTH)
+            else:
+                new_size = 1
+                while new_size < min_block:
+                    new_size *= 2
+                logging.warning(
+                    "Auto-adjusted default block_size %d -> %d "
+                    "(template_len=%d, block_history=%d). This changes "
+                    "the FFT length/bin width; set block_size explicitly "
+                    "to override.",
+                    block_size, new_size, template_len, block_history)
+                values['block_size'] = new_size
 
     return values
 
@@ -416,8 +452,9 @@ def load(args=None, config_file=None, definitions=None,
     # Parse
     values = {k: definitions[k].parser(v) for k, v in strings.items()}
 
-    # Auto-adjust block parameters for higher sample rates
-    values = _auto_adjust_block_params(values)
+    # Auto-adjust block parameters for higher sample rates (defaults
+    # only — explicitly-set values are respected, with a warning).
+    values = _auto_adjust_block_params(values, explicit)
 
     if return_explicit:
         return values, explicit

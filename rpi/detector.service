@@ -9,8 +9,8 @@ StartLimitIntervalSec=600
 StartLimitBurst=5
 
 [Service]
-ExecStart=/home/pi/thrifty/rpi/fastdet.sh
-WorkingDirectory=/home/pi/thrifty
+ExecStart=/home/pi/thrifty-x/rpi/fastdet.sh
+WorkingDirectory=/home/pi/thrifty-x
 User=pi
 Group=pi
 Type=simple

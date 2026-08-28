@@ -135,7 +135,10 @@ int main(int argc, char **argv) {
         // print header
         bool input_from_sdr = false;
         if (args->input_file) {
-            input_from_sdr = (strcmp(args->input_file, "rtlsdr") == 0);
+            // fastcapture's live-SDR sentinel (fastcard.c) — the legacy
+            // "rtlsdr" sentinel no longer exists; matching it here left
+            // card headers with sample_rate=0 on every live capture.
+            input_from_sdr = (strcmp(args->input_file, "airspy") == 0);
         }
         if (info.file() != NULL) {
             fargs_print_summary(args.get(), info.file(), input_from_sdr);

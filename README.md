@@ -215,6 +215,16 @@ needs a `.get(default)` fallback.
 | `--block-size, -b`  | `16384` | Samples per block; must be a power of 2 |
 | `--history, -y`     | `4920`  | Sample overlap between blocks (block_history) |
 
+> **Default block parameters auto-adjust with sample rate.** When
+> `block_size` / `block_history` are left at their defaults but the
+> sample rate makes them too small for the estimated template length
+> (assuming a 1023-chip Gold code), the loader enlarges them and logs a
+> warning — e.g. at 6 MSPS the defaults become `32768` / `12280`
+> (matching the user-guide tables). Explicitly-set values are **never**
+> rewritten; if they look too small a warning is logged and the value
+> is kept. Note that changing `block_size` changes the FFT length and
+> bin width.
+
 ### Gain — Airspy
 
 | Flag | Default | Range | Notes |

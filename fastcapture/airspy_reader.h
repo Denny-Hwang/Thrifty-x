@@ -19,6 +19,7 @@
 #define AIRSPY_READER_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include "reader.h"
 
 /**
@@ -54,5 +55,17 @@ int airspy_reader_open(const airspy_reader_config_t *config,
  * @param reader  Reader instance to close.
  */
 void airspy_reader_close(reader_t *reader);
+
+/**
+ * Print capture statistics (libairspy dropped samples, ring-buffer
+ * overflow events, occupancy histogram) to a stream.
+ *
+ * A non-zero drop/overflow count means the sample stream had
+ * discontinuities, which invalidates downstream SoA/block indexing.
+ *
+ * @param reader  Reader instance created by airspy_reader_open().
+ * @param out     Destination stream (no-op when NULL).
+ */
+void airspy_reader_print_stats(reader_t *reader, FILE *out);
 
 #endif /* AIRSPY_READER_H */

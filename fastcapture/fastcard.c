@@ -230,7 +230,9 @@ void fastcard_cancel(fastcard_t* fc) {
 }
 
 void fastcard_print_stats(fastcard_t* fc, FILE* out) {
-    (void)fc;
-    (void)out;
-    // Airspy reader does not currently support histogram printing
+    // Only the live SDR reader keeps capture statistics; file readers
+    // (raw / card) have none.  fc->in == NULL means the airspy reader.
+    if (fc->in == NULL && fc->reader != NULL) {
+        airspy_reader_print_stats(fc->reader, out);
+    }
 }

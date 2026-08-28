@@ -278,7 +278,26 @@ promise it, so this is recorded as a scoping clarification.
 > fake-state devices whose `__del__` → `close()` → `airspy_stop_rx(NULL)`
 > segfaults the suite on any machine with libairspy installed (CI never
 > installs it, so the gate was blind); fixed by shadowing `close` on
-> the fake-state device. M4–M8 and the minor list remain open.
+> the fake-state device. The minor list remains open.
+>
+> **Second resolution update (follow-up PR):** M4–M8 are now also
+> **fixed**: M4 (`_auto_adjust_block_params` respects explicitly-set
+> values — warning instead of rewrite — and logs adjustments of
+> defaults at WARNING level; documented in README; regression tests in
+> `tests/test_settings.py`), M5 (`fastdet.cpp` SDR sentinel updated to
+> `"airspy"`), M6 (`rpi/fastdet.sh`+`fastdet.cfg` rewritten for the
+> Airspy CLI with chrony sync, `rpi/detector.service` path fixed to
+> `thrifty-x`, `rpi/detect.sh` switched from `ntp-wait` to
+> `chronyc waitsync`, `rpi/detector.cfg` gained the explicit
+> `device_type: rtlsdr` its validation needs), M7 (`circbuf_cancel`
+> before `airspy_stop_rx` in `_airspy_reader_free` and
+> `airspy_reader_close`; the `airspy_start_rx` failure path no longer
+> leaks the ring buffer), and M8 (the RX callback accounts
+> `transfer->dropped_samples` with a one-shot stderr warning, and
+> `fastcard_print_stats` now reports drops, overflow events, and the
+> ring-buffer occupancy histogram via `airspy_reader_print_stats` —
+> restoring the stats the RTL fastcard used to print, for both
+> `fastcapture` and `fastdet`).
 
 1. **C1–C3** — convert `raw_reader.c`/`card_reader.c` to the int16
    layout and fix `fastdet -x` export size; add a C round-trip test to

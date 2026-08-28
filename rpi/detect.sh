@@ -13,8 +13,10 @@ killjobs() {
 
 trap "killjobs" SIGINT SIGTERM
 
-echo "Waiting for NTP sync..."
-ntp-wait
+echo "Waiting for chrony to discipline the clock..."
+# Pi 5 / Bookworm stack uses chrony (legacy ntpd's ntp-wait is not
+# installed) — same convention as rpi/ntp-after-online.sh.
+chronyc waitsync 60 0.1
 
 echo "Starting Thrifty..."
 cd /home/pi/detector
