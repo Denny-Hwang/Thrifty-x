@@ -2,6 +2,8 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include <volk/volk.h>
@@ -76,7 +78,16 @@ void CorrDetector::set_window(
         size_t history_len,
         size_t template_len) {
 
-    assert(history_len >= template_len - 1);
+    // A runtime check, not assert(): fastdet builds Release (NDEBUG)
+    // by default, and the size_t subtraction below would underflow to
+    // a huge padding and surface only as a cryptic volk_malloc failure.
+    if (template_len > 0 && history_len < template_len - 1) {
+        std::ostringstream msg;
+        msg << "history_len (" << history_len << ") must be >= "
+            << "template_len - 1 (" << (template_len - 1)
+            << "); increase --history or use a shorter template";
+        throw std::runtime_error(msg.str());
+    }
     size_t padding = history_len - template_len + 1;
     size_t left_pad = padding / 2;
     size_t right_pad = padding-left_pad;
@@ -209,8 +220,16 @@ CorrDetection CorrDetector::detect(const fastcard_data_t &carrier_det) {
 
     // Carrier interpolation
     // TODO: carrier interpolation should not be here!
-    double carrier_offset = interpolate_parabolic(
-            &carrier_det.fft_power[carrier_det.detection.argmax]);
+    // Guard the spectrum edges: interpolate_parabolic dereferences
+    // peak_power[-1] and peak_power[+1], and the default carrier
+    // window (0--1) includes bin 0 — an argmax at either edge would
+    // read out of bounds.  Fall back to the bin centre there.
+    double carrier_offset = 0;
+    size_t carrier_argmax = carrier_det.detection.argmax;
+    if (carrier_argmax > 0 && carrier_argmax + 1 < len_) {
+        carrier_offset = interpolate_parabolic(
+                &carrier_det.fft_power[carrier_argmax]);
+    }
 
     det.carrier_offset = carrier_offset;
 

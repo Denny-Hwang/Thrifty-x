@@ -118,3 +118,12 @@ class TestReadSync:
         dev._user_callback = lambda arr: None
         with pytest.raises(DeviceCaptureError, match="start_capture"):
             dev.read_sync(4)
+
+
+def test_read_sync_zero_samples_returns_empty():
+    """read_sync(0) must return an empty int16 array, not raise from
+    np.concatenate([])."""
+    dev = _streaming_device()
+    out = dev.read_sync(0)
+    assert out.dtype == np.int16
+    assert out.size == 0

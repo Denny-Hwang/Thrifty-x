@@ -214,8 +214,10 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     else:
         # Pass bit_depth as a fallback hint: card_reader prefers the
         # ``#v2 bit_depth=…`` header when present and only uses this value
-        # for headerless (v1) files.
-        blocks = card_reader(args.input, bit_depth=bit_depth)
+        # for headerless (v1) files.  The configured sample rate is passed
+        # so a mismatch against the header's recorded rate is warned about.
+        blocks = card_reader(args.input, bit_depth=bit_depth,
+                             expected_sample_rate=config.sample_rate)
 
     template = np.load(config.template)
 

@@ -298,6 +298,35 @@ promise it, so this is recorded as a scoping clarification.
 > ring-buffer occupancy histogram via `airspy_reader_print_stats` —
 > restoring the stats the RTL fastcard used to print, for both
 > `fastcapture` and `fastdet`).
+>
+> **Third resolution update (follow-up PR): the MINOR list is
+> resolved.** DSP: the time-domain `freq_shift` restores legacy's
+> `-0.5` phase term (escape hatch now sample-identical); carrier
+> interpolators wrap circularly at spectrum edges (legacy-correct at
+> DC, no crash at the top edge); `is_outlier` with zero MAD flags
+> deviating points again (legacy semantics); the remaining behavioral
+> deltas (noise clamp, sort fix, `tdoa -s` chain, degenerate-peak
+> guards) are now documented in README. Data path: `history=0` no
+> longer grows blocks (`block_reader` + capture loops); a truncated
+> final card line is salvaged with a warning instead of crashing the
+> run; the `#v2` sniffer accepts tab/bare-header variants; the header's
+> recorded `sample_rate` is checked against the configured rate in
+> `detect` with a mismatch warning. HAL/CLI: `bit_depth` defaults from
+> `device_type` (no more spurious stock-run warning); manual gain mode
+> no longer fails on libairspy builds lacking AGC symbols when AGC is
+> off; `DeviceConfigError` from `open()` exits cleanly;
+> `libairspy_version()` binds the real `airspy_lib_version()` API;
+> `read_sync(0)` returns an empty array. C: `cardet.c` clamps the
+> noise estimate at 0 (Python parity); fastcapture honors
+> `-d <index>` via `airspy_list_devices`/`airspy_open_sn`;
+> `fastdet -o -` writes to stdout; the carrier parabolic interpolation
+> guards the spectrum edges (no OOB read); the Release-stripped
+> history assert is a runtime check with a clear message. rpi: the
+> emergency purge spares files newer than `ACTIVE_GRACE_MIN`;
+> `soak_test.sh` enforces `MAX_DISK_GROWTH_MB` and flags an
+> unmonitored throttle signal; `heartbeat.py` documents
+> `last_detection_ts` as last-write time. Still open: the Info/nit
+> list only.
 
 1. **C1–C3** — convert `raw_reader.c`/`card_reader.c` to the int16
    layout and fix `fastdet -x` export size; add a C round-trip test to

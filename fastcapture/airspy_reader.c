@@ -200,12 +200,42 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     state->output = settings->output;
     state->history_size = settings->history_size;
 
-    ret = airspy_open(&state->device);
-    if (ret != AIRSPY_SUCCESS) {
-        fprintf(stderr, "airspy_open() failed: %s\n",
-                airspy_error_name(ret));
-        free(state);
-        return -1;
+    /* -d <index>: select by enumeration order via the board serial.
+     * Previously this option was silently ignored and the first device
+     * was always opened. */
+    if (config->device_index > 0) {
+        uint64_t serials[32];
+        int found = airspy_list_devices(serials, 32);
+        if (found < 0) {
+            fprintf(stderr, "airspy_list_devices() failed: %s\n",
+                    airspy_error_name(found));
+            free(state);
+            return -1;
+        }
+        if ((int)config->device_index >= found) {
+            fprintf(stderr,
+                    "airspy device index %u out of range: only %d "
+                    "device(s) found\n",
+                    config->device_index, found);
+            free(state);
+            return -1;
+        }
+        ret = airspy_open_sn(&state->device,
+                             serials[config->device_index]);
+        if (ret != AIRSPY_SUCCESS) {
+            fprintf(stderr, "airspy_open_sn() failed: %s\n",
+                    airspy_error_name(ret));
+            free(state);
+            return -1;
+        }
+    } else {
+        ret = airspy_open(&state->device);
+        if (ret != AIRSPY_SUCCESS) {
+            fprintf(stderr, "airspy_open() failed: %s\n",
+                    airspy_error_name(ret));
+            free(state);
+            return -1;
+        }
     }
 
     ret = airspy_set_samplerate(state->device, config->sample_rate);

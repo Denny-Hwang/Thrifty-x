@@ -97,6 +97,28 @@ def _bit_depth_for_device(device_type):
     return 8  # RTL-SDR
 
 
+def _apply_device_default_bit_depth(config):
+    """Substitute the device-appropriate default bit depth.
+
+    The DEFINITIONS default is 8 (RTL-SDR), so every stock Airspy run
+    used to trigger the validator's "Airspy uses 12-bit samples, but
+    bit_depth=8" warning.  Only applies when ``bit_depth`` was not set
+    explicitly; an explicit value — valid or not — is left for the
+    validator to judge.
+    """
+    explicit = getattr(config, 'explicit_keys', frozenset())
+    if 'bit_depth' in explicit:
+        return config
+    device_bit_depth = _bit_depth_for_device(config.get('device_type'))
+    if config.get('bit_depth') == device_bit_depth:
+        return config
+    values = dict(config)
+    values['bit_depth'] = device_bit_depth
+    new_config = settings_module.Namespace(values)
+    new_config.explicit_keys = explicit
+    return new_config
+
+
 # Lowest supported rate per Airspy device, used when the user did not set
 # --sample-rate explicitly.  The DEFINITIONS default (2.4M) is only valid
 # for RTL-SDR and would otherwise fail validation out of the box.
@@ -388,7 +410,9 @@ def _capture_rtlsdr(config, extra_args, output_file):
                     pending_writes = 0
                     last_flush_t = now
 
-        history_raw = new_raw[-block_history * 2:]
+        # history 0 must carry over nothing ([-0:] slices everything).
+        history_raw = (new_raw[-block_history * 2:] if block_history > 0
+                       else new_raw[:0])
         block_idx += 1
 
     if output_file is not None and pending_writes:
@@ -462,6 +486,11 @@ def _capture_airspy(config, extra_args, output_file):
         # create_device received an unsupported kwarg or invalid serial.
         print("ERROR: {}".format(e), file=sys.stderr)
         sys.exit(1)
+    except DeviceConfigError as e:
+        # open() itself can raise DeviceConfigError (e.g. the INT16_IQ
+        # sample-type fail-fast); exit cleanly instead of a traceback.
+        print("ERROR configuring device: {}".format(e), file=sys.stderr)
+        sys.exit(1)
 
     try:
         device.set_sample_rate(sample_rate)
@@ -531,7 +560,10 @@ def _capture_airspy(config, extra_args, output_file):
                 # Update history from the tail of raw.  With correct
                 # block parameters new_samples >= block_history, so this
                 # slice always yields exactly block_history * 2 values.
-                history_raw = raw[-(block_history * 2):]
+                # (history 0 must carry over nothing: [-0:] is a full
+                # slice.)
+                history_raw = (raw[-(block_history * 2):]
+                               if block_history > 0 else raw[:0])
                 blocks_skipped += 1
             print(" done\n", file=sys.stderr)
             # Match RTL behaviour: first processed block starts at index 0
@@ -593,7 +625,9 @@ def _capture_airspy(config, extra_args, output_file):
                         last_flush_t = now
 
             # Update history from the tail of the raw read buffer.
-            history_raw = raw[-(block_history * 2):]
+            # (history 0 must carry over nothing: [-0:] is a full slice.)
+            history_raw = (raw[-(block_history * 2):]
+                           if block_history > 0 else raw[:0])
             blocks_processed += 1
 
         if output_file is not None and pending_writes:
@@ -670,8 +704,11 @@ def capture_cli(args=None):
                                                     argv=args)
 
     # Derive a usable default sample rate for Airspy devices (the stock
-    # 2.4M default is RTL-SDR-only and would fail validation).
+    # 2.4M default is RTL-SDR-only and would fail validation), and the
+    # matching bit depth (stock default 8 is RTL-SDR-only and would
+    # trigger a spurious validator warning on every Airspy run).
     config = _apply_device_default_rate(config)
+    config = _apply_device_default_bit_depth(config)
 
     # Validate configuration
     try:

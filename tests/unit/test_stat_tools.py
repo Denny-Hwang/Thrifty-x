@@ -26,3 +26,11 @@ def test_is_outlier_identical_values():
     data = np.array([5.0, 5.0, 5.0, 5.0, 5.0])
     outliers = is_outlier(data, thresh=3.5)
     assert not np.any(outliers)
+
+
+def test_is_outlier_zero_mad_flags_deviants():
+    """Majority-identical data (MAD == 0): a deviating point IS an
+    outlier, matching the original Thrifty semantics (diff/0 -> inf)."""
+    data = np.array([5.0, 5.0, 5.0, 5.0, 9.0])
+    outliers = is_outlier(data, thresh=3.5)
+    assert list(outliers) == [False, False, False, False, True]

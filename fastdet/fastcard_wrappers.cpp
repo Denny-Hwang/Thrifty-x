@@ -118,7 +118,10 @@ void CFile::open(std::string filename) {
     close();
     if (filename.length() == 0) {
         file_ = NULL;
-    } else if (filename == "") {
+    } else if (filename == "-") {
+        // '-' selects stdout (the previous check compared against ""
+        // which is unreachable after the length()==0 branch, so
+        // '-o -' used to create a file literally named '-').
         file_ = stdout;
     } else {
         file_ = fopen(filename.c_str(), "w");

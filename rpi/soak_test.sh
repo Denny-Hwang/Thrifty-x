@@ -164,6 +164,13 @@ if [ "${WORST_FREE}" -lt "${MIN_DISK_FREE_PCT}" ]; then
     fail=1; reasons+=("worst disk free ${WORST_FREE}% < ${MIN_DISK_FREE_PCT}%")
 fi
 
+# 5b. capture output growth cap (0 = no upper bound)
+CARD_MB=$(( $(stat -c%s "${CARD_FILE}" 2>/dev/null || echo 0) / 1048576 ))
+if [ "${MAX_DISK_GROWTH_MB}" -gt 0 ] \
+        && [ "${CARD_MB}" -gt "${MAX_DISK_GROWTH_MB}" ]; then
+    fail=1; reasons+=("capture output ${CARD_MB} MB > ${MAX_DISK_GROWTH_MB} MB")
+fi
+
 # 6. card file integrity — header is "#v2" for Airspy or first line non-empty
 if [ ! -s "${CARD_FILE}" ]; then
     fail=1; reasons+=("card file empty or missing: ${CARD_FILE}")
@@ -181,6 +188,11 @@ fi
     echo "rxid=${RXID} run=${STAMP}"
     echo "duration_s=${SOAK_DURATION_S} sample_s=${SAMPLE_INTERVAL_S}"
     echo "capture_exit_code=${CAP_RC}"
+    if ! command -v vcgencmd >/dev/null 2>&1; then
+        # Without vcgencmd the throttle check can never fail — say so
+        # instead of letting an unmonitored signal look like a pass.
+        echo "WARNING: vcgencmd not available — throttle flags were NOT monitored"
+    fi
     echo "peak_cpu_temp_c=${PEAK_TEMP}"
     echo "rss_growth_pct=${MEM_GROWTH}"
     echo "worst_disk_used_pct=${WORST_USED}"

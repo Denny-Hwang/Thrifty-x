@@ -201,10 +201,14 @@ def make_dirichlet_interpolator(block_len, carrier_len,
     def _interpolator(fft_mag, peak_idx):
         """Curve fitting of Dirichlet kernel to FFT."""
         half = width // 2
-        if peak_idx < half or peak_idx + half >= len(fft_mag):
+        if len(fft_mag) < width:
             return (fft_mag[peak_idx], 0) if return_amplitude else 0
         xdata = np.array(np.arange(-half, half+1))
-        ydata = fft_mag[peak_idx + xdata]
+        # FFT bins are circular: wrap the fit window at both spectrum
+        # edges instead of bailing out with offset 0.  At the DC edge
+        # this matches the original Thrifty (negative indexing wrapped);
+        # at the high edge the original raised IndexError.
+        ydata = fft_mag[(peak_idx + xdata) % len(fft_mag)]
         initial_guess = (fft_mag[peak_idx], 0)
         # bounds: amplitude >= 0, sub-bin offset in [-0.5, 0.5] per the
         # Krueger Section 4.4.2 spec. Without bounds, curve_fit on noisy
@@ -232,9 +236,12 @@ def make_dirichlet_interpolator(block_len, carrier_len,
 def parabolic_interpolator(fft_mag, peak_idx):
     """Estimate sub-bin carrier frequency by fitting a parabola."""
     # pylint: disable=invalid-name
-    if peak_idx == 0 or peak_idx >= len(fft_mag) - 1:
+    n = len(fft_mag)
+    if n < 3:
         return 0
-    a, b, c = fft_mag[peak_idx-1], fft_mag[peak_idx], fft_mag[peak_idx+1]
+    # FFT bins are circular: wrap the neighbours at the spectrum edges.
+    a, b, c = fft_mag[(peak_idx-1) % n], fft_mag[peak_idx], \
+        fft_mag[(peak_idx+1) % n]
     denom = 4*b - 2*a - 2*c
     if abs(denom) < 1e-12:
         return 0
@@ -248,10 +255,11 @@ def make_polyfit_interpolator(width):
 
     def _interpolator(fft_mag, peak_idx):
         half = width // 2
-        if peak_idx < half or peak_idx + half >= len(fft_mag):
+        if len(fft_mag) < width:
             return 0
         xdata = np.array(np.arange(-half, half+1))
-        ydata = fft_mag[peak_idx + xdata]
+        # Circular wrap at the spectrum edges (FFT bins are periodic).
+        ydata = fft_mag[(peak_idx + xdata) % len(fft_mag)]
         coeffs = np.polyfit(xdata, ydata, 2)
         if abs(coeffs[0]) < 1e-12:
             return 0
@@ -274,7 +282,12 @@ def freq_shift(signal, shift):
     shift : float
         Number of (potentially fractional) shift to shift the signal by.
     """
-    freqs = np.arange(len(signal)) * 1. / len(signal)
+    # The -0.5 matches the original Thrifty implementation exactly.  It
+    # only contributes a constant unit-magnitude factor exp(-j*pi*shift)
+    # (magnitudes are unaffected), but keeping it makes the
+    # --freq-shift-method time_domain escape hatch sample-identical to
+    # the legacy code.
+    freqs = np.arange(len(signal)) * 1. / len(signal) - 0.5
     shift_signal = np.exp(2j * np.pi * shift * freqs)
     shifted_time = signal * shift_signal
     shifted_fft = shifted_time.fft
