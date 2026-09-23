@@ -139,3 +139,53 @@ def test_pyplot_fallback_returns_a_backend_that_can_draw(monkeypatch):
     fig = plt.figure()
     plt.close(fig)
     assert backend == "Agg"  # no display: TkAgg must have been rejected
+
+
+def _fake_qt(monkeypatch, *packages):
+    for pkg in packages:
+        for name in (pkg, pkg + ".QtWidgets", pkg + ".QtCore"):
+            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+
+
+def test_linux_with_display_still_probes_and_leaves_no_trace(monkeypatch):
+    """A DISPLAY does not make Qt safe (stale DISPLAY over SSH, missing
+    xcb library); a binding that fails the probe must be skipped without
+    having set QT_API or switched matplotlib to QtAgg."""
+    _fake_qt(monkeypatch, "PyQt5")
+    monkeypatch.delitem(sys.modules, "PySide6", raising=False)
+    used = []
+    monkeypatch.setattr(da.matplotlib, "use",
+                        lambda *a, **k: used.append(a))
+    monkeypatch.setattr(da.sys, "platform", "linux")
+    monkeypatch.setattr(da, "_has_display", lambda: True)
+    monkeypatch.setattr(da, "_is_wsl", lambda: False)
+    monkeypatch.delenv("QT_API", raising=False)
+    monkeypatch.setattr(
+        da, "_probe_qt_runtime",
+        lambda qt_pkg, platform=None, timeout=10:
+            (False, "Could not load the Qt platform plugin \"xcb\""))
+    assert da._try_qt_modules() is None
+    assert used == []
+    assert "QT_API" not in da.os.environ
+
+
+def test_pinned_qt_api_selects_that_binding(monkeypatch):
+    _fake_qt(monkeypatch, "PyQt5", "PySide6")
+    monkeypatch.setattr(da.matplotlib, "use", lambda *a, **k: None)
+    fake_backend = types.ModuleType("backend_qtagg")
+    fake_backend.FigureCanvasQTAgg = object
+    fake_backend.NavigationToolbar2QT = object
+    monkeypatch.setitem(sys.modules, "matplotlib.backends.backend_qtagg",
+                        fake_backend)
+    monkeypatch.setattr(da.sys, "platform", "linux")
+    monkeypatch.setattr(da, "_has_display", lambda: True)
+    monkeypatch.setattr(da, "_is_wsl", lambda: False)
+    monkeypatch.setenv("QT_API", "pyside6")
+    probed = []
+    monkeypatch.setattr(
+        da, "_probe_qt_runtime",
+        lambda qt_pkg, platform=None, timeout=10:
+            (probed.append(qt_pkg) or True, ""))
+    qt = da._try_qt_modules()
+    assert qt is not None and qt["qt_pkg"] == "PySide6"
+    assert probed == ["PySide6"]
