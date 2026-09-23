@@ -37,7 +37,11 @@ DURATION = 0.4                                  # seconds recorded per RX
 
 RX_POS = {0: (0.0, 0.0), 1: (1200.0, 0.0), 2: (0.0, 1000.0)}
 BEACON_ID, MOBILE_ID = 0, 1
-TX_POS = {BEACON_ID: (600.0, 500.0), MOBILE_ID: (350.0, 250.0)}
+# The beacon must not be equidistant from the receivers (as the
+# circumcentre (600, 500) of this layout would be): its TDOAs would all
+# be zero, and a sign or index error in the beacon geometry correction
+# would go unnoticed.
+TX_POS = {BEACON_ID: (1000.0, 800.0), MOBILE_ID: (350.0, 250.0)}
 CARRIER_HZ = {BEACON_ID: 50e3, MOBILE_ID: 120e3}
 # Emission times: bursts alternate beacon / mobile every 25 ms.
 EMISSIONS = ([(BEACON_ID, 0.010 + 0.05 * i) for i in range(8)]

@@ -13,3 +13,22 @@ if str(PROJECT_ROOT) not in sys.path:
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_default_config(tmp_path_factory, monkeypatch):
+    """Point the implicit ``./detector.cfg`` lookup at an empty directory.
+
+    Every command reads ``detector.cfg`` from the working directory when
+    no ``-c`` is given.  Without this, a developer's own detector.cfg in
+    the checkout (the README tells users to create one there) would
+    silently change what the tests exercise.  A test that needs a default
+    config writes it to ``settings.DEFAULT_CONFIG_PATH``.
+    """
+    from thriftyx import settings
+    empty = tmp_path_factory.mktemp('no-default-config')
+    monkeypatch.setattr(settings, 'DEFAULT_CONFIG_PATH',
+                        str(empty / 'detector.cfg'))
