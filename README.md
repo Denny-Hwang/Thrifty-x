@@ -10,6 +10,14 @@ and [Airspy R2](https://airspy.com/airspy-r2/), modernises the codebase for
 Python 3.10+, and adds a unified Qt-based detection viewer plus a
 Raspberry Pi 5 deployment story.
 
+**Forked from** [swkrueger/Thrifty](https://github.com/swkrueger/Thrifty)
+at commit
+[`2ad9775`](https://github.com/swkrueger/Thrifty/commit/2ad9775753a8712a61c81cc78fb0bc75a921d50b)
+(2019-03-04, the last upstream commit).  The original sources are not
+copied into this repository; `scripts/upstream_diff.sh` fetches that
+commit and diffs `thriftyx/` against it (CI publishes the per-module
+summary on every run).
+
 Version: see `thriftyx/__init__.py` (`__version__`).
 
 ## Table of Contents
@@ -447,7 +455,6 @@ Thrifty-x/
 │   └── hal/             #   SDR HAL: profiles.py (device facts), drivers
 ├── fastcapture/         # ▶ Active C library binding to libairspy
 ├── fastdet/             # ▶ Active C++ correlation detector (links fastcapture)
-├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty
 ├── tests/
 │   ├── unit/            #   28 unit-test modules
 │   ├── integration/     #   1 integration test (block_data + mock capture)
@@ -458,11 +465,10 @@ Thrifty-x/
 └── docs/                # User & deployment documentation
 ```
 
-The active code (`thriftyx/`, `fastcapture/`) is what `pip install`
-exposes.  `pyproject.toml` pins
-`[tool.setuptools.packages.find].include = ["thriftyx*"]`, so the legacy
-`thrifty/` directory is **not** packaged and should not be imported.
-It is kept in the tree purely for diff/comparison.
+`pip install` exposes the `thriftyx` package (`pyproject.toml` pins
+`[tool.setuptools.packages.find].include = ["thriftyx*"]`).  To compare
+a module with the original Thrifty, run
+`scripts/upstream_diff.sh carrier_sync.py` (any module name works).
 
 ## Raspberry Pi 5 Deployment
 
