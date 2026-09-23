@@ -33,6 +33,7 @@ from thriftyx import settings as settings_module
 from thriftyx import setting_parsers
 from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
+from thriftyx.hal.profiles import get_profile
 from thriftyx.carrier_detect import detect as carrier_detect_block
 from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
                                   DeviceCaptureError, ConfigValidationError)
@@ -90,89 +91,6 @@ def _resolve_card_output(output_path):
     return sys.stdout
 
 
-def _bit_depth_for_device(device_type):
-    """Return the correct bit depth for the device type."""
-    if device_type in ('airspy_mini', 'airspy_r2'):
-        return 12
-    return 8  # RTL-SDR
-
-
-def _apply_device_default_bit_depth(config):
-    """Substitute the device-appropriate default bit depth.
-
-    The DEFINITIONS default is 8 (RTL-SDR), so every stock Airspy run
-    used to trigger the validator's "Airspy uses 12-bit samples, but
-    bit_depth=8" warning.  Only applies when ``bit_depth`` was not set
-    explicitly; an explicit value — valid or not — is left for the
-    validator to judge.
-    """
-    explicit = getattr(config, 'explicit_keys', frozenset())
-    if 'bit_depth' in explicit:
-        return config
-    device_bit_depth = _bit_depth_for_device(config.get('device_type'))
-    if config.get('bit_depth') == device_bit_depth:
-        return config
-    values = dict(config)
-    values['bit_depth'] = device_bit_depth
-    new_config = settings_module.Namespace(values)
-    new_config.explicit_keys = explicit
-    return new_config
-
-
-# Lowest supported rate per Airspy device, used when the user did not set
-# --sample-rate explicitly.  The DEFINITIONS default (2.4M) is only valid
-# for RTL-SDR and would otherwise fail validation out of the box.
-_DEVICE_DEFAULT_RATES = {
-    'airspy_mini': 3_000_000,
-    'airspy_r2': 2_500_000,
-}
-
-
-def _apply_device_default_rate(config):
-    """Substitute a device-appropriate default sample rate.
-
-    Only applies when ``sample_rate`` was *not* set explicitly (CLI flag
-    or config file) and the selected device is an Airspy.  Explicit
-    values — valid or not — are left for the validator to judge.
-    Returns a (possibly new) settings Namespace.
-    """
-    explicit = getattr(config, 'explicit_keys', frozenset())
-    if 'sample_rate' in explicit:
-        return config
-    # Only ever replace the stock RTL-SDR default.  Any other value —
-    # even from a programmatic caller that did not populate
-    # explicit_keys — is treated as intentional and left alone.
-    stock_def = settings_module.DEFINITIONS['sample_rate']
-    stock_rate = stock_def.parser(stock_def.default)
-    if int(config.sample_rate) != int(stock_rate):
-        return config
-    device_type = config.get('device_type')
-    default_rate = _DEVICE_DEFAULT_RATES.get(device_type)
-    if default_rate is None:
-        return config
-    logger.info(
-        "sample_rate not set; using %s default %.1f Msps instead of the "
-        "RTL-SDR default %.1f Msps",
-        device_type, default_rate / 1e6, config.sample_rate / 1e6)
-    values = dict(config)
-    values['sample_rate'] = float(default_rate)
-    # Re-run the block-parameter auto-adjust for the new rate.  The
-    # capture command does not request chip_rate, so supply its default
-    # (the adjust helper is a no-op without it).  When BOTH block
-    # parameters are explicit the re-run could only repeat the
-    # too-small warnings that load() already emitted (explicit values
-    # are never rewritten), so skip it to avoid duplicate warnings.
-    if not {'block_size', 'block_history'} <= explicit:
-        if 'chip_rate' not in values:
-            chip_def = settings_module.DEFINITIONS['chip_rate']
-            values['chip_rate'] = chip_def.parser(chip_def.default)
-        values = settings_module._auto_adjust_block_params(values, explicit)
-        values.pop('chip_rate', None)
-    new_config = settings_module.Namespace(values)
-    new_config.explicit_keys = explicit
-    return new_config
-
-
 def _compute_threshold(fft_mag, thresh_coeffs, noise_rms):
     """Compute detection threshold for display.
 
@@ -206,7 +124,7 @@ def _print_capture_header(config, window, device_type='rtlsdr'):
           file=sys.stderr)
     print("    sample rate = {:.6f} Msps".format(sample_rate / 1e6),
           file=sys.stderr)
-    if device_type in ('airspy_mini', 'airspy_r2'):
+    if get_profile(device_type).gain_stages:
         gain_mode = str(config.get('gain_mode', 'manual'))
         if gain_mode == 'manual':
             print("    gain mode: manual; LNA={} Mixer={} VGA={} "
@@ -445,15 +363,16 @@ def _capture_rtlsdr(config, extra_args, output_file):
 # ---------------------------------------------------------------------------
 
 def _capture_airspy(config, extra_args, output_file):
-    """Capture from Airspy Mini or Airspy R2 via HAL with carrier detection.
+    """Capture from a HAL device (Airspy Mini / R2) with carrier detection.
 
-    Detected blocks are written in v2 .card format (``#v2`` header +
-    ``timestamp block_idx base64`` lines with int16 I/Q data).
+    Uses only the :class:`~thriftyx.hal.base.SDRDevice` contract, so any
+    device registered with the HAL factory works.  Detected blocks are
+    written in v2 .card format (``#v2`` header + ``timestamp block_idx
+    base64`` lines of raw samples).
     """
     from thriftyx.hal.device_factory import create_device
 
-    device_type = config.get('device_type', 'airspy_mini')
-    bit_depth = 12  # Airspy always 12-bit
+    device_type = config.device_type
     sample_rate = int(config.sample_rate)
     center_freq = int(config.tuner_freq)
     block_size = int(config.block_size)
@@ -502,6 +421,10 @@ def _capture_airspy(config, extra_args, output_file):
         # sample-type fail-fast); exit cleanly instead of a traceback.
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
         sys.exit(1)
+
+    # The device's own sample format, not the bit_depth setting, decides
+    # how the raw samples on disk must be decoded.
+    bit_depth = device.get_info().bit_depth
 
     try:
         device.set_sample_rate(sample_rate)
@@ -585,7 +508,7 @@ def _capture_airspy(config, extra_args, output_file):
 
         # Baseline dropped-sample counter at the start of the processed
         # window.  AirspyMiniDevice exposes cumulative dropped samples.
-        dropped_base = getattr(device, 'dropped_samples', 0)
+        dropped_base = device.dropped_samples
 
         last_flush_t = time.time()
         pending_writes = 0
@@ -603,7 +526,7 @@ def _capture_airspy(config, extra_args, output_file):
             # Account for samples dropped by the hardware, if the HAL
             # exposes a counter.  This ensures block_idx reflects real
             # elapsed time rather than just processed-block count.
-            dropped = max(0, getattr(device, 'dropped_samples', 0)
+            dropped = max(0, device.dropped_samples
                           - dropped_base)
             block_idx = ((total_samples_received + dropped)
                          // new_samples) - 1
@@ -716,15 +639,10 @@ def capture_cli(args=None):
                     # New Airspy options (P1 follow-ups):
                     'airspy_serial', 'gain_mode', 'combined_gain',
                     'lna_agc', 'mixer_agc', 'ppm', 'packing']
+    # sample_rate and bit_depth default from the device profile of
+    # device_type (settings.DEVICE_DERIVED_KEYS).
     config, extra_args = settings_module.load_args(parser, setting_keys,
                                                     argv=args)
-
-    # Derive a usable default sample rate for Airspy devices (the stock
-    # 2.4M default is RTL-SDR-only and would fail validation), and the
-    # matching bit depth (stock default 8 is RTL-SDR-only and would
-    # trigger a spurious validator warning on every Airspy run).
-    config = _apply_device_default_rate(config)
-    config = _apply_device_default_bit_depth(config)
 
     # Validate configuration
     try:
@@ -735,8 +653,6 @@ def capture_cli(args=None):
         print("ERROR: Invalid configuration: {}".format(e), file=sys.stderr)
         sys.exit(1)
 
-    # device_type is always populated by load_args (DEFINITIONS default
-    # is 'airspy_mini'), so a plain attribute access is safe.
     device_type = config.device_type
 
     try:
@@ -758,7 +674,8 @@ def capture_cli(args=None):
                     if (output_file is not None
                             and output_file not in (sys.stdout, sys.stderr)):
                         output_file.close()
-        elif device_type in ('airspy_mini', 'airspy_r2'):
+        else:
+            # Every other (validated) device type is a HAL device.
             output_path = extra_args.get('output')
             output_file = _resolve_card_output(output_path)
             try:
@@ -767,10 +684,6 @@ def capture_cli(args=None):
                 if (output_file is not None
                         and output_file not in (sys.stdout, sys.stderr)):
                     output_file.close()
-        else:
-            print("ERROR: Unknown device_type: {}".format(device_type),
-                  file=sys.stderr)
-            sys.exit(1)
     except BrokenPipeError:
         # Downstream consumer closed the pipe (e.g. ``head``)
         pass

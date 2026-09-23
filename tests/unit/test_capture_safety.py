@@ -16,55 +16,12 @@ import pytest
 from thriftyx.airspy_capture import _capture_airspy
 from thriftyx.exceptions import DeviceConfigError, DeviceCaptureError
 from thriftyx.settings import Namespace
+from tests.mocks.scripted_device import ScriptedSDRDevice
 
 
-class _FailingDevice:
-    """Stub device that fails in a configurable phase."""
-
-    def __init__(self, fail_in='set_sample_rate', exc=DeviceConfigError):
-        self._fail_in = fail_in
-        self._exc = exc
-        self._open = False
-        self.closed = False
-
-    def open(self):
-        self._open = True
-        if self._fail_in == 'open':
-            raise self._exc('open failure')
-
-    def close(self):
-        self.closed = True
-
-    def _maybe_fail(self, name):
-        if self._fail_in == name:
-            raise self._exc(f'{name} failure')
-
-    def set_sample_rate(self, _r):
-        self._maybe_fail('set_sample_rate')
-
-    def set_center_freq(self, _f):
-        self._maybe_fail('set_center_freq')
-
-    def set_gain(self, _t, _v):
-        self._maybe_fail('set_gain')
-
-    def set_bias_tee(self, _b):
-        self._maybe_fail('set_bias_tee')
-
-    def set_packing(self, _e):
-        self._maybe_fail('set_packing')
-
-    def apply_gain_mode(self, _mode, **_kwargs):
-        # Funnel through set_gain so existing fail_in='set_gain' keeps
-        # working alongside the new gain_mode dispatcher.
-        self._maybe_fail('apply_gain_mode')
-        self._maybe_fail('set_gain')
-
-    def read_sync(self, _n):
-        self._maybe_fail('read_sync')
-        # Returning empty buffer triggers the loop's "short read" exit.
-        import numpy as np
-        return np.array([], dtype=np.int16)
+def _FailingDevice(fail_in='set_sample_rate', exc=DeviceConfigError):
+    """Device that fails in a configurable phase."""
+    return ScriptedSDRDevice(fail_in=fail_in, exc=exc)
 
 
 def _config(**overrides):
@@ -128,50 +85,8 @@ def test_capture_airspy_capture_error_caught(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _RecordingDevice:
-    """Records every set_* call so we can assert on the wiring."""
-
-    def __init__(self):
-        self.applied_gain_mode = None
-        self.applied_kwargs = None
-        self.bias_tee = None
-        self.packing = None
-        self.center_freq = None
-        self.sample_rate = None
-        self.dropped_samples = 0
-        self.closed = False
-        self._opened = False
-
-    def open(self):
-        self._opened = True
-
-    def close(self):
-        self.closed = True
-
-    def set_sample_rate(self, rate):
-        self.sample_rate = rate
-
-    def set_center_freq(self, freq):
-        self.center_freq = freq
-
-    def set_bias_tee(self, enabled):
-        self.bias_tee = bool(enabled)
-
-    def set_packing(self, enabled):
-        self.packing = bool(enabled)
-
-    def apply_gain_mode(self, mode, **kwargs):
-        self.applied_gain_mode = mode
-        self.applied_kwargs = kwargs
-
-    def read_sync(self, _n):
-        # End of capture immediately
-        import numpy as np
-        return np.array([], dtype=np.int16)
-
-
 def _run_capture(monkeypatch, config_overrides, captured_kwargs):
-    fake = _RecordingDevice()
+    fake = ScriptedSDRDevice()
 
     def _fake_create(_device_type, **kwargs):
         captured_kwargs.update(kwargs)

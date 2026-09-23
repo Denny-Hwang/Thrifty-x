@@ -27,14 +27,18 @@ def test_explicit_sample_rate_in_config(tmp_path):
     assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 6e6
 
 
+# Without a configured rate, tdoa uses the same device default that
+# capture used (thriftyx.hal.profiles), so default captures and default
+# TDOA runs agree.
+
 def test_infer_from_device_type_mini(tmp_path):
     cfg = _write_cfg(tmp_path, "device_type: airspy_mini\n")
-    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 6e6
+    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 3e6
 
 
 def test_infer_from_device_type_r2(tmp_path):
     cfg = _write_cfg(tmp_path, "device_type: airspy_r2\n")
-    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 10e6
+    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 2.5e6
 
 
 def test_infer_from_device_type_rtlsdr(tmp_path):
@@ -42,14 +46,15 @@ def test_infer_from_device_type_rtlsdr(tmp_path):
     assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 2.4e6
 
 
-def test_fallback_when_config_missing(tmp_path):
+def test_fallback_when_config_missing(tmp_path, caplog):
     missing = str(tmp_path / "does_not_exist.cfg")
-    assert _resolve_sample_rate(cli_value=None, config_path=missing) == 2.4e6
+    assert _resolve_sample_rate(cli_value=None, config_path=missing) == 3e6
+    assert "--sample-rate not specified" in caplog.text
 
 
 def test_fallback_when_config_empty(tmp_path):
     cfg = _write_cfg(tmp_path, "# comment only\n")
-    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 2.4e6
+    assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 3e6
 
 
 def test_cli_flag_accepts_metric_suffix():

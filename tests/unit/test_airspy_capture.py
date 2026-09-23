@@ -6,44 +6,7 @@ import numpy as np
 
 from thriftyx.airspy_capture import _capture_airspy
 from thriftyx.settings import Namespace
-
-
-class _FakeAirspyDevice:
-    """Minimal fake Airspy device for _capture_airspy tests."""
-
-    def __init__(self, buffers, dropped_samples=0):
-        self._buffers = list(buffers)
-        self._opened = False
-        self.dropped_samples = dropped_samples
-
-    def open(self):
-        self._opened = True
-
-    def close(self):
-        self._opened = False
-
-    def set_sample_rate(self, _rate):
-        return None
-
-    def set_center_freq(self, _freq):
-        return None
-
-    def set_gain(self, _gain_type, _value):
-        return None
-
-    def set_bias_tee(self, _enabled):
-        return None
-
-    def set_packing(self, _enabled):
-        return None
-
-    def apply_gain_mode(self, _mode, **_kwargs):
-        return None
-
-    def read_sync(self, _num_samples):
-        if not self._buffers:
-            return np.array([], dtype=np.int16)
-        return self._buffers.pop(0)
+from tests.mocks.scripted_device import ScriptedSDRDevice
 
 
 def _build_config(capture_skip=0):
@@ -79,7 +42,7 @@ def _capture_indices(monkeypatch, capture_skip):
         np.arange(buf_len, dtype=np.int16) + 100,
         np.arange(buf_len, dtype=np.int16) + 200,
     ]
-    fake = _FakeAirspyDevice(skip_buffers + process_buffers)
+    fake = ScriptedSDRDevice(skip_buffers + process_buffers)
 
     monkeypatch.setattr(
         'thriftyx.hal.device_factory.create_device',

@@ -12,30 +12,14 @@ Supports RTL-SDR (legacy 8-bit), Airspy Mini, and Airspy R2 devices.
 """
 
 from thriftyx.exceptions import ConfigValidationError
-
-AIRSPY_MINI_RATES = frozenset({3_000_000, 6_000_000})
-AIRSPY_R2_RATES = frozenset({2_500_000, 10_000_000})
-# RTL-SDR supports a wide range; these are the most common rates
-RTLSDR_RATES = frozenset({
-    225_001, 300_000, 900_001, 1_200_000, 1_400_000, 1_600_000,
-    1_800_000, 1_920_000, 2_000_000, 2_048_000, 2_400_000,
-    2_560_000, 2_800_000, 3_200_000,
-})
-DEVICE_FREQ_RANGE = (24_000_000, 1_800_000_000)
-# R820T/2 RTL-SDR dongles tune ~24 MHz-1.766 GHz; applying the Airspy
-# range to them would accept frequencies the tuner cannot reach.
-RTLSDR_FREQ_RANGE = (24_000_000, 1_766_000_000)
-GAIN_LIMITS_MINI = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
-# R2 uses the same R820T2 tuner as the Mini: LNA index range is 0-14.
-GAIN_LIMITS_R2 = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
-
-ALL_VALID_DEVICES = ('rtlsdr', 'airspy_mini', 'airspy_r2')
+from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, get_profile
 
 
 def validate_config(config: dict) -> list[str]:
     """Validate SDR hardware configuration.
 
-    Supports RTL-SDR, Airspy Mini, and Airspy R2 devices.
+    Device facts (rates, tuning and gain ranges) come from
+    :mod:`thriftyx.hal.profiles`, the same source the HAL drivers use.
 
     Parameters
     ----------
@@ -55,40 +39,28 @@ def validate_config(config: dict) -> list[str]:
     warnings = []
 
     # 1. device_type
-    device_type = config.get('device_type', 'rtlsdr')
-    if device_type not in ALL_VALID_DEVICES:
-        raise ConfigValidationError(
-            f"device_type '{device_type}' is not valid. "
-            f"Must be one of: {ALL_VALID_DEVICES}")
+    device_type = config.get('device_type', DEFAULT_DEVICE_TYPE)
+    profile = get_profile(device_type)
 
     # 2. sample_rate must be in supported set for the device
     sample_rate = config.get('sample_rate')
     if sample_rate is not None:
         sample_rate = int(sample_rate)
-        if device_type == 'airspy_mini':
-            valid_rates = AIRSPY_MINI_RATES
-        elif device_type == 'airspy_r2':
-            valid_rates = AIRSPY_R2_RATES
-        else:
-            # RTL-SDR: accept any rate in the known set, or warn if unusual
-            valid_rates = RTLSDR_RATES
-        if sample_rate not in valid_rates:
-            if device_type == 'rtlsdr':
-                # RTL-SDR supports a wide range; just warn for unusual rates
-                warnings.append(
-                    f"sample_rate {sample_rate} is not a common RTL-SDR rate. "
-                    f"Common rates: {sorted(valid_rates)}")
-            else:
+        if not profile.supports_sample_rate(sample_rate):
+            rates = sorted(profile.sample_rates)
+            if profile.strict_sample_rates:
                 raise ConfigValidationError(
-                    f"sample_rate {sample_rate} not supported by {device_type}. "
-                    f"Valid rates: {sorted(valid_rates)}")
+                    f"sample_rate {sample_rate} not supported by "
+                    f"{device_type}. Valid rates: {rates}")
+            warnings.append(
+                f"sample_rate {sample_rate} is not a common {profile.name} "
+                f"rate. Common rates: {rates}")
 
-    # 3. center_freq within the tuner's range (per device type)
+    # 3. center_freq within the tuner's range
     freq = config.get('tuner_freq')
     if freq is not None:
         freq = int(freq)
-        min_f, max_f = (RTLSDR_FREQ_RANGE if device_type == 'rtlsdr'
-                        else DEVICE_FREQ_RANGE)
+        min_f, max_f = profile.frequency_range
         if not (min_f <= freq <= max_f):
             raise ConfigValidationError(
                 f"tuner_freq {freq} Hz out of range [{min_f}, {max_f}] Hz "
@@ -164,10 +136,9 @@ def validate_config(config: dict) -> list[str]:
                     f"carrier_window stop bin {stop_bin} exceeds Nyquist "
                     f"({block_size // 2}). Check carrier_window setting.")
 
-    # 7. Gain values within device-specific ranges (Airspy only)
-    if device_type in ('airspy_mini', 'airspy_r2'):
-        gain_limits = GAIN_LIMITS_R2 if device_type == 'airspy_r2' else GAIN_LIMITS_MINI
-        for gain_type, (min_v, max_v) in gain_limits.items():
+    # 7. Gain indices and gain_mode, for devices with staged gain
+    if profile.gain_stages:
+        for gain_type, (min_v, max_v) in profile.gain_stages.items():
             val = config.get(f'{gain_type}_gain')
             if val is not None:
                 val = int(val)
@@ -175,21 +146,22 @@ def validate_config(config: dict) -> list[str]:
                     raise ConfigValidationError(
                         f"{gain_type}_gain {val} out of range [{min_v}, {max_v}]")
 
-        # gain_mode + combined_gain consistency
         gain_mode = config.get('gain_mode', 'manual')
-        if gain_mode not in ('manual', 'linearity', 'sensitivity'):
+        if gain_mode not in profile.gain_modes:
             raise ConfigValidationError(
-                f"gain_mode '{gain_mode}' invalid. "
-                f"Use 'manual', 'linearity', or 'sensitivity'.")
-        if gain_mode in ('linearity', 'sensitivity'):
+                f"gain_mode '{gain_mode}' invalid for {device_type}. "
+                f"Use one of: {', '.join(profile.gain_modes)}.")
+        if gain_mode != 'manual':
+            lo, hi = profile.combined_gain_range or (0, 0)
             combined = config.get('combined_gain')
             if combined is None:
                 raise ConfigValidationError(
-                    f"gain_mode='{gain_mode}' requires combined_gain (0-21)")
+                    f"gain_mode='{gain_mode}' requires combined_gain "
+                    f"({lo}-{hi})")
             combined = int(combined)
-            if not (0 <= combined <= 21):
+            if not (lo <= combined <= hi):
                 raise ConfigValidationError(
-                    f"combined_gain {combined} out of range [0, 21]")
+                    f"combined_gain {combined} out of range [{lo}, {hi}]")
             # AGC flags are ignored in non-manual modes; warn if set.
             if config.get('lna_agc') or config.get('mixer_agc'):
                 warnings.append(
@@ -198,7 +170,7 @@ def validate_config(config: dict) -> list[str]:
             # Per-stage indices are resolved by libairspy's combined-gain
             # ladder in preset modes; warn if the user left non-default
             # per-stage values that will be silently ignored.
-            stray_stages = [s for s in ('lna', 'mixer', 'vga')
+            stray_stages = [s for s in profile.gain_stages
                             if int(config.get(f'{s}_gain', 0) or 0) != 0]
             if stray_stages:
                 warnings.append(
@@ -207,19 +179,16 @@ def validate_config(config: dict) -> list[str]:
                     "combined_gain. Use gain_mode='manual' to set stages "
                     "directly.")
 
-    # 8. bit_depth must match device type
+    # 8. bit_depth must match the device's samples
     bit_depth = config.get('bit_depth')
     if bit_depth is not None:
         bit_depth = int(bit_depth)
         if bit_depth not in (8, 12):
             raise ConfigValidationError(
                 f"bit_depth {bit_depth} not supported. Use 8 or 12.")
-        if device_type == 'rtlsdr' and bit_depth != 8:
+        if bit_depth != profile.bit_depth:
             warnings.append(
-                f"RTL-SDR uses 8-bit samples, but bit_depth={bit_depth}. "
-                "Setting will be ignored for RTL-SDR hardware.")
-        if device_type in ('airspy_mini', 'airspy_r2') and bit_depth != 12:
-            warnings.append(
-                f"Airspy uses 12-bit samples, but bit_depth={bit_depth}.")
+                f"{profile.name} delivers {profile.bit_depth}-bit samples; "
+                f"bit_depth={bit_depth} is ignored for capture.")
 
     return warnings

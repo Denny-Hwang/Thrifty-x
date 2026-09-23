@@ -21,6 +21,7 @@ import numpy as np
 import thriftyx.airspy_capture as ac
 from thriftyx.airspy_capture import _resolve_card_output, _capture_airspy
 from thriftyx.settings import Namespace
+from tests.mocks.scripted_device import ScriptedSDRDevice
 
 
 # Matches the fastcard per-block detection line format
@@ -78,40 +79,13 @@ def test_stdout_is_tty_defensive_on_bad_stream(monkeypatch):
 # _capture_airspy: channel separation + carrier gating
 # ---------------------------------------------------------------------------
 
-class _FakeAirspyDevice:
-    """Minimal fake Airspy device that yields a fixed number of blocks."""
+def _scripted_device(n_blocks):
+    """Device yielding n_blocks reads.
 
-    def __init__(self, n_blocks):
-        # block_size 8, history 2 -> new_samples 6 -> 12 int16 values/read.
-        self._buffers = [np.arange(12, dtype=np.int16) + 100 * i
-                         for i in range(n_blocks)]
-        self.dropped_samples = 0
-
-    def open(self):
-        return None
-
-    def close(self):
-        return None
-
-    def set_sample_rate(self, _rate):
-        return None
-
-    def set_center_freq(self, _freq):
-        return None
-
-    def set_bias_tee(self, _enabled):
-        return None
-
-    def set_packing(self, _enabled):
-        return None
-
-    def apply_gain_mode(self, _mode, **_kwargs):
-        return None
-
-    def read_sync(self, _num_samples):
-        if not self._buffers:
-            return np.array([], dtype=np.int16)
-        return self._buffers.pop(0)
+    block_size 8, history 2 -> new_samples 6 -> 12 int16 values/read.
+    """
+    return ScriptedSDRDevice([np.arange(12, dtype=np.int16) + 100 * i
+                              for i in range(n_blocks)])
 
 
 def _config():
@@ -144,7 +118,7 @@ def _run_capture(monkeypatch, output_file, detect_pattern):
     a truthy value marks that block as a carrier detection.  Returns the
     captured stderr text.
     """
-    fake = _FakeAirspyDevice(len(detect_pattern))
+    fake = _scripted_device(len(detect_pattern))
     monkeypatch.setattr(
         'thriftyx.hal.device_factory.create_device',
         lambda _device_type, **_kwargs: fake)
@@ -223,7 +197,7 @@ def _drive_cli(monkeypatch, tmp_path, argv, tty):
     """
     monkeypatch.chdir(tmp_path)
 
-    fake = _FakeAirspyDevice(3)
+    fake = _scripted_device(3)
     monkeypatch.setattr(
         'thriftyx.hal.device_factory.create_device',
         lambda _device_type, **_kwargs: fake)

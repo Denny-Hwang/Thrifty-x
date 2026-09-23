@@ -86,7 +86,7 @@ def _main():
     parser.add_argument('-p', '--plot', action='store_true',
                         help="Plot base template and extracted template.")
 
-    setting_keys = ['sample_rate', 'block_size', 'block_history',
+    setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template']
     config, args = settings.load_args(parser, setting_keys)

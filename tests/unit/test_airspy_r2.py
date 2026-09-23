@@ -3,8 +3,9 @@
 
 """Airspy R2-specific HAL regression tests.
 
-These cover the R2 overrides of AirspyMiniDevice, which previously
-carried copy-paste defects that no test exercised:
+The R2 used to override AirspyMiniDevice methods by copy-paste, which
+produced defects no test exercised; it now only swaps the device
+profile.  These tests guard the behaviours that went wrong:
 
 - ``parse_airspy_serial`` treating ``0x``-prefixed digits-only serials
   as decimal;
@@ -19,11 +20,12 @@ No libairspy or hardware required: the ctypes binding
 
 import pytest
 
-from thriftyx.config_validator import (GAIN_LIMITS_R2, validate_config)
+from thriftyx.config_validator import validate_config
 from thriftyx.exceptions import ConfigValidationError, DeviceConfigError
 from thriftyx.hal import airspy_mini as am
 from thriftyx.hal.airspy_mini import parse_airspy_serial
 from thriftyx.hal.airspy_r2 import AirspyR2Device
+from thriftyx.hal.profiles import AIRSPY_R2
 
 
 class _FakeLib:
@@ -101,8 +103,21 @@ def test_parse_serial_16_digit_board_id_is_hex():
 # --------------------- R2 LNA gain range ------------------------------
 
 def test_r2_lna_gain_range_matches_r820t2():
-    assert GAIN_LIMITS_R2['lna'] == (0, 14)
-    assert AirspyR2Device._GAIN_STAGES['lna'] == (0, 14)
+    assert AIRSPY_R2.gain_stages['lna'] == (0, 14)
+    assert AirspyR2Device.PROFILE is AIRSPY_R2
+
+
+def test_r2_reuses_every_mini_method():
+    """No copy-pasted overrides: only the profile differs."""
+    own = {name for name in vars(AirspyR2Device) if not name.startswith('_')}
+    assert own == {'PROFILE'}
+
+
+def test_r2_info_comes_from_its_profile(r2_dev):
+    dev, _ = r2_dev
+    info = dev.get_info()
+    assert info.name == "Airspy R2"
+    assert info.max_gain_stages == {'lna': 14, 'mixer': 15, 'vga': 15}
 
 
 def test_r2_device_accepts_lna_14_rejects_15(r2_dev):

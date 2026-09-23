@@ -22,16 +22,18 @@ from collections import namedtuple
 
 from thriftyx import setting_parsers
 from thriftyx.exceptions import ConfigSyntaxError, SettingKeyError
+from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, PROFILES, get_profile
 
 
 # Setting definition
 Definition = namedtuple('Definition', 'args parser default description')
 
 DEFINITIONS = {
+    # Default derived from device_type (see DEVICE_DERIVED_KEYS).
     'sample_rate': Definition(
         ['--sample-rate', '-s'],
         setting_parsers.metric_float,
-        '2.4M',
+        None,
         "Sample rate (sps)"
     ),
 
@@ -117,14 +119,16 @@ DEFINITIONS = {
     'device_type': Definition(
         ['--device-type'],
         str,
-        'airspy_mini',
-        "SDR device type ('rtlsdr', 'airspy_mini', or 'airspy_r2')"
+        DEFAULT_DEVICE_TYPE,
+        "SDR device type ({}); sets the default sample rate and bit "
+        "depth".format(', '.join(repr(k) for k in PROFILES))
     ),
 
+    # Default derived from device_type (see DEVICE_DERIVED_KEYS).
     'bit_depth': Definition(
         ['--bit-depth'],
         int,
-        '8',
+        None,
         "ADC bit depth (8 for RTL-SDR, 12 for Airspy)"
     ),
 
@@ -227,6 +231,42 @@ DEFINITIONS = {
         "SOA interpolation method: 'parabolic', 'gaussian', or 'none'"
     ),
 }
+
+# Settings whose default comes from the device profile of the configured
+# device_type rather than from DEFINITIONS, mapped to the profile field.
+DEVICE_DERIVED_KEYS = {
+    'sample_rate': 'default_sample_rate',
+    'bit_depth': 'bit_depth',
+}
+
+
+def _device_default_help(key):
+    """Describe a device-derived default for --help."""
+    field = DEVICE_DERIVED_KEYS[key]
+    parts = []
+    for device_type, profile in PROFILES.items():
+        value = getattr(profile, field)
+        if key == 'sample_rate':
+            value = "{:g}M".format(value / 1e6)
+        parts.append("{} {}".format(device_type, value))
+    return " [default: by --device-type: {}]".format(', '.join(parts))
+
+
+def _apply_device_defaults(values, definitions):
+    """Fill device-derived settings that were not set explicitly.
+
+    Mutates *values*.  Raises ConfigValidationError for an unknown
+    device_type, since no default can be derived for it.
+    """
+    missing = [key for key in DEVICE_DERIVED_KEYS
+               if key in definitions and key not in values]
+    if not missing:
+        return
+    profile = get_profile(values.get('device_type', DEFAULT_DEVICE_TYPE))
+    for key in missing:
+        values[key] = definitions[key].parser(
+            str(getattr(profile, DEVICE_DERIVED_KEYS[key])))
+
 
 DEFAULT_CODE_LENGTH = 1023  # 10-bit Gold code (2^10 - 1)
 
@@ -466,6 +506,8 @@ def add_argparse_arguments(parser, keys, definitions=None):
             help_str = str(setting.description)
             if setting.default is not None:
                 help_str += " [default: {}]".format(setting.default)
+            elif key in DEVICE_DERIVED_KEYS:
+                help_str += _device_default_help(key)
             parser.add_argument(*setting.args, dest=key,
                                 type=str,
                                 help=help_str)
@@ -539,6 +581,9 @@ def load(args=None, config_file=None, definitions=None,
 
     # Parse
     values = {k: definitions[k].parser(v) for k, v in strings.items()}
+
+    # Defaults that depend on the device (sample rate, bit depth).
+    _apply_device_defaults(values, definitions)
 
     # Auto-adjust block parameters for higher sample rates (defaults
     # only — explicitly-set values are respected, with a warning).

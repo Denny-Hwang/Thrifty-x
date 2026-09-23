@@ -1151,7 +1151,7 @@ def _main():
     # Note: -v/--verbose is registered by settings.load_args; reusing it
     # to enable the env-info banner here.
 
-    setting_keys = ['sample_rate', 'block_size', 'block_history',
+    setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template', 'bit_depth']
     config, args = load_args(parser, setting_keys)
