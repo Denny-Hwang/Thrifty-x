@@ -150,7 +150,13 @@ void CFile::printf(const char* format, ...) {
 }
 
 void CFile::close() {
-    if (file_ != NULL && file_ != stdout) {
+    // Never close the standard streams: the status output is stderr
+    // when the detections go to stdout, and closing it lost every later
+    // error message.
+    if (file_ != NULL && file_ != stdout && file_ != stderr) {
         fclose(file_);
+    } else if (file_ != NULL) {
+        fflush(file_);
     }
+    file_ = NULL;
 }

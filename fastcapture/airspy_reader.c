@@ -31,6 +31,12 @@
 #include "reader.h"
 #include "stamp_queue.h"
 
+/* The reader wakes every AIRSPY_POLL_MS while waiting for samples to
+ * check that the device is still streaming, and gives up after
+ * AIRSPY_STALL_LIMIT_MS without any (the Python HAL uses 10 s too). */
+#define AIRSPY_POLL_MS          1000
+#define AIRSPY_STALL_LIMIT_MS  10000
+
 /* Transfer arrival records kept for timestamping.  The ring holds at
  * most ~160 transfers (40 MB / 256 KiB); older records are discarded
  * and positions they covered are back-dated from a later one. */
@@ -169,13 +175,34 @@ static int _reader_read_next(reader_t *reader)
     /* 2. Read new_len * 2 int16 worth of fresh samples from the ring
      *    buffer into the post-history portion of the buffer. */
     size_t needed = new_len * 2 * sizeof(int16_t);
-    bool success = circbuf_get(&state->circbuf,
-                                (char *)(dst + history_size * 2),
-                                needed);
-    if (!success) {
-        /* A requested stop (Ctrl-C / SIGTERM) ends the stream cleanly;
-         * anything else cancelling the ring is a failure. */
-        return atomic_load(&state->cancelled) ? 1 : -1;
+    unsigned stalled_ms = 0;
+    for (;;) {
+        circbuf_status_t got = circbuf_get_timeout(
+            &state->circbuf, (char *)(dst + history_size * 2), needed,
+            AIRSPY_POLL_MS);
+        if (got == CIRCBUF_OK) {
+            break;
+        }
+        if (got == CIRCBUF_CANCELLED) {
+            /* A requested stop (Ctrl-C / SIGTERM) ends the stream
+             * cleanly; anything else cancelling the ring is a failure. */
+            return atomic_load(&state->cancelled) ? 1 : -1;
+        }
+        /* No samples for a while.  An unplugged Airspy (or a USB error)
+         * just stops calling back, which used to leave this read waiting
+         * forever: the process stayed up, recorded nothing, and nothing
+         * restarted it. */
+        stalled_ms += AIRSPY_POLL_MS;
+        if (airspy_is_streaming(state->device) != AIRSPY_TRUE) {
+            fprintf(stderr, "airspy: device stopped streaming (unplugged "
+                    "or USB error)\n");
+            return -1;
+        }
+        if (stalled_ms >= AIRSPY_STALL_LIMIT_MS) {
+            fprintf(stderr, "airspy: no samples for %u s; giving up\n",
+                    stalled_ms / 1000);
+            return -1;
+        }
     }
     state->consumed_pairs += new_len;
 

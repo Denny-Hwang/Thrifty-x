@@ -6,6 +6,13 @@ set(VERSION_INFO_MINOR_VERSION 2)
 
 set(CMAKE_C_STANDARD 11)
 
+# Release (optimised) unless asked otherwise: an unoptimised build keeps
+# up with 6-10 Msps poorly on a Pi and drops samples.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    message(STATUS "Build type not specified: defaulting to Release.")
+endif()
+
 find_package(PkgConfig REQUIRED)
 
 # Airspy (replaces RTL-SDR)
@@ -46,6 +53,7 @@ set(FASTCAPTURE_SOURCES
     fft.c
     circbuf.c
     stamp_queue.c
+    sigthread.c
     reader.c
     card_reader.c
     fargs.c
@@ -86,6 +94,8 @@ if(BUILD_TESTING)
     add_executable(test_stamp_queue tests/test_stamp_queue.c stamp_queue.c)
     target_link_libraries(test_stamp_queue Threads::Threads)
     add_test(NAME stamp_queue COMMAND test_stamp_queue)
+    add_executable(test_fargs tests/test_fargs.c fargs.c parse.c)
+    add_test(NAME fargs COMMAND test_fargs)
 endif()
 
 # Installation
@@ -100,6 +110,7 @@ install(FILES
     fargs.h
     fargs_type.h
     parse.h
+    sigthread.h
     lib/base64.h
     DESTINATION include)
 

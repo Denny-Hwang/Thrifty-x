@@ -13,8 +13,10 @@
  *   - libairspy
  **/
 
-#include <signal.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "configuration.h"
@@ -22,6 +24,7 @@
 
 #include "fastcard.h"
 #include "fargs.h"
+#include "sigthread.h"
 
 #include <argp.h>  // this should be last
 
@@ -33,8 +36,13 @@ static const char doc[] = "FastCapture: Fast Carrier Detection for Airspy\n\n"
     "encoded in base64.";
 
 fargs_t* args;
-fastcard_t* fastcard = NULL;
 char* output_file = NULL;
+
+/* The capture the signal thread stops.  The lock keeps it from calling
+ * fastcard_cancel on a capture main() is freeing. */
+static pthread_mutex_t fastcard_lock = PTHREAD_MUTEX_INITIALIZER;
+static fastcard_t* fastcard = NULL;
+static bool stop_requested = false;
 
 static error_t parse_opt (int key, char *arg, struct argp_state *state) {
     if (key == 'o') {
@@ -55,11 +63,26 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
     return 0;
 }
 
-void signal_handler(int signo) {
-    (void)signo;  // unused
+/* Runs on the signal thread (sigthread.h), not in a signal handler. */
+static void on_stop_signal(int signo, void* ctx) {
+    (void)signo;
+    (void)ctx;
+    pthread_mutex_lock(&fastcard_lock);
+    stop_requested = true;
     if (fastcard != NULL) {
         fastcard_cancel(fastcard);
     }
+    pthread_mutex_unlock(&fastcard_lock);
+}
+
+/* A failed write (full disk, or a closed pipe now that SIGPIPE is
+ * ignored) ends the capture instead of silently dropping card lines. */
+static bool stream_failed(FILE* stream, const char* what) {
+    if (stream == NULL || !ferror(stream)) {
+        return false;
+    }
+    fprintf(stderr, "Failed to write %s: %s\n", what, strerror(errno));
+    return true;
 }
 
 static struct argp_option extra_options[] = {
@@ -83,11 +106,22 @@ int main(int argc, char **argv) {
     //// Set the stage
     args = fargs_new();
     argp_parse(&argp, argc, argv, 0, 0, 0);
+    if (fargs_finalize(args) != 0) {
+        return 64;  /* EX_USAGE, as argp exits for a bad option */
+    }
+
+    // Before any library creates a thread, so all of them inherit the
+    // blocked signal mask.
+    if (sigthread_start(on_stop_signal, NULL) != 0) {
+        perror("Failed to set up signal handling");
+        return -1;
+    }
 
     // variables
     FILE *out = NULL;
     FILE *info = NULL;
     char *base64 = NULL;
+    fastcard_t *fc = NULL;
     int exit_code = 0;
 
     // open streams
@@ -112,10 +146,17 @@ int main(int argc, char **argv) {
     }
 
     // init stuff
-    fastcard = fastcard_new(args);
-    if (fastcard == NULL) {
+    fc = fastcard_new(args);
+    if (fc == NULL) {
         exit_code = -1;
-        goto free;   
+        goto free;
+    }
+    pthread_mutex_lock(&fastcard_lock);
+    fastcard = fc;
+    bool stopped_early = stop_requested;
+    pthread_mutex_unlock(&fastcard_lock);
+    if (stopped_early) {
+        goto free;
     }
 
     // Airspy: block_len I/Q pairs * 2 int16 values * 2 bytes = block_len * 4 bytes
@@ -140,13 +181,8 @@ int main(int argc, char **argv) {
         fargs_print_card_header(args, out, sdr_input, argp_program_version);
     }
 
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-    signal(SIGQUIT, signal_handler);
-    signal(SIGPIPE, signal_handler);
-
     //// Start!
-    exit_code = fastcard_start(fastcard);
+    exit_code = fastcard_start(fc);
     if (exit_code != 0) goto free;
 
     if (args->skip > 0 && info != NULL) {
@@ -159,7 +195,7 @@ int main(int argc, char **argv) {
     const fastcard_data_t* data;
     int ret = 0;
     while (true) {
-        ret = fastcard_process_next(fastcard, &data);
+        ret = fastcard_process_next(fc, &data);
         if (ret != 0) {
             break;
         }
@@ -197,16 +233,21 @@ int main(int argc, char **argv) {
                         block->index,
                         base64);
             }
+            if (stream_failed(out, "card output")
+                    || stream_failed(info, "status output")) {
+                exit_code = -1;
+                break;
+            }
         }
         ++cnt;
     }
 
     if (info != NULL) {
         fprintf(info, "\nRead %u blocks.\n", cnt);
-        fastcard_print_stats(fastcard, info);
+        fastcard_print_stats(fc, info);
     }
 
-    if (ret != 1) {
+    if (exit_code == 0 && ret != 1) {
         // reader didn't stop gracefully
         exit_code = ret;
     }
@@ -214,8 +255,12 @@ int main(int argc, char **argv) {
 
     //// Free stuff
 free:
-    if (fastcard) {
-        fastcard_free(fastcard);
+    pthread_mutex_lock(&fastcard_lock);
+    fc = fastcard;
+    fastcard = NULL;
+    pthread_mutex_unlock(&fastcard_lock);
+    if (fc) {
+        fastcard_free(fc);
     }
     if (base64) {
         free(base64);

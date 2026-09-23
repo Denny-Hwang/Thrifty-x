@@ -2,18 +2,21 @@
 // This is a mess. This should be refactored.
 
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <stdexcept>
 #include <memory>
 
-#include <signal.h>
+#include <errno.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <argp.h>
 
 #include <parse.h>
 #include <base64.h>
+#include <sigthread.h>
 
 #include "corr_detector.h"
 #include "configuration.h"
@@ -83,12 +86,38 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
     return 0;
 }
 
-std::unique_ptr<CarrierDetector> carrier_det;
+// The detector the signal thread stops.  The lock keeps it from calling
+// cancel() on a detector main() is destroying.
+static std::mutex carrier_det_lock;
+static std::unique_ptr<CarrierDetector> carrier_det;
+static bool stop_requested = false;
 
-void signal_handler(int signo) {
-    (void)signo;  // unused
+// Runs on the signal thread (sigthread.h), not in a signal handler.
+static void on_stop_signal(int signo, void* ctx) {
+    (void)signo;
+    (void)ctx;
+    std::lock_guard<std::mutex> lock(carrier_det_lock);
+    stop_requested = true;
     if (carrier_det) {
         carrier_det->cancel();
+    }
+}
+
+static void release_carrier_det() {
+    std::unique_ptr<CarrierDetector> det;
+    {
+        std::lock_guard<std::mutex> lock(carrier_det_lock);
+        det = std::move(carrier_det);
+    }
+    // det (and the capture it owns) is destroyed here, outside the lock.
+}
+
+// A failed write (full disk, or a closed pipe now that SIGPIPE is
+// ignored) ends the run instead of silently dropping detections.
+static void check_written(CFile& file, const char* what) {
+    if (file.failed()) {
+        throw std::runtime_error(std::string("Failed to write ") + what
+                                 + ": " + strerror(errno));
     }
 }
 
@@ -107,7 +136,18 @@ int main(int argc, char **argv) {
 
     args.reset(fargs_new());
     argp_parse(&argp, argc, argv, 0, 0, 0);
+    if (fargs_finalize(args.get()) != 0) {
+        return 64;  // EX_USAGE, as argp exits for a bad option
+    }
 
+    // Before any library creates a thread, so all of them inherit the
+    // blocked signal mask.
+    if (sigthread_start(on_stop_signal, NULL) != 0) {
+        perror("Failed to set up signal handling");
+        return -1;
+    }
+
+    int exit_code = 0;
     try {
         CFile out(output_file);
         CFile card(card_output_file);
@@ -116,8 +156,24 @@ int main(int argc, char **argv) {
             info.open((out.file() == stdout) ? stderr : stdout);
         }
 
-        carrier_det.reset(new CarrierDetector(args.get()));
         vector<float> template_samples = load_template(template_file);
+        if (template_samples.size() > args->block_len) {
+            throw std::runtime_error(
+                "template '" + template_file + "' has "
+                + std::to_string(template_samples.size())
+                + " samples, more than the block length "
+                + std::to_string(args->block_len)
+                + "; it was made for a higher sample rate");
+        }
+        {
+            std::unique_ptr<CarrierDetector> det(
+                new CarrierDetector(args.get()));
+            std::lock_guard<std::mutex> lock(carrier_det_lock);
+            carrier_det = std::move(det);
+            if (stop_requested) {
+                carrier_det->cancel();
+            }
+        }
         CorrDetector corr_detect(template_samples,
                                  args->block_len,
                                  args->history_len,
@@ -126,11 +182,6 @@ int main(int argc, char **argv) {
 
         // v2 card format: block_len int16 I/Q pairs = 4 bytes per pair
         vector<char> base64((2*args->block_len*sizeof(int16_t)+2)/3*4 + 10);
-
-        signal(SIGINT, signal_handler);
-        signal(SIGTERM, signal_handler);
-        signal(SIGQUIT, signal_handler);
-        signal(SIGPIPE, signal_handler);
 
         // print header
         bool input_from_sdr = false;
@@ -260,6 +311,10 @@ int main(int argc, char **argv) {
 
                 info.printf("\n");
             }
+
+            check_written(out, "the .toad output");
+            check_written(card, "the card output");
+            check_written(info, "status output");
         }
 
         if (info.file() != NULL) {
@@ -269,11 +324,12 @@ int main(int argc, char **argv) {
 
     } catch (FastcardException& e) {
         cerr << e.what() << endl;
-        return e.getCode();
+        exit_code = e.getCode();
     } catch (std::exception& e) {
         cerr << e.what() << endl;
-        return -1;
+        exit_code = -1;
     }
 
-    return 0;
+    release_carrier_det();
+    return exit_code;
 }
