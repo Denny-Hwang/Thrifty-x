@@ -202,11 +202,16 @@ systemctl status thriftyx-capture@rx0
 ```bash
 sudo cp ~/thrifty-x/rpi/cleanup_old_captures.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/cleanup_old_captures.sh
+sudo cp ~/thrifty-x/rpi/systemd/thriftyx-cleanup.env.example /etc/default/thriftyx-cleanup
+sudo $EDITOR /etc/default/thriftyx-cleanup   # THRIFTYX_OUT must match the capture unit's
 ( crontab -l 2>/dev/null; echo "0 * * * * /usr/local/bin/cleanup_old_captures.sh" ) | crontab -
 ```
 
-Default policy: delete files older than 7 days in `/var/lib/thriftyx/card/`,
-delete files older than 30 days in `log/`. Adjustable via environment variables.
+Default policy: delete `.card` files older than 7 days and `.toad` and
+log files older than 30 days under `THRIFTYX_OUT`, and purge the oldest
+cards when the disk passes 90 %.  Change it in
+`/etc/default/thriftyx-cleanup`; cron passes no environment, so that
+file is the only place the job reads settings from.
 
 ---
 

@@ -41,7 +41,9 @@ python3 -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list
 ### 2.2 Disk shortage
 - Whether the cron `cleanup_old_captures.sh` ran: `journalctl -t thriftyx-cleanup`
 - Temporary measure: `find /var/lib/thriftyx/card -type f -mtime +1 -delete`
-- Change the retention policy: set `CARD_RETENTION_DAYS=N` in `/etc/default/thriftyx-capture@rx0`
+- Change the retention policy: set `CARD_RETENTION_DAYS=N` (and the other
+  limits) in `/etc/default/thriftyx-cleanup`; the next hourly run applies it.
+  Its `THRIFTYX_OUT` must match the capture unit's.
 
 ### 2.3 Throttling/heat
 - Normal: `get_throttled` = `0x0`

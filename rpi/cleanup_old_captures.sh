@@ -1,8 +1,20 @@
 #!/bin/bash
 # Rotate Thrifty-X capture artifacts on a Raspberry Pi 5 RX node.
-# Run hourly via cron. Override via env vars.
+# Run hourly via cron.
+#
+# Settings come from /etc/default/thriftyx-cleanup (see
+# rpi/systemd/thriftyx-cleanup.env.example), because cron passes no
+# environment: THRIFTYX_OUT must match the capture unit's, and the
+# *_RETENTION_DAYS / DISK_*_PCT values set the policy.  Anything unset
+# falls back to the defaults below.
 
 set -euo pipefail
+
+CONFIG="${THRIFTYX_CLEANUP_CONFIG:-/etc/default/thriftyx-cleanup}"
+if [ -r "${CONFIG}" ]; then
+    # shellcheck source=/dev/null
+    . "${CONFIG}"
+fi
 
 ROOT="${THRIFTYX_OUT:-/var/lib/thriftyx}"
 CARD_DAYS="${CARD_RETENTION_DAYS:-7}"
