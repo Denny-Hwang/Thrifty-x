@@ -37,10 +37,19 @@ python3 -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list
   `systemctl restart thriftyx-capture@rx0`
 - `DeviceConfigError`: Verify that the sample_rate in `capture.cfg` is within
   the device's supported range (Mini: 3M/6M, R2: 2.5M/10M)
+- Unit `failed` with `status=78/CONFIG` (no restarts): `capture.cfg` is
+  invalid; the journal names the setting.  Fix it, then
+  `systemctl restart thriftyx-capture@rx0`.
+- `sample pairs lost ... zero-filled` warnings: the USB link or the host
+  could not keep up.  Block indices stay aligned, but detections that
+  overlap a gap are degraded; check power/cable/hub, heat, and consider
+  `packing: true`.
 
 ### 2.2 Disk shortage
 - Whether the cron `cleanup_old_captures.sh` ran: `journalctl -t thriftyx-cleanup`
 - Temporary measure: `find /var/lib/thriftyx/card -type f -mtime +1 -delete`
+  (safe while capture runs: it writes a new hourly file and never
+  reopens old ones)
 - Change the retention policy: set `CARD_RETENTION_DAYS=N` (and the other
   limits) in `/etc/default/thriftyx-cleanup`; the next hourly run applies it.
   Its `THRIFTYX_OUT` must match the capture unit's.
@@ -104,7 +113,8 @@ Pass determination after 24 hours:
 - `card` file size monotonically increasing, no corruption
 - `vcgencmd get_throttled` = `0x0`
 - Memory usage stable (peak vs end < 10% difference)
-- Dropped-sample count (if any) below the allowed threshold
+- `sample pairs lost` warnings in `stderr.log` (dropped samples) below the
+  allowed threshold
 
 ---
 
@@ -131,6 +141,7 @@ Payload schema (HTTP POST JSON, every 60 seconds):
 ```json
 {
   "rxid": 0,
+  "host": "rx0",
   "ts": "2026-05-06T12:34:56Z",
   "uptime_s": 123456,
   "disk_pct": 42,
@@ -138,12 +149,22 @@ Payload schema (HTTP POST JSON, every 60 seconds):
   "throttled": "0x0",
   "service_state": "active",
   "last_detection_ts": "2026-05-06T12:34:50Z",
-  "dropped_samples": 0,
   "version": "0.1.0"
 }
 ```
 
-Alert when not received within 60 seconds at the server. The receiving endpoint
+- `disk_pct` is for `THRIFTYX_OUT`; `cpu_temp_c` and `throttled` are
+  `null` where `vcgencmd` is unavailable.
+- `service_state` is `systemctl is-active` of the capture unit
+  (`active`, `activating`, `failed`, ...).
+- `last_detection_ts` is the modification time of the newest `.card`
+  file: the last write, which is a detection or, just after an hourly
+  rotation, the new file's header.  A value more than ~2 h old while
+  transmitters are on air means capture is running but detecting
+  nothing (antenna, gain, frequency).
+
+Heartbeats are sent every 60 s; alert when none has arrived for 3
+minutes (a single late timer tick is normal).  The receiving endpoint
 is built with separate infrastructure (Nginx + a simple sink).
 
 ---
@@ -166,11 +187,20 @@ ssh rx0 'sudo /usr/local/bin/update_node.sh'
 ```
 
 Behavior:
-1. No changes after `git fetch` → exit 0 (no-op)
-2. `git merge --ff-only` fails → exit without affecting the service
-3. `pip install` / `restart` / `is-active` verification after 30 seconds
-4. Failure at any step → automatic rollback to the previous SHA + reinstall + restart
-5. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
+1. Must run as root (for `systemctl`); git and pip run as the clone's owner
+2. No changes after `git fetch` → exit 0 (no-op)
+3. `git merge --ff-only` fails → exit without affecting the service
+4. `pip install` with the extras the venv already has (`fft` only if
+   pyfftw is installed; override with `PIP_EXTRAS=...`)
+5. Refresh installed copies of the repo's systemd units and
+   `update_node.sh` / `cleanup_old_captures.sh` (only files already
+   installed; `daemon-reload` when a unit changed)
+6. `restart`, then after 30 seconds the service must be active **with
+   the same PID and no automatic restarts** (a crash-looping release
+   looks `active` most of the time)
+7. Failure at any step → automatic rollback of code, package, units and
+   scripts to the previous SHA + restart
+8. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
 
 Exit codes:
 - `0` up to date or update succeeded
@@ -187,7 +217,9 @@ git fetch origin
 git log --oneline HEAD..origin/master
 git pull --ff-only
 source .venv/bin/activate
-pip install -e ".[analysis,fft]"
+pip install -e ".[analysis,fft]"     # ".[analysis]" if pyfftw is not installed
+sudo install -m 644 rpi/systemd/thriftyx-capture@.service /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl restart thriftyx-capture@rx0
 journalctl -u thriftyx-capture@rx0 -f
 ```

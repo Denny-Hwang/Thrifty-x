@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+# cron discards output unless mail is set up: report to syslog/journald
+# (journalctl -t thriftyx-cleanup) instead, including a failure.
+say() { logger -t thriftyx-cleanup "$*" 2>/dev/null || echo "$*" >&2; }
+trap 'say "failed (exit $?) at line ${LINENO}"' ERR
+
 CONFIG="${THRIFTYX_CLEANUP_CONFIG:-/etc/default/thriftyx-cleanup}"
 if [ -r "${CONFIG}" ]; then
     # shellcheck source=/dev/null
@@ -32,23 +37,30 @@ ACTIVE_GRACE_MIN="${ACTIVE_GRACE_MIN:-10}"
 # misconfigured environment file sets THRIFTYX_OUT="" or "/".  The
 # `find ... -delete` below would otherwise become catastrophic.
 if [ -z "${ROOT}" ] || [ "${ROOT}" = "/" ]; then
-    echo "cleanup_old_captures: refusing to operate on ROOT='${ROOT}'" >&2
+    say "refusing to operate on ROOT='${ROOT}'"
     exit 2
 fi
 if [ ! -d "${ROOT}" ]; then
-    echo "cleanup_old_captures: ROOT '${ROOT}' is not a directory" >&2
+    say "ROOT '${ROOT}' is not a directory (data disk not mounted?)"
     exit 2
 fi
 
 cd "${ROOT}"
 
-[ -d card ] && find card -type f -name '*.card' -mtime "+${CARD_DAYS}" -delete
-[ -d toad ] && find toad -type f -name '*.toad' -mtime "+${TOAD_DAYS}" -delete
-[ -d log ]  && find log  -type f -mtime "+${LOG_DAYS}" -delete
+# expire DIR PATTERN DAYS: delete matching files older than DAYS and
+# print how many.
+expire() {
+    [ -d "$1" ] || { echo 0; return 0; }
+    find "$1" -type f -name "$2" -mtime "+$3" -print -delete | wc -l
+}
+N_CARD="$(expire card '*.card' "${CARD_DAYS}")"
+N_TOAD="$(expire toad '*.toad' "${TOAD_DAYS}")"
+N_LOG="$(expire log '*.log' "${LOG_DAYS}")"
+N_PURGED=0
 
 USE_PCT="$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')"
 if [ "${USE_PCT}" -ge "${DISK_PURGE_PCT}" ]; then
-    logger -t thriftyx-cleanup "disk ${USE_PCT}% >= ${DISK_PURGE_PCT}% — emergency purge oldest .card files"
+    say "disk ${USE_PCT}% >= ${DISK_PURGE_PCT}% — emergency purge oldest .card files"
     # Delete oldest .card files until below warn threshold
     while [ "$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')" -ge "${DISK_WARN_PCT}" ]; do
         [ -d card ] || break
@@ -63,7 +75,14 @@ if [ "${USE_PCT}" -ge "${DISK_PURGE_PCT}" ]; then
                   | sort -n | awk 'NR==1 {print $2}')" || true
         [ -z "${OLDEST}" ] && break
         rm -f "${OLDEST}"
+        N_PURGED=$((N_PURGED + 1))
     done
 elif [ "${USE_PCT}" -ge "${DISK_WARN_PCT}" ]; then
-    logger -t thriftyx-cleanup "disk ${USE_PCT}% >= ${DISK_WARN_PCT}% — warning"
+    say "disk ${USE_PCT}% >= ${DISK_WARN_PCT}% — warning"
+fi
+
+if [ $((N_CARD + N_TOAD + N_LOG + N_PURGED)) -gt 0 ]; then
+    say "deleted ${N_CARD} card, ${N_TOAD} toad, ${N_LOG} log file(s)" \
+        "past retention; purged ${N_PURGED} card file(s) for space;" \
+        "disk now $(df --output=pcent "${ROOT}" | tail -1 | tr -d ' ')"
 fi
