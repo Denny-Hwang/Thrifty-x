@@ -45,6 +45,7 @@ set(FASTCAPTURE_SOURCES
     cardet.c
     fft.c
     circbuf.c
+    stamp_queue.c
     reader.c
     card_reader.c
     fargs.c
@@ -82,6 +83,9 @@ if(BUILD_TESTING)
     add_executable(test_circbuf tests/test_circbuf.c circbuf.c)
     target_link_libraries(test_circbuf Threads::Threads)
     add_test(NAME circbuf COMMAND test_circbuf)
+    add_executable(test_stamp_queue tests/test_stamp_queue.c stamp_queue.c)
+    target_link_libraries(test_stamp_queue Threads::Threads)
+    add_test(NAME stamp_queue COMMAND test_stamp_queue)
 endif()
 
 # Installation

@@ -87,7 +87,7 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: cmake --build build/${{ matrix.target }} --config Release -j
       - name: C unit tests
-        # Ring-buffer tests, including the exact-size put that used to
+        # Ring-buffer and timestamp-queue tests, including the exact-size put that used to
         # deadlock live Airspy capture.  test_circbuf aborts itself on a
         # hang, so a regression fails instead of stalling the runner.
         if: matrix.target == 'fastcapture'

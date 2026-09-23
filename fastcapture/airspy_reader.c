@@ -29,6 +29,12 @@
 #include "airspy_reader.h"
 #include "circbuf.h"
 #include "reader.h"
+#include "stamp_queue.h"
+
+/* Transfer arrival records kept for timestamping.  The ring holds at
+ * most ~160 transfers (40 MB / 256 KiB); older records are discarded
+ * and positions they covered are back-dated from a later one. */
+#define AIRSPY_STAMP_CAPACITY 1024
 
 /* Ring-buffer sizing.  libairspy hands the callback a fixed 256 KiB of
  * int16 I/Q per USB transfer, independent of the FFT block size, so the
@@ -59,6 +65,10 @@ typedef struct {
     size_t               history_size; /* history length in I/Q pairs */
     atomic_ullong        dropped_samples; /* libairspy-reported drops */
     atomic_int           drop_warned;     /* one-shot stderr warning */
+    atomic_int           cancelled;       /* stopped on request (Ctrl-C) */
+    stamp_queue_t        stamps;          /* transfer arrival times */
+    uint64_t             produced_pairs;  /* callback thread only */
+    uint64_t             consumed_pairs;  /* reader thread only */
 } airspy_state_t;
 
 
@@ -88,6 +98,14 @@ static int _airspy_callback(airspy_transfer_t *transfer)
      * +/-16384 (see rawconv.c).  Stored unmodified. */
     int16_t *src = (int16_t *)transfer->samples;
     size_t   n   = (size_t)(transfer->sample_count) * 2; /* I and Q */
+
+    /* Record when these samples arrived before queueing them, so the
+     * reader can timestamp blocks at reception rather than at the
+     * (possibly much later) moment it dequeues them. */
+    struct timeval arrived;
+    gettimeofday(&arrived, NULL);
+    state->produced_pairs += (uint64_t)transfer->sample_count;
+    stamp_queue_push(&state->stamps, state->produced_pairs, &arrived);
 
     if (!circbuf_put(&state->circbuf, (char *)src, n * sizeof(int16_t))) {
         /* A put fails only when the ring was cancelled (shutdown, when
@@ -119,7 +137,10 @@ static int _airspy_callback(airspy_transfer_t *transfer)
  *      ``new_len * 2 * sizeof(int16_t)`` bytes) are pulled from the
  *      circular buffer into the tail.
  *   3. ``output->index`` is incremented and ``output->timestamp`` is
- *      stamped with the current wall-clock time.
+ *      set to the time the block's last sample arrived from the SDR
+ *      (from the transfer arrival records), not the time it was
+ *      dequeued: samples can wait in the ring for up to a second, and
+ *      cross-receiver matching compares these timestamps.
  *
  * Without these three steps fastcapture would emit blocks with no
  * carrier-history overlap, frozen indices, and zero timestamps — which
@@ -152,13 +173,19 @@ static int _reader_read_next(reader_t *reader)
                                 (char *)(dst + history_size * 2),
                                 needed);
     if (!success) {
-        return -1;
+        /* A requested stop (Ctrl-C / SIGTERM) ends the stream cleanly;
+         * anything else cancelling the ring is a failure. */
+        return atomic_load(&state->cancelled) ? 1 : -1;
     }
+    state->consumed_pairs += new_len;
 
     /* 3. Update block metadata. */
     if (state->output != NULL) {
         state->output->index++;
-        gettimeofday(&state->output->timestamp, NULL);
+        if (!stamp_queue_time_of(&state->stamps, state->consumed_pairs,
+                                 &state->output->timestamp)) {
+            gettimeofday(&state->output->timestamp, NULL);
+        }
     }
     return 0;
 }
@@ -202,6 +229,7 @@ static int _airspy_reader_stop(void *context)
 static void _airspy_reader_cancel(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
+    atomic_store(&state->cancelled, 1);
     atomic_store(&state->running, 0);
     circbuf_cancel(&state->circbuf);
 }
@@ -220,6 +248,7 @@ static void _airspy_reader_free(void *context)
         airspy_close(state->device);
     }
     circbuf_destroy(&state->circbuf);
+    stamp_queue_destroy(&state->stamps);
     free(state);
 }
 
@@ -316,6 +345,14 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     if (!circbuf_init(&state->circbuf, circbuf_size)) {
         fprintf(stderr, "circbuf_init failed: could not allocate %zu bytes\n",
                 circbuf_size);
+        airspy_close(state->device);
+        free(state);
+        return -1;
+    }
+    if (!stamp_queue_init(&state->stamps, AIRSPY_STAMP_CAPACITY,
+                          config->sample_rate)) {
+        fprintf(stderr, "stamp_queue_init failed\n");
+        circbuf_destroy(&state->circbuf);
         airspy_close(state->device);
         free(state);
         return -1;
