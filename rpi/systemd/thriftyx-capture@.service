@@ -10,6 +10,11 @@ Documentation=https://github.com/Denny-Hwang/thrifty-x
 # chronyd keeps correcting, rather than the node never recording.
 After=network-online.target time-sync.target chrony-wait.service
 Wants=network-online.target time-sync.target chrony-wait.service
+# Do not start while the data disk is missing: with a `nofail` fstab
+# entry for the USB SSD, capture would otherwise fill the SD card's
+# /var/lib/thriftyx.  (Harmless when /var/lib/thriftyx is not a separate
+# mount.)  Match THRIFTYX_OUT if you moved it.
+RequiresMountsFor=/var/lib/thriftyx
 # No start rate limit: an unattended node must keep retrying through a
 # USB brown-out or a slow Airspy enumeration.  (With the old limit of 10
 # starts in 300 s, about 100 s of trouble stopped the unit for good
@@ -18,6 +23,10 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+# Start a new card file every hour (on the hour on every node) so the
+# cleanup job can expire old data while capture keeps running; block
+# indices continue across files.  Override in the env file.
+Environment=THRIFTYX_ROTATE_S=3600
 EnvironmentFile=/etc/default/thriftyx-capture@%i
 # systemd does NOT expand environment variables in User= or
 # WorkingDirectory= — they must be literal values (a ${VAR} here is a
@@ -30,9 +39,12 @@ WorkingDirectory=/home/pi/thrifty-x
 
 # Activate the project venv and run capture.
 # THRIFTYX_OUT should point to a USB SSD path, NOT the SD card.
+# The output name is a strftime pattern (%% is systemd's escape for %):
+# capture names each file by its start time, e.g. rx0_20260101T130000.card.
 ExecStart=/bin/bash -lc '\
     source "${THRIFTYX_HOME}/.venv/bin/activate" && \
-    exec thriftyx capture "${THRIFTYX_OUT}/card/%i_$(date +%%Y%%m%%dT%%H%%M%%S).card" \
+    exec thriftyx capture "${THRIFTYX_OUT}/card/%i_%%Y%%m%%dT%%H%%M%%S.card" \
+        --rotate "${THRIFTYX_ROTATE_S}" \
         --config "${THRIFTYX_CONFIG}" \
     '
 
@@ -41,6 +53,11 @@ ExecStart=/bin/bash -lc '\
 # still stops it.
 Restart=always
 RestartSec=10
+# ...except for a configuration error (exit 78, EX_CONFIG): retrying
+# cannot fix it, and restarting every 10 s would bury the one error
+# line in the journal.  The unit shows `failed` until someone fixes
+# capture.cfg and runs `systemctl restart`.
+RestartPreventExitStatus=78
 
 # Hardening — relax if blocking your setup.
 NoNewPrivileges=true

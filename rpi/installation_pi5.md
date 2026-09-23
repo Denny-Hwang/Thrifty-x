@@ -139,17 +139,27 @@ If the device list is empty, check the USB connection/permissions/`lsusb | grep 
 ## 5. Data Directory
 
 It is recommended to mount the USB SSD at `/var/lib/thriftyx` (to avoid SD card wear).
-
-```bash
-sudo mkdir -p /var/lib/thriftyx/{card,toad,log}
-sudo chown -R $USER:$USER /var/lib/thriftyx
-```
+Mount it **before** creating the directories: directories made first
+end up on the SD card, hidden underneath the mount, and capture then
+finds no `card/` directory on the SSD.
 
 `/etc/fstab` example (check the UUID with `lsblk -f`):
 
 ```
 UUID=XXXX-XXXX  /var/lib/thriftyx  ext4  defaults,noatime,nofail  0  2
 ```
+
+```bash
+sudo mkdir -p /var/lib/thriftyx
+sudo systemctl daemon-reload && sudo mount /var/lib/thriftyx
+findmnt /var/lib/thriftyx          # must show the SSD
+sudo mkdir -p /var/lib/thriftyx/{card,toad,log}
+sudo chown -R $USER:$USER /var/lib/thriftyx
+```
+
+The capture unit has `RequiresMountsFor=/var/lib/thriftyx`: if the SSD
+is missing at boot (`nofail` lets the Pi boot anyway), capture does not
+start instead of filling the SD card.
 
 ---
 
@@ -173,6 +183,12 @@ thriftyx capture /var/lib/thriftyx/card/test.card \
 ---
 
 ## 7. systemd Service Registration
+
+The unit writes one card file per hour (`--rotate`, on the hour on
+every node, named `rx0_YYYYmmddTHHMMSS.card`), so the cleanup job can
+expire old data while capture keeps running.  It restarts capture 10 s
+after any exit except a configuration error (exit status 78), which
+leaves the unit `failed` until `capture.cfg` is fixed.
 
 ```bash
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.service /etc/systemd/system/
@@ -208,21 +224,39 @@ sudo $EDITOR /etc/default/thriftyx-cleanup   # THRIFTYX_OUT must match the captu
 ```
 
 Default policy: delete `.card` files older than 7 days and `.toad` and
-log files older than 30 days under `THRIFTYX_OUT`, and purge the oldest
+`.log` files older than 30 days under `THRIFTYX_OUT`, and purge the oldest
 cards when the disk passes 90 %.  Change it in
 `/etc/default/thriftyx-cleanup`; cron passes no environment, so that
-file is the only place the job reads settings from.
+file is the only place the job reads settings from.  Each run that
+deletes something, and any failure, is logged:
+`journalctl -t thriftyx-cleanup`.
 
 ---
 
-## 9. Validation Checklist
+## 9. Network Requirements
+
+Capture itself needs no network.  A node needs:
+
+| Direction | What | When |
+|---|---|---|
+| Outbound UDP 123 | NTP servers (or the site's chrony server) | always — TDOA depends on it |
+| Outbound TCP 443 | `github.com` (git), `pypi.org` and `files.pythonhosted.org` (pip) | only while `update_node.sh` runs |
+| Outbound | `THRIFTYX_HEARTBEAT_URL` host | every minute, if configured |
+| Inbound TCP 22 | SSH (or the reverse tunnel in `rpi/installation.md`) | management, data pulls |
+
+A firewall that allows only these keeps a field node reachable and
+updatable without exposing anything else.
+
+---
+
+## 10. Validation Checklist
 
 All items in `docs/rpi5_validation_checklist.md` must pass for the node to be
 judged ready for field deployment. If even one required item fails, it is **No-Go**.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Candidate Cause | Action |
 |---|---|---|
@@ -232,3 +266,5 @@ judged ready for field deployment. If even one required item fails, it is **No-G
 | Throttling after 30~60 seconds | heat | `vcgencmd get_throttled`, inspect active cooler |
 | Timestamp mismatch between nodes | time sync | `chronyc tracking`, check NTP source |
 | Service fails once right after boot | USB enumeration delay | automatic retry with `RestartSec=10` (default) |
+| Unit `failed`, `status=78/CONFIG` | invalid `capture.cfg` (error line in `journalctl -u thriftyx-capture@rx0`) | fix the file, `sudo systemctl restart thriftyx-capture@rx0` |
+| `Dependency failed` at boot | SSD not mounted (`RequiresMountsFor`) | check the cable/`findmnt /var/lib/thriftyx`, then restart the unit |
