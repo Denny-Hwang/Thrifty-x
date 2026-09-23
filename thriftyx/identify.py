@@ -248,7 +248,7 @@ def generate_toads(output, toad_globs, freqmap):
     output.write("# source_files: [%s]\n" % (' '.join(filenames)))
     filtered = integrate(detections, freqmap)
 
-    print("Removed {} duplicates / unidentified transmisisons "
+    print("Removed {} duplicates / unidentified transmissions "
           "from {} detections.".format(len(detections)-len(filtered),
                                        len(detections)))
 

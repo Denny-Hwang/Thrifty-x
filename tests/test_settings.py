@@ -132,12 +132,15 @@ class TestAutoAdjustBlockParams:
 
     def test_defaults_adjusted_at_6msps(self, caplog):
         import logging as _logging
-        with caplog.at_level(_logging.WARNING):
+        with caplog.at_level(_logging.INFO):
             values = settings.load({'sample_rate': '6M'}, None)
         # 6 Msps: template ~6140 > default history 4920 -> both adjusted.
         assert values['block_history'] > 4920
         assert values['block_size'] >= 2 * values['block_history']
-        assert any('Auto-adjusted' in r.message for r in caplog.records)
+        adjusted = [r for r in caplog.records if 'Auto-adjusted' in r.message]
+        assert adjusted
+        # Deriving defaults is routine: it must not warn on every run.
+        assert all(r.levelno == _logging.INFO for r in adjusted)
 
     def test_explicit_history_kept_with_warning(self, caplog):
         import logging as _logging

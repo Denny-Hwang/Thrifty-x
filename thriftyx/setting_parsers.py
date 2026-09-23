@@ -11,6 +11,7 @@ Helper functions for converting setting strings to values.
 """
 
 import re
+from typing import Callable
 
 
 # from https://docs.python.org/2/library/re.html#simulating-scanf
@@ -192,6 +193,28 @@ def threshold(string: str) -> tuple[float, float, float]:
         elif symbol == 'stddev' or symbol == 'd':
             stddev += quantity
     return constant, snr, stddev
+
+
+def one_of(*options: str) -> Callable[[str], str]:
+    """Return a parser that accepts exactly one of *options*.
+
+    >>> one_of('integer', 'time_domain')(' integer ')
+    'integer'
+    """
+    def parse(string: str) -> str:
+        value = string.strip()
+        if value not in options:
+            raise ValueError("expected one of: {}".format(', '.join(options)))
+        return value
+    return parse
+
+
+def bit_depth(string: str) -> int:
+    """Parse an ADC sample width: 8 (RTL-SDR) or 12 (Airspy)."""
+    value = int(string)
+    if value not in (8, 12):
+        raise ValueError("expected 8 or 12")
+    return value
 
 
 def parse_bool(string: str) -> bool:

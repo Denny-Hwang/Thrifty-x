@@ -1167,7 +1167,8 @@ def _main():
 
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
-                    'corr_threshold', 'template', 'bit_depth']
+                    'corr_threshold', 'template', 'bit_depth',
+                    'freq_shift_method', 'soa_interpolation']
     config, args = load_args(parser, setting_keys)
 
     if args.raw:
@@ -1190,14 +1191,18 @@ def _main():
         parser.error("unknown plot command(s): {} (run with --help for "
                      "the list)".format(', '.join(unknown)))
 
-    template = np.load(config.template)
-    settings = detect.DetectorSettings(block_len=config.block_size,
-                                       history_len=config.block_history,
-                                       carrier_len=len(template),
-                                       carrier_thresh=config.carrier_threshold,
-                                       carrier_window=window,
-                                       template=template,
-                                       corr_thresh=config.corr_threshold)
+    template = detect.load_template(config.template, config.sample_rate,
+                                    config.get('chip_rate'))
+    settings = detect.DetectorSettings(
+        block_len=config.block_size,
+        history_len=config.block_history,
+        carrier_len=len(template),
+        carrier_thresh=config.carrier_threshold,
+        carrier_window=window,
+        template=template,
+        corr_thresh=config.corr_threshold,
+        freq_shift_method=config.freq_shift_method,
+        soa_interpolation=config.soa_interpolation)
     detector = ForcibleDetector(settings,
                                 force_carrier=args.force_cardet,
                                 force_corr=args.force_corrdet)

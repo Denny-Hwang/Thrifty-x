@@ -10,6 +10,7 @@
 
 
 import argparse
+import logging
 import sys
 from collections import namedtuple
 
@@ -20,7 +21,7 @@ from thriftyx.settings import load_args
 from thriftyx import toads_data
 from thriftyx import util
 from thriftyx.block_data import block_reader, card_reader, peek_card_header
-from thriftyx.exceptions import FileFormatError
+from thriftyx.exceptions import FileFormatError, TemplateError
 from thriftyx.carrier_sync import DefaultSynchronizer
 from thriftyx.setting_parsers import normalize_freq_range
 from thriftyx.soa_estimator import SoaEstimator
@@ -103,6 +104,44 @@ class Detector:
         return self.next()
 
 
+def load_template(path, sample_rate=None, chip_rate=None):
+    """Load a template (``.npy``) and sanity-check it against the rate.
+
+    A template generated for a different sample rate than the data
+    still "works" -- it just correlates poorly and nothing is detected
+    -- so a length far from ``code_length * sample_rate / chip_rate``
+    is logged as a warning.
+
+    Raises
+    ------
+    TemplateError
+        When *path* is not a 1-D ``.npy`` array.
+    """
+    try:
+        template = np.load(path)
+    except (ValueError, EOFError) as exc:
+        raise TemplateError(
+            "cannot load template {!r}: {}".format(path, exc)) from None
+    if getattr(template, 'ndim', None) != 1 or len(template) == 0:
+        raise TemplateError(
+            "template {!r} is not a 1-D sample array".format(path))
+    if chip_rate is None:
+        chip_def = settings_module.DEFINITIONS['chip_rate']
+        chip_rate = chip_def.parser(chip_def.default)
+    if sample_rate:
+        expected = (settings_module.DEFAULT_CODE_LENGTH * sample_rate
+                    / chip_rate)
+        if not 0.8 < len(template) / expected < 1.25:
+            logging.warning(
+                "template %s has %d samples; a %d-chip code at %.6g sps "
+                "and %.6g chips/s is %.0f samples. Was the template "
+                "generated for a different sample rate? (thriftyx "
+                "template_generate --sample-rate ...)",
+                path, len(template), settings_module.DEFAULT_CODE_LENGTH,
+                sample_rate, chip_rate, expected)
+    return template
+
+
 def _block_length_message(block_idx, actual, expected):
     """Explain a block whose length does not match the detector's."""
     msg = (f"block {block_idx} holds {actual} samples but the detector "
@@ -114,7 +153,8 @@ def _block_length_message(block_idx, actual, expected):
     else:
         msg += (" Headerless (v1) cards do not record their block "
                 "geometry; set --block-size and --history to the values "
-                "used for the capture (and --bit-depth 12 if it is an "
+                "used for the capture (--device-type rtlsdr for "
+                "original RTL-SDR cards, or --bit-depth 12 if it is an "
                 "Airspy card that lost its '#v2' header).")
     return msg
 
@@ -240,7 +280,8 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template', 'rxid',
-                    'bit_depth', 'freq_shift_method', 'soa_interpolation']
+                    'bit_depth', 'freq_shift_method', 'soa_interpolation',
+                    'chip_rate']
     config, args = load_args(parser, setting_keys)
 
     kwargs = {}
@@ -259,7 +300,8 @@ def detector_cli(detector_class, parser=None, extra_args=None):
 
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
-    template = np.load(config.template)
+    template = load_template(config.template, config.sample_rate,
+                             config.get('chip_rate'))
 
     settings = DetectorSettings(block_len=config.block_size,
                                 history_len=config.block_history,
