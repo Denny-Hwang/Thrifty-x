@@ -37,7 +37,6 @@ against each template and keeps the best.
 | `thriftyx/detect.py` | Accept either a single `.npy` (existing) or a directory; instantiate one `SoaEstimator` per `.npy` found. Each has its own `template_fft`. |
 | `thriftyx/soa_estimator.py` | Optionally a wrapper `MultiTemplateSoaEstimator` that runs the inner estimators sequentially and returns the best peak + its template index. |
 | `thriftyx/toads_data.py` | `CorrDetectionInfo` gains a `template_id` field. `serialize` / `deserialize` get one extra column. **Breaking change** to .toad/.toads format. |
-| `thrifty/toads_data.py` | Same as above for upstream-compat. |
 | `thriftyx/identify.py` | If `template_id` is present, prefer it over carrier-frequency-based classification. |
 | `docs/user_guide.md` | Document the directory layout. |
 

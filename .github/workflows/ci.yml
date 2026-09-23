@@ -40,6 +40,18 @@ jobs:
       - name: Run Python test suite
         run: pytest -q
 
+  upstream-diff:
+    # Thrifty-X forks swkrueger/Thrifty at the commit pinned in
+    # scripts/upstream_diff.sh (and README).  The original sources are not
+    # kept in the tree; this job fetches them and publishes how far each
+    # ported module has drifted.  Informational: it cannot fail a build on
+    # code changes, only on a broken fetch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff thriftyx/ against upstream Thrifty
+        run: scripts/upstream_diff.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
   c-build:
     runs-on: ubuntu-latest
     strategy:
