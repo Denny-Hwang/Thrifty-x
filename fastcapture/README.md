@@ -17,6 +17,8 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Max Sample Rate | ~2.4 MSPS | 3/6 MSPS (Mini), 2.5/10 MSPS (R2) |
 | Sample ring buffer | 32 MiB fixed | max(1 s of samples, 32 MiB); libairspy delivers 256 KiB per USB transfer |
 | Streaming starts | `reader_start` | `reader_start`, after FFT planning and signal-handler setup |
+| Block timestamp | Arrival of the block's last sample (stamped in the USB callback) | Same: per-transfer arrival times are recorded in the callback (`stamp_queue.c`), not the time the block leaves the ring |
+| Ctrl-C / SIGTERM | Clean stop | Clean stop: exit status 0 and capture statistics printed |
 
 ## Hardware-Independent Components (unchanged)
 
@@ -38,7 +40,7 @@ These components operate on float FFT data and have no hardware dependency:
 ```bash
 cmake -S . -B build
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # ring-buffer unit tests
+ctest --test-dir build --output-on-failure   # ring-buffer and timestamp unit tests
 sudo cmake --install build
 ```
 
