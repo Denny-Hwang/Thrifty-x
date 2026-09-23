@@ -19,7 +19,7 @@ import sys
 import numpy as np
 
 import thriftyx.airspy_capture as ac
-from thriftyx.airspy_capture import _resolve_card_output, _capture_airspy
+from thriftyx.airspy_capture import CardSink, _card_sink_for, _capture_airspy
 from thriftyx.settings import Namespace
 from tests.mocks.scripted_device import ScriptedSDRDevice
 
@@ -33,37 +33,43 @@ BLOCK_LINE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_card_output: the RTL/fastcard destination pattern
+# _card_sink_for: the RTL/fastcard destination pattern
 # ---------------------------------------------------------------------------
 
 def test_resolve_none_on_tty_suppresses_output(monkeypatch):
     """No output arg + interactive TTY -> None (display only)."""
     monkeypatch.setattr(ac, "_stdout_is_tty", lambda: True)
-    assert _resolve_card_output(None) is None
+    assert _card_sink_for(None) is None
 
 
 def test_resolve_none_on_pipe_returns_stdout(monkeypatch):
     """No output arg + piped stdout -> stdout (so piping still works)."""
     monkeypatch.setattr(ac, "_stdout_is_tty", lambda: False)
-    assert _resolve_card_output(None) is sys.stdout
+    assert _card_sink_for(None).file is sys.stdout
 
 
 def test_resolve_dash_returns_stdout_even_on_tty(monkeypatch):
     """Explicit ``-`` always means stdout, even on a TTY."""
     monkeypatch.setattr(ac, "_stdout_is_tty", lambda: True)
-    assert _resolve_card_output('-') is sys.stdout
+    assert _card_sink_for('-').file is sys.stdout
 
 
-def test_resolve_path_opens_file(tmp_path):
-    """An explicit path is opened for writing regardless of TTY state."""
+def test_resolve_path_opens_file_only_on_start(tmp_path):
+    """An explicit path is opened when capture starts, not before: a
+    capture that fails to configure its device must not truncate an
+    existing file."""
     p = tmp_path / "out.card"
-    handle = _resolve_card_output(str(p))
+    p.write_text("earlier capture\n")
+    sink = _card_sink_for(str(p))
+    assert isinstance(sink, CardSink)
+    assert sink.file is None
+    assert p.read_text() == "earlier capture\n"
+    sink.start(bit_depth=12, sample_rate=6_000_000)
     try:
-        assert handle is not None
-        assert handle is not sys.stdout
+        assert sink.file is not sys.stdout
     finally:
-        handle.close()
-    assert p.exists()
+        sink.close()
+    assert p.read_text().startswith('#v2 ')
 
 
 def test_stdout_is_tty_defensive_on_bad_stream(monkeypatch):

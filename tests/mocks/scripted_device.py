@@ -39,6 +39,9 @@ class ScriptedSDRDevice(SDRDevice):
         Exception raised by *fail_in*.
     dropped_samples : int
         Initial value of the drop counter.
+    read_times : iterable of float
+        ``last_read_time`` reported after successive ``read_sync`` calls
+        (left unchanged once exhausted).
 
     Configuration calls are recorded in ``sample_rate``, ``center_freq``,
     ``gains``, ``bias_tee``, ``packing``, ``applied_gain_mode`` and
@@ -50,7 +53,8 @@ class ScriptedSDRDevice(SDRDevice):
                  profile: DeviceProfile = AIRSPY_MINI,
                  fail_in: 'str | None' = None,
                  exc: type = DeviceConfigError,
-                 dropped_samples: int = 0) -> None:
+                 dropped_samples: int = 0,
+                 read_times: Iterable[float] = ()) -> None:
         self.PROFILE = profile  # type: ignore[misc]
         self._buffers = [np.asarray(b, dtype=np.int16) for b in buffers]
         self._stream = (None if stream is None
@@ -59,6 +63,8 @@ class ScriptedSDRDevice(SDRDevice):
         self._fail_in = fail_in
         self._exc = exc
         self.dropped_samples = dropped_samples
+        self._read_times = list(read_times)
+        self.last_read_time: 'float | None' = None
         self._open = False
         self._capturing = False
         self.closed = False
@@ -83,6 +89,7 @@ class ScriptedSDRDevice(SDRDevice):
         self.closed = True
 
     def get_info(self) -> DeviceInfo:
+        self._maybe_fail('get_info')
         profile = self.PROFILE
         return DeviceInfo(
             name=profile.name, serial='SCRIPTED',
@@ -126,6 +133,8 @@ class ScriptedSDRDevice(SDRDevice):
 
     def read_sync(self, num_samples: int) -> np.ndarray:
         self._maybe_fail('read_sync')
+        if self._read_times:
+            self.last_read_time = self._read_times.pop(0)
         if self._stream is not None:
             start = self.samples_read * 2
             chunk = self._stream[start:start + num_samples * 2]
