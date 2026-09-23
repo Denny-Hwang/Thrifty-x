@@ -241,7 +241,7 @@ def analyse(card_path: Path) -> int:
     rms_pct = np.percentile(rms_amplitude, [50, 95, 99])
     print(f"  block RMS amplitude p50/p95/p99: "
           f"{rms_pct[0]:.4f} / {rms_pct[1]:.4f} / {rms_pct[2]:.4f}")
-    print(f"  (full-scale = 1.0; healthy operating point ≈ 0.1-0.4 "
+    print("  (full-scale = 1.0; healthy operating point ≈ 0.1-0.4 "
           "with no clipping)")
     print()
 

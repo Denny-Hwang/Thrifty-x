@@ -17,5 +17,5 @@ test:
 
 .PHONY: lint
 lint:
-	ruff check thriftyx/ tests/
+	ruff check .
 	mypy thriftyx/

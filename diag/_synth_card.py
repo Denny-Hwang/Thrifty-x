@@ -17,7 +17,6 @@ Two variants are written so Phase B/C can compare them side-by-side:
 from __future__ import annotations
 
 import base64
-import os
 import sys
 from pathlib import Path
 

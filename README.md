@@ -527,18 +527,21 @@ The suite covers, among other things:
   (`tests/unit/test_block_data.py`, `tests/unit/test_scripts_bit_depth.py`)
 - The HAL factory + base abstractions
   (`tests/unit/test_hal_*.py`)
-- The unified `analyze_detect` viewer plumbing in headless mode
-  (`tests/unit/test_detect_analysis_viewer.py`)
-- The data-layer integration path — `block_data` 8↔12-bit conversion,
-  v1/v2 `.card` round-trip, and the capture loop against a mock SDR
-  (`tests/integration/test_full_pipeline.py`). The downstream
-  `detect → identify → match → tdoa → pos` stages are exercised by
-  unit tests in `tests/unit/` and `tests/test_*.py`, not by the
-  integration test.
+- The libairspy RX callback through the real ctypes boundary
+  (`tests/unit/test_airspy_ctypes_callback.py`)
+- The unified `analyze_detect` viewer plumbing and its fallbacks in
+  headless mode, and `--export` writing every plot family to PNG
+  (`tests/unit/test_detect_analysis_viewer.py`,
+  `tests/unit/test_detect_analysis_export.py`)
+- The whole chain end to end at 6 MSPS: three simulated receivers with
+  different clock offsets and drift run capture → detect → identify →
+  match → tdoa → pos through the real CLIs, and the mobile transmitter's
+  position must come back within 3 m
+  (`tests/integration/test_pipeline_6msps.py`)
 
-CI runs `ruff check`, `mypy`, the full `pytest` suite, and the
-`fastcapture` and `fastdet` CMake builds on every push and pull
-request. fastdet links the fastcapture static archive: the workflow
+CI runs `ruff check .` over the whole tree, `mypy`, the full `pytest`
+suite, the `fastcapture` ring-buffer unit tests, and the `fastcapture`
+and `fastdet` CMake builds on every push and pull request. fastdet links the fastcapture static archive: the workflow
 builds and installs fastcapture to `/usr/local` before configuring
 fastdet — details in
 [`docs/verification/c_build_ci_failure.md`](docs/verification/c_build_ci_failure.md) §7.

@@ -12,7 +12,6 @@ match between the observed bin (~20) and the expected bin from config.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 
