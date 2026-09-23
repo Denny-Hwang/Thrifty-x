@@ -403,16 +403,18 @@ For RTL-SDR with an external LNA, the default `15*snr` is often too
 strict; a `10*snr` starting point is documented in
 [user guide §5.5](docs/user_guide.md#55-threshold-tuning).
 
-**Carrier sub-bin offset is bounded.** The Dirichlet-kernel
-interpolator now passes `bounds=([0, -0.5], [∞, 0.5])` to
-`scipy.optimize.curve_fit`, so `CarrierSyncInfo.offset` and the
-`carrier_offset` column of `.toad(s)` are guaranteed in
-`[-0.5, 0.5]` (Krüger §4.4.2); unbounded, noisy fits returned
-offsets beyond ±1 bin. The correlation interpolator is clipped to
-`±0.6` by `soa_estimator._clip_offset`. If you are re-running an analysis on data captured
-before this fix landed, the TX1 carrier-offset distribution will shift
-by up to ±0.5 of a bin (~76 Hz at 10 Msps / 65536 FFT) on previously
-out-of-bound detections.
+**Carrier sub-bin offset.** `CarrierSyncInfo.offset` and the
+`carrier_offset` column of `.toad(s)` lie in `[-0.5, 0.5]`: the
+Dirichlet-kernel fit may move the carrier anywhere inside its ±3-bin
+window, and the reported bin is then re-centred on the bin nearest the
+fitted frequency.  The carrier's main lobe is `block_size /
+template_len` bins wide (6.4 at 10 Msps) and flat on top, so under
+noise the largest bin is often not the nearest one; the earlier fit
+clipped at ±0.5 bin around the largest bin and was biased by up to the
+lobe width (2.5× the RMS frequency error on synthetic R2 data).  Data
+processed before this change can show `carrier_bin` values one bin
+different for the same transmission.  The correlation interpolator is
+clipped to `±0.6` by `soa_estimator._clip_offset`.
 
 ## Using Existing RTL-SDR Data
 

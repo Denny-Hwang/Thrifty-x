@@ -76,6 +76,15 @@ class Synchronizer:
         if detected:
             if self.interpolator is not None:
                 offset = self.interpolator(fft_mag, peak_idx)
+                # The carrier's main lobe is several bins wide and flat
+                # on top, so with noise the largest bin is often not the
+                # one nearest the carrier and the fitted offset exceeds
+                # half a bin.  Re-centre on the nearest bin, keeping
+                # |offset| <= 0.5 as the .toad format documents.
+                whole = int(np.round(offset))
+                if whole:
+                    peak_idx = (peak_idx + whole) % len(fft_mag)
+                    offset -= whole
             shifted_fft = self.shifter(signal, -(peak_idx+offset))
         else:
             shifted_fft = None
@@ -213,13 +222,15 @@ def make_dirichlet_interpolator(block_len, carrier_len,
         # at the high edge the original raised IndexError.
         ydata = fft_mag[(peak_idx + xdata) % len(fft_mag)]
         initial_guess = (fft_mag[peak_idx], 0)
-        # bounds: amplitude >= 0, sub-bin offset in [-0.5, 0.5] per the
-        # Krueger Section 4.4.2 spec. Without bounds, curve_fit on noisy
-        # data can return arbitrarily-large offsets (PR #39 reproducer
-        # documented max |offset| ~ 1.07 on synthetic noisy CW).
+        # bounds: amplitude >= 0 and the carrier inside the fit window.
+        # The offset is relative to the largest bin, which noise moves
+        # around the flat top of the main lobe (N / carrier_len bins
+        # wide), so offsets beyond +/-0.5 are genuine; clipping them at
+        # +/-0.5 biased the estimate by up to the lobe width.  The window
+        # bound only rejects fits that run off into the noise.
         try:
             popt, _ = curve_fit(_fit_model, xdata, ydata, p0=initial_guess,
-                                bounds=([0.0, -0.5], [np.inf, 0.5]))
+                                bounds=([0.0, -half], [np.inf, half]))
         except (RuntimeError, ValueError) as exc:
             # Non-convergence or NaN/inf in the window: a single bad
             # block must not abort a long-running detect; fall back to
