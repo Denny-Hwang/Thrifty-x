@@ -73,12 +73,12 @@ def test_raw_to_complex_8bit_basic():
 
 
 def test_raw_to_complex_12bit_basic():
-    """12-bit int16 interleaved I/Q is paired and normalized by 2048."""
-    raw = np.array([0, 0, 1024, -1024, -2048, 2047], dtype=np.int16)
+    """12-bit int16 interleaved I/Q is paired; ADC full scale 16384 -> 1."""
+    raw = np.array([0, 0, 8192, -8192, -16384, 16383], dtype=np.int16)
     expected = np.array([
         0.0 + 0.0j,
         0.5 - 0.5j,
-        -1.0 + (2047 / 2048.0) * 1j,
+        -1.0 + (16383 / 16384.0) * 1j,
     ], dtype=np.complex64)
     result = block_data.raw_to_complex(raw, bit_depth=12)
     assert result.dtype == np.complex64

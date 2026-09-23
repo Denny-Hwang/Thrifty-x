@@ -9,8 +9,8 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Aspect | fastcard (original) | fastcapture (Thrifty-X) |
 |--------|---------------------|-------------------------|
 | SDR Library | librtlsdr | libairspy |
-| Sample Type | uint8 (8-bit unsigned) | int16 (native 12-bit ADC range, not left-shifted) |
-| Sample Conversion | `(val - 127.4) / 128.0` | `val / 2048.0` (see `rawconv.c` and `docs/verification/normalization_divisor.md`) |
+| Sample Type | uint8 (8-bit unsigned) | int16 I/Q from libairspy (ADC full scale ≈ ±16384) |
+| Sample Conversion | `(val - 127.4) / 128.0` | `val / 16384.0`: ADC full scale maps to 1.0 on both (see `rawconv.c`) |
 | DC Offset | Yes (127.4 subtraction) | No (Airspy has none) |
 | Gain Control | Single tuner_gain | LNA + Mixer + VGA (3-stage) |
 | Bias Tee | Not supported | Supported |

@@ -37,10 +37,8 @@ def complex_to_int16(signal: np.ndarray) -> np.ndarray:
     """Convert complex64 signal to interleaved int16, peak-scaled to ±32767.
 
     Test helper: maximises mock-signal SNR by using the whole int16
-    container.  Note this is NOT how libairspy scales real captures —
-    hardware samples stay in the native 12-bit envelope and are
-    normalised by /2048.0 (see thriftyx/block_data.py and
-    docs/verification/normalization_divisor.md).
+    container.  Real captures reach about +/-16384 at ADC full scale
+    (see AIRSPY_INT16_FULL_SCALE in thriftyx/block_data.py).
     """
     max_val = np.max(np.abs(signal))
     if max_val > 0:

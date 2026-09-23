@@ -104,6 +104,13 @@ in the direction of correctness:
 | **Airspy Mini** | 3 MSPS / 6 MSPS | 24–1800 MHz | 12-bit signed | Optional (`--packing`) |
 | **Airspy R2** | 2.5 MSPS / 10 MSPS | 24–1800 MHz | 12-bit signed | Optional — useful at 10 MSPS on USB 2.0 |
 
+**Sample scale.** Every device is normalised so ADC full scale is
+`|z| = 1`: RTL-SDR as `(x − 127.4) / 128`, Airspy int16 as `x / 16384`
+(libairspy's INT16_IQ output is ×8 per ADC code; see
+`AIRSPY_INT16_FULL_SCALE` in `thriftyx/block_data.py`). Airspy results
+from before this was corrected used `/2048`, so their absolute
+energy/noise columns are 8× larger; SNRs are unchanged.
+
 The Airspy HAL lives in `thriftyx/hal/` and talks to `libairspy` via
 `ctypes`.  Device selection (index or 64-bit serial) is handled by
 `thriftyx/hal/device_factory.py`.

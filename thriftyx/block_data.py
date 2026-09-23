@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 
 _V2_HEADER_PREFIX = '#v2 '
 
+# int16 value of a full-scale Airspy ADC tone.  libairspy's INT16_IQ path
+# left-shifts each 12-bit ADC code by 4 (``(code - 2048) << 4``, full
+# scale +/-32768) and then converts the real stream to I/Q at half the
+# rate with a unity-gain half-band filter.  Real-to-complex conversion
+# halves a tone's amplitude, so a tone of A ADC codes arrives as
+# |I + jQ| = 8 * A: full scale (2048 codes) is 16384.  Running
+# libairspy's own convert_samples_int16 + iqconverter_int16_process on a
+# 256-code tone gives mean |I + jQ| = 2068 (8.08 per code), confirming this
+# (reproduce with scripts/airspy_scale_probe.sh).  Dividing by 16384
+# puts Airspy full scale at |z| = 1, the same as RTL-SDR's
+# ``(x - 127.4) / 128``, so absolute magnitudes, noise figures and
+# threshold constants mean the same on both.
+AIRSPY_INT16_FULL_SCALE = 16384.0
+
 
 def _raw_reader(stream, chunk_size):
     """Read raw chunks of data."""
@@ -86,13 +100,10 @@ def raw_to_complex(data, bit_depth=8):
 
     floats = data.astype(np.float32, copy=False)
     if bit_depth == 12:
-        # Airspy INT16_IQ: signed int16 in NATIVE 12-bit range (-2048..+2047).
-        # libairspy does NOT left-shift; the int16 container is used because the
-        # internal FIR filter output can briefly exceed the raw 12-bit ADC range.
-        # Normalize to [-1, +1] by dividing by 2048 (12-bit signed full scale).
-        # Empirical verification: low-4-bit nibble of recorded samples shows all
-        # 16 distinct values (would be a single value if left-shifted x16).
-        floats = floats / 2048.0
+        # Airspy INT16_IQ: ADC full scale -> |z| = 1 (see
+        # AIRSPY_INT16_FULL_SCALE).  A power-of-two divisor keeps the
+        # float32 result bit-identical to fastcapture's rawconv.c.
+        floats = floats / np.float32(AIRSPY_INT16_FULL_SCALE)
     else:
         # RTL-SDR legacy: 8-bit unsigned, DC offset at 127.4.
         floats = (floats - 127.4) / 128.0
@@ -132,13 +143,12 @@ def complex_to_raw(array, bit_depth=8):
     interleaved[0::2] = array.real
     interleaved[1::2] = array.imag
 
+    # Round to the nearest code (astype alone truncates toward zero, a
+    # systematic bias for any input that did not come from integers).
     if bit_depth == 12:
-        # Inverse of raw_to_complex 12-bit path: multiply by 2048 to map [-1, +1]
-        # back to 12-bit signed range. Clip to int16 storage limits (the wider
-        # int16 envelope is preserved so FIR-overshoot test signals round-trip).
-        scaled = interleaved * 2048.0
+        scaled = np.rint(interleaved * np.float32(AIRSPY_INT16_FULL_SCALE))
         return np.clip(scaled, -32768, 32767).astype(np.int16)
-    scaled = interleaved * 128.0 + 127.4
+    scaled = np.rint(interleaved * 128.0 + 127.4)
     return np.clip(scaled, 0, 255).astype(np.uint8)
 
 

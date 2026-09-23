@@ -120,8 +120,8 @@ def test_complex_to_int16_range():
     """complex_to_int16 should peak-scale into the full int16 container.
 
     This pins the *test helper's* scaling contract only.  Real Airspy
-    captures are NOT left-shifted by libairspy; they remain in the
-    native 12-bit envelope (normalised by /2048.0 in block_data).
+    captures reach about +/-16384 at ADC full scale (see
+    AIRSPY_INT16_FULL_SCALE in block_data).
     """
     signal = np.exp(1j * np.linspace(0, 2*np.pi, 64)).astype(np.complex64)
     raw = complex_to_int16(signal)
