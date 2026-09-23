@@ -26,6 +26,10 @@ class ScriptedSDRDevice(SDRDevice):
         Interleaved int16 I/Q returned by successive ``read_sync`` calls,
         regardless of the requested length.  An empty array (end of the
         script) makes capture stop.
+    stream : numpy.ndarray or None
+        Alternative to *buffers*: one continuous interleaved int16 I/Q
+        recording, served in exactly the requested number of samples.
+        ``samples_read`` counts the I/Q pairs delivered so far.
     profile : DeviceProfile
         Hardware facts reported by ``get_info``.
     fail_in : str or None
@@ -42,12 +46,16 @@ class ScriptedSDRDevice(SDRDevice):
     """
 
     def __init__(self, buffers: Iterable[np.ndarray] = (), *,
+                 stream: 'np.ndarray | None' = None,
                  profile: DeviceProfile = AIRSPY_MINI,
                  fail_in: 'str | None' = None,
                  exc: type = DeviceConfigError,
                  dropped_samples: int = 0) -> None:
         self.PROFILE = profile  # type: ignore[misc]
         self._buffers = [np.asarray(b, dtype=np.int16) for b in buffers]
+        self._stream = (None if stream is None
+                        else np.asarray(stream, dtype=np.int16))
+        self.samples_read = 0
         self._fail_in = fail_in
         self._exc = exc
         self.dropped_samples = dropped_samples
@@ -118,6 +126,13 @@ class ScriptedSDRDevice(SDRDevice):
 
     def read_sync(self, num_samples: int) -> np.ndarray:
         self._maybe_fail('read_sync')
+        if self._stream is not None:
+            start = self.samples_read * 2
+            chunk = self._stream[start:start + num_samples * 2]
+            if len(chunk) < num_samples * 2:
+                return np.array([], dtype=np.int16)
+            self.samples_read += num_samples
+            return chunk
         if not self._buffers:
             return np.array([], dtype=np.int16)
         return self._buffers.pop(0)

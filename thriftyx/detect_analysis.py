@@ -835,10 +835,7 @@ def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
             self.fig.clf(keep_observers=False)
             _plot(self.fig, plotter, cmd)
             self.fig.set_facecolor("none")
-            try:
-                self.fig.set_tight_layout(True)
-            except Exception:  # pragma: no cover - matplotlib version drift
-                pass
+            self.fig.set_layout_engine('tight')
             self.canvas.draw_idle()
 
             summary_text = summary_liner(detection.detected, detection.result)
@@ -952,10 +949,7 @@ def _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth,
 
         fig.clf()
         _plot(fig, plotter, cmds[c])
-        try:
-            fig.set_tight_layout(True)
-        except Exception:  # pragma: no cover - matplotlib version drift
-            pass
+        fig.set_layout_engine('tight')
 
         summary_text = summary_liner(detection.detected, detection.result)
         fig.suptitle("blk={} ({}/{}) - {} ({}/{}) - {}".format(
@@ -1252,7 +1246,7 @@ def _main():
                 fig = Figure()
                 FigureCanvas(fig)
                 _plot(fig, plotter, cmd)
-                fig.set_tight_layout(True)
+                fig.set_layout_engine('tight')
                 fig.savefig(filename, dpi=150)
 
     if not args.save and not args.export:

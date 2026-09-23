@@ -103,9 +103,6 @@ def calculate_tdoas(toads, matches, rx1, rx2, beacon, tx):
 
     extract = matchmaker.extract_match_matrix(toads, matches,
                                               [rx1, rx2], [beacon, tx])
-    data = toads_data.toads_array(toads)
-    # print(data['txid'][extract])
-    # extract = [x for x in extract if x[0] is not None and x[1] is not None]
     num_beacon = np.sum([toads[m[0]].txid == beacon for m in extract])
     num_tx = np.sum([toads[m[0]].txid == tx for m in extract])
     # print(len(extract), num_beacon, num_tx)
