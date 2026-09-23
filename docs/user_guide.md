@@ -371,7 +371,7 @@ A reproducible procedure that works for both Airspy devices:
 | Zero detections | Gain too low | Raise LNA first |
 | Noise field >> 10 in capture status line | Gain too high | Lower VGA first |
 | Sporadic correlation hits in odd bins | IMD (LNA too high) | Lower LNA |
-| Histogram peaks at −2048 / +2047 | ADC clipping | Lower the whole chain |
+| Histogram piles up beyond ±8 000 (Airspy int16) | ADC near full scale; libairspy's int16 path saturates above about half scale | Lower the whole chain |
 | `gain = 0.00 dB` displayed (RTL-SDR) | Cosmetic display only | Ignore |
 
 ---
@@ -795,16 +795,23 @@ One detection per line, whitespace-separated:
 The `.toads` file produced by `identify` adds a `txid` column and
 de-duplicates per-receiver detections.
 
-**Magnitude note for `carrier_energy` / `corr_energy`.** Internally
-the detector normalises raw Airspy INT16_IQ samples by `2048.0` (the
-12-bit ADC full scale; see
-[`docs/verification/normalization_divisor.md`](verification/normalization_divisor.md))
-so complex64 magnitudes typically land in roughly `[-1, +1]`. The
-libairspy IQ-correction FIR can briefly overshoot this envelope, so
-occasional `|z| > 1` values are normal and not a clipping error.
-Code that consumes `carrier_energy` / `corr_energy` should treat the
-range as "approximately unit-scale" rather than a hard `[0, 1]`
-envelope.
+**Magnitude note for `carrier_energy` / `corr_energy`.** Samples are
+normalised so that ADC full scale is `|z| = 1` on every device. RTL-SDR
+uses `(x − 127.4) / 128`. For Airspy, libairspy's INT16_IQ output
+left-shifts each 12-bit ADC code by 4 and converts the real stream to
+I/Q with a unity-gain half-band filter, so a tone of A ADC codes
+arrives as `|I + jQ| ≈ 8·A`, and full scale (2048 codes) is int16
+16384; the detector divides by 16384. `scripts/airspy_scale_probe.sh`
+reproduces the measurement on libairspy's own conversion code. On
+hardware, a strong tone at high gain should top out near ±16 000 before
+distorting.
+
+Airspy `.toad` files written before this scale was corrected used a
+divisor of 2048, so their `carrier_energy`, `corr_energy` and noise
+columns are 8× larger than current output for the same signal. SNR
+values and the default `15*snr` thresholds are unaffected; any
+threshold with an absolute constant term (for example `100c`) should be
+re-tuned for Airspy.
 
 ### 9.2.1 Identifying transmitters (`identify --map`)
 

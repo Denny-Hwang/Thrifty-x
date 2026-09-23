@@ -7,7 +7,7 @@
  * Changed from fastcard/rawconv.c:
  *   - Input type: uint8_t (RTL-SDR, 8-bit unsigned) -> int16_t (Airspy,
  *     12-bit signed stored in 16-bit)
- *   - Conversion formula: (val - 127.4) / 128.0  ->  val / 2048.0
+ *   - Conversion formula: (val - 127.4) / 128.0  ->  val / 16384.0
  *   - No DC-offset subtraction needed (Airspy hardware has none).
  *   - LUT removed: the 65536-entry uint16 LUT does not apply to signed int16.
  *     Direct per-sample conversion is used instead.
@@ -29,15 +29,16 @@ void rawconv_to_complex(rawconv_t *rawconv,
                         size_t len) {
     (void)rawconv;
     /*
-     * Airspy AIRSPY_SAMPLE_INT16_IQ delivers samples in the NATIVE 12-bit
-     * signed range (-2048..+2047), NOT left-shifted to fill int16.
-     * The int16 container is used because the internal FIR can briefly
-     * exceed the raw ADC range; typical signal magnitudes stay at ~+/-2048.
-     * Normalize to [-1.0, +1.0] by dividing by 2048.0 (2^11, 12-bit FS).
-     * Must match thriftyx/block_data.py raw_to_complex(bit_depth=12).
+     * libairspy's AIRSPY_SAMPLE_INT16_IQ left-shifts each 12-bit ADC code
+     * by 4 and converts the real stream to I/Q with a unity-gain
+     * half-band filter, which halves a tone's amplitude: a tone of A ADC
+     * codes arrives as |I + jQ| = 8 * A, so ADC full scale is 16384.
+     * Dividing by 16384 maps full scale to |z| = 1, like RTL-SDR's
+     * (val - 127.4) / 128.  Must match AIRSPY_INT16_FULL_SCALE in
+     * thriftyx/block_data.py (a power of two, so both are bit-exact).
      */
     for (size_t i = 0; i < len; ++i) {
-        output[i].real = input[2*i] / 2048.0f;
-        output[i].imag = input[2*i+1] / 2048.0f;
+        output[i].real = input[2*i] / 16384.0f;
+        output[i].imag = input[2*i+1] / 16384.0f;
     }
 }
