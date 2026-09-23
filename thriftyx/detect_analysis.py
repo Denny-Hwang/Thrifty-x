@@ -1156,21 +1156,18 @@ def _main():
                     'corr_threshold', 'template', 'bit_depth']
     config, args = load_args(parser, setting_keys)
 
-    bit_depth = int(config.get('bit_depth', 8))
-
-    window = normalize_freq_range(config.carrier_window,
-                                  config.sample_rate / config.block_size)
-
     if args.raw:
         blocks = block_data.block_reader(args.input, config.block_size,
                                          config.block_history,
-                                         bit_depth=bit_depth)
+                                         bit_depth=config.bit_depth)
     else:
-        # Pass bit_depth as a fallback for v1 .card files (no header):
-        # card_reader prefers the v2 ``#v2 bit_depth=…`` header when
-        # present, otherwise it falls back to this value.  Without this,
-        # Airspy v1-style files would decode as 8-bit.
-        blocks = block_data.card_reader(args.input, bit_depth=bit_depth)
+        blocks, config = detect.open_card(args.input, config)
+    # A headerless card that was not given --bit-depth is v1 (8-bit).
+    bit_depth = (config.bit_depth
+                 if args.raw or 'bit_depth' in config.explicit_keys else 8)
+
+    window = normalize_freq_range(config.carrier_window,
+                                  config.sample_rate / config.block_size)
 
     cmds = [c.strip() for c in args.plot.split(',') if c.strip()]
     known = set(_PLOT_COMMAND_STRINGS) | set(_FIGURE_COMMAND_STRINGS)

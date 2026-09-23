@@ -239,7 +239,7 @@ def _print_detection_line(block_idx, peak_idx, peak_mag, threshold, noise_rms):
 
 
 def _write_card_line(output_file, timestamp, block_idx, raw_array):
-    """Write one line in v1 .card format: ``timestamp block_idx base64``."""
+    """Write one .card data line: ``timestamp block_idx base64(raw)``."""
     encoded = base64.b64encode(raw_array.tobytes()).decode('ascii')
     output_file.write("{:.6f} {} {}\n".format(timestamp, block_idx, encoded))
 
@@ -317,7 +317,9 @@ def _capture_rtlsdr(config, extra_args, output_file):
 
     Reads raw uint8 I/Q data from *stdin* (piped from ``rtl_sdr``) or from a
     file, performs carrier detection on each block, and writes only detected
-    blocks in v1 .card format (no header, ``timestamp block_idx base64``).
+    blocks as ``timestamp block_idx base64`` lines of raw uint8 samples,
+    preceded by a ``#v2 bit_depth=8`` header that records the capture
+    geometry (readers that predate the header skip it as a comment).
     """
     sample_rate = int(config.sample_rate)
     block_size = int(config.block_size)
@@ -331,6 +333,11 @@ def _capture_rtlsdr(config, extra_args, output_file):
     bin_freq = sample_rate / block_size
     window = setting_parsers.normalize_freq_range(
         config.carrier_window, bin_freq)
+
+    if output_file is not None:
+        write_card_header(output_file, bit_depth=bit_depth,
+                          sample_rate=sample_rate, block_size=block_size,
+                          block_history=block_history)
 
     # Print fastcard-compatible header to stderr
     _print_capture_header(config, window)
@@ -403,7 +410,7 @@ def _capture_rtlsdr(config, extra_args, output_file):
             # Display-only runs (output_file is None) emit the stderr
             # diagnostic above but no base64.
             if output_file is not None:
-                # Write v1 format line (raw uint8 bytes, no conversion loss)
+                # Raw uint8 bytes, no conversion loss
                 _write_card_line(output_file, time.time(), block_idx,
                                  block_raw)
                 pending_writes += 1
@@ -529,7 +536,8 @@ def _capture_airspy(config, extra_args, output_file):
         if output_file is not None:
             write_card_header(output_file, bit_depth=bit_depth,
                               sample_rate=sample_rate,
-                              block_size=block_size)
+                              block_size=block_size,
+                              block_history=block_history)
 
         # Print fastcard-compatible configuration header (always, to stderr)
         _print_capture_header(config, window, device_type=device_type)

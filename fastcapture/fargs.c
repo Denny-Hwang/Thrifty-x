@@ -237,11 +237,12 @@ void fargs_print_card_header(fargs_t *fa,
                              const char* tool) {
     /* v2 machine-readable header: parsed by thriftyx/block_data.card_reader
      * to select int16 (12-bit Airspy) sample decoding automatically.
-     * endian/block_size mirror the Python write_card_header so tooling
-     * does not have to guess them. */
+     * endian/block_size/block_history mirror the Python write_card_header
+     * so detect can reproduce the block geometry without a config file.
+     * sample_rate=0 means "unknown" (file input); readers ignore it. */
     fprintf(out, "#v2 bit_depth=12 sample_rate=%u endian=little "
-            "block_size=%zu\n",
-            sdr ? fa->sdr_sample_rate : 0, fa->block_len);
+            "block_size=%zu block_history=%zu\n",
+            sdr ? fa->sdr_sample_rate : 0, fa->block_len, fa->history_len);
     fprintf(out,
             "# arguments: { carrier_bin: '%d-%d', threshold: '%gc+%gs', "
             "block_size: %zu, history_size: %zu }\n",

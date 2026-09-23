@@ -30,7 +30,6 @@ import numpy as np
 
 from thriftyx import detect
 from thriftyx import settings
-from thriftyx.block_data import card_reader
 from thriftyx.setting_parsers import normalize_freq_range
 
 
@@ -91,11 +90,10 @@ def _main():
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template']
     config, args = settings.load_args(parser, setting_keys)
+    blocks, config = detect.open_card(args.input, config)
 
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
-
-    blocks = card_reader(args.input)
     template = np.load(config.template)
 
     dsettings = detect.DetectorSettings(

@@ -350,6 +350,94 @@ def _auto_adjust_block_params(values, explicit=None):
     return values
 
 
+# Settings a .card v2 header records.  They describe how the file was
+# captured, so they are facts about the data rather than preferences:
+# a detector configured differently would mis-map block indices to
+# sample-of-arrival (block_size/block_history), mis-scale carrier
+# frequencies and TDOAs (sample_rate), or mis-decode samples (bit_depth).
+CARD_HEADER_KEYS = ('sample_rate', 'block_size', 'block_history',
+                    'bit_depth')
+
+
+def apply_card_header(config, header):
+    """Adopt the capture parameters recorded in a .card ``#v2`` header.
+
+    Each recorded key that *config* carries is replaced by the header's
+    value.  When the user set that key explicitly (CLI or config file)
+    and it disagrees, a warning names both values; the header still
+    wins because it describes the data actually on disk.
+
+    If the header records ``sample_rate`` but not the block parameters
+    (older v2 files carry no ``block_history``), block parameters that
+    were filled from defaults are re-derived for the recorded rate, the
+    same way the capture side derived them.
+
+    Parameters
+    ----------
+    config : Namespace
+        Settings as returned by :func:`load_args`.
+    header : dict
+        Fields from :func:`thriftyx.block_data.peek_card_header`.
+
+    Returns
+    -------
+    Namespace
+        *config* itself when nothing was adopted, otherwise a new
+        Namespace whose ``explicit_keys`` include the adopted keys.
+    """
+    explicit = getattr(config, 'explicit_keys', frozenset())
+    values = dict(config)
+    adopted = set()
+    for key in CARD_HEADER_KEYS:
+        if key not in header or key not in values:
+            continue
+        try:
+            recorded = DEFINITIONS[key].parser(header[key])
+        except ValueError:
+            logging.warning("ignoring unparseable .card header value "
+                            "%s=%r", key, header[key])
+            continue
+        if recorded <= 0:
+            # fastcapture writes sample_rate=0 when re-emitting a file
+            # input whose rate it does not know.
+            continue
+        if key in explicit and recorded != values[key]:
+            logging.warning(
+                "%s=%s recorded in the .card header overrides the "
+                "configured %s=%s", key, _fmt(recorded), key,
+                _fmt(values[key]))
+        values[key] = recorded
+        adopted.add(key)
+    if not adopted:
+        return config
+
+    if 'sample_rate' in adopted:
+        # Defaults derived for the configured rate are stale now; derive
+        # them again for the recorded rate.
+        for key in ('block_size', 'block_history'):
+            if key in values and key not in adopted and key not in explicit:
+                definition = DEFINITIONS[key]
+                values[key] = definition.parser(definition.default)
+        added_chip_rate = 'chip_rate' not in values
+        if added_chip_rate:
+            chip_def = DEFINITIONS['chip_rate']
+            values['chip_rate'] = chip_def.parser(chip_def.default)
+        values = _auto_adjust_block_params(values, set(explicit) | adopted)
+        if added_chip_rate:
+            values.pop('chip_rate')
+
+    new_config = Namespace(values)
+    new_config.explicit_keys = frozenset(explicit) | adopted
+    return new_config
+
+
+def _fmt(value):
+    """Format a setting value for a log message (6M, not 6000000.0)."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 DEFAULT_CONFIG_PATH = 'detector.cfg'
 CONFIG_COMMENT_CHAR = '#'
 CONFIG_DELIMITER = ':'

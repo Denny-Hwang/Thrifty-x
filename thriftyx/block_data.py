@@ -175,14 +175,90 @@ def block_reader(stream, size, history, bit_depth=8):
         yield time.time(), block_idx, Signal(data)
 
 
+def _parse_v2_header(line):
+    """Return the ``key=value`` fields of a ``#v2`` header line, else None.
+
+    Accepts ``#v2`` followed by any whitespace (or end of line), not only
+    the canonical ``#v2 `` -- a hand-edited tab or bare ``#v2`` header
+    must not silently fall through to 8-bit decoding.
+    """
+    if not (line.startswith('#v2')
+            and (line.rstrip('\r\n') == '#v2' or line[3] in ' \t')):
+        return None
+    header = {}
+    for kv in line[3:].strip().split():
+        if '=' in kv:
+            k, v = kv.split('=', 1)
+            header[k] = v
+    return header
+
+
+def _is_non_data_line(line):
+    """Whether a .card line carries no block (comment, blank, tool noise)."""
+    return (not line or line[0] == '#' or line[0] == '\n'
+            or line.startswith('Using Volk machine:')
+            or line.startswith('linux;'))
+
+
+class _ReplayStream:
+    """Stream that returns already-read lines again before the rest."""
+
+    def __init__(self, lines, stream):
+        self._lines = list(lines)
+        self._stream = stream
+
+    def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        return self._stream.readline()
+
+
+def peek_card_header(stream):
+    """Read a .card stream's ``#v2`` header without consuming it.
+
+    Reads the leading non-data lines up to the first ``#v2`` header (or
+    the first data line) and hands them back through the returned
+    stream, so the header can drive settings before
+    :func:`card_reader` decodes the file.  Works on pipes as well as
+    regular files.
+
+    Returns
+    -------
+    header : dict
+        The header's ``key=value`` fields; empty for a headerless (v1)
+        file.
+    stream : file-like object
+        Replays the lines read here, then continues with *stream*.
+    """
+    consumed = []
+    header = {}
+    while True:
+        line = stream.readline()
+        if not line:
+            break
+        consumed.append(line)
+        text = line.decode() if isinstance(line, bytes) else line
+        parsed = _parse_v2_header(text)
+        if parsed is not None:
+            header = parsed
+            break
+        if not _is_non_data_line(text):
+            break  # first data line: a headerless (v1) file
+    return header, _ReplayStream(consumed, stream)
+
+
 def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     """Read blocks from .card file.
 
     Supports both v1 (uint8, RTL-SDR) and v2 (int16, Airspy) formats.
     Auto-detects format from header.
 
-    v2 format header: '#v2 bit_depth=12 sample_rate=6000000'
-    v1 format: no header line (legacy RTL-SDR).
+    v2 format header, one line of ``key=value`` fields::
+
+        #v2 bit_depth=12 sample_rate=6000000 endian=little \\
+            block_size=32768 block_history=12278
+
+    v1 format: no header line (legacy RTL-SDR, 8-bit).
 
     Parameters
     ----------
@@ -232,17 +308,8 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
             break
         if isinstance(line, bytes):
             line = line.decode()
-        # Accept '#v2' followed by any whitespace (or end of line), not
-        # only the canonical '#v2 ' — a hand-edited tab or bare '#v2'
-        # header must not silently fall through to 8-bit decoding.
-        if (line.startswith('#v2')
-                and (line.rstrip('\r\n') == '#v2' or line[3] in ' \t')):
-            # Parse v2 metadata
-            header = {}
-            for kv in line[3:].strip().split():
-                if '=' in kv:
-                    k, v = kv.split('=', 1)
-                    header[k] = v
+        header = _parse_v2_header(line)
+        if header is not None:
             if 'bit_depth' in header:
                 try:
                     header_bit_depth = int(header['bit_depth'])
@@ -312,9 +379,7 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                         "configured rate matches the capture",
                         header_rate, float(expected_sample_rate))
             continue
-        if not line or line[0] == '#' or line[0] == '\n':
-            continue
-        if line.startswith('Using Volk machine:') or line.startswith('linux;'):
+        if _is_non_data_line(line):
             continue
         try:
             timestamp, idx, encoded = line.rstrip('\n').split(' ')
@@ -390,7 +455,7 @@ def card_writer(stream, timestamp, block_idx, block, bit_depth=8):
 
 
 def write_card_header(stream, bit_depth=8, sample_rate=2_400_000,
-                      block_size=None):
+                      block_size=None, block_history=None):
     """Write v2 .card file header.
 
     Parameters
@@ -400,8 +465,12 @@ def write_card_header(stream, bit_depth=8, sample_rate=2_400_000,
         8 for RTL-SDR (default), 12 for Airspy.
     sample_rate : int
     block_size : int or None
-        Samples per block; recorded so tooling (e.g.
-        ``diag/check_card_format.py``) does not have to guess it.
+        Samples per block.
+    block_history : int or None
+        Samples each block repeats from the previous one.  Together with
+        ``sample_rate`` and ``block_size`` it lets ``detect`` reproduce
+        the capture's block geometry without a config file (block index
+        to sample-of-arrival mapping depends on it).
 
     Notes
     -----
@@ -410,5 +479,7 @@ def write_card_header(stream, bit_depth=8, sample_rate=2_400_000,
     hosts can detect the mismatch instead of decoding garbage.
     """
     extra = f" block_size={block_size}" if block_size else ""
+    if block_history is not None:
+        extra += f" block_history={block_history}"
     stream.write(f"{_V2_HEADER_PREFIX}bit_depth={bit_depth} "
                  f"sample_rate={sample_rate} endian=little{extra}\n")
