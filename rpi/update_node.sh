@@ -11,6 +11,12 @@
 # Typical use:
 #   ssh rx0 'sudo /usr/local/bin/update_node.sh'
 #
+# Root is needed only for systemctl.  git and pip run as the owner of
+# the clone (normally pi): run as root they would leave root-owned
+# objects in .git and the venv, after which the owner's own `git pull` /
+# `pip install` fail, and git's safe.directory check would reject the
+# clone outright when root is not the owner.
+#
 # Exit codes:
 #   0   already up to date OR updated successfully
 #   1   update failed AND rollback succeeded (service running on old SHA)
@@ -35,6 +41,19 @@ die() { log "FATAL: $*"; exit 3; }
 
 cd "${HOME_DIR}"
 PIP="${HOME_DIR}/.venv/bin/pip"
+
+# Run a command as the clone's owner (a no-op when we already are).
+OWNER="$(stat -c %U "${HOME_DIR}")"
+OWNER_HOME="$(getent passwd "${OWNER}" | cut -d: -f6)"
+as_owner() {
+    if [ "$(id -un)" = "${OWNER}" ]; then
+        "$@"
+    else
+        runuser -u "${OWNER}" -- env HOME="${OWNER_HOME}" "$@"
+    fi
+}
+GIT_BIN="$(command -v git)" || die "git not found"
+git() { as_owner "${GIT_BIN}" "$@"; }
 
 # Ensure clean tree — refuse to update on top of local changes.
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -65,7 +84,7 @@ fi
 
 # Step 2: reinstall (deps may have changed)
 do_install() {
-    "${PIP}" install --quiet -e ".[${PIP_EXTRAS}]"
+    as_owner "${PIP}" install --quiet -e ".[${PIP_EXTRAS}]"
 }
 
 # Step 3: restart + health check
@@ -103,6 +122,6 @@ if ! do_healthy; then
 fi
 
 # Success — record LKG
-echo "${NEW_SHA}" > "${LKG_FILE}"
+as_owner sh -c 'echo "$1" > "$2"' _ "${NEW_SHA}" "${LKG_FILE}"
 log "OK: now running ${NEW_SHA}"
 exit 0
