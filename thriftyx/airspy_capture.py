@@ -748,7 +748,8 @@ def capture_cli(args=None):
 
     Supports all device types:
       - RTL-SDR:     thriftyx capture output.card --device-type rtlsdr
-                     rtl_sdr -f 162M -s 2.4M - | thriftyx capture output.card
+                     rtl_sdr -f 162M -s 2.4M - | \
+                         thriftyx capture output.card --device-type rtlsdr
       - Airspy Mini: thriftyx capture output.card --device-type airspy_mini
       - Airspy R2:   thriftyx capture output.card --device-type airspy_r2
 

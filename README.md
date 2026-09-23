@@ -232,12 +232,20 @@ thriftyx template_generate 10 3 -o template.npy
 thriftyx capture rx0.card --duration 60
 thriftyx detect rx0.card -o rx0.toad
 
-# 3. On the central server, combine .toad files from all receivers:
-thriftyx identify rx0.toad rx1.toad rx2.toad
-thriftyx match
-thriftyx tdoa
-thriftyx pos
+# 3. On the central server, combine .toad files from all receivers.
+#    Each step reads the previous one's default output file:
+thriftyx identify rx0.toad rx1.toad rx2.toad   # -> data.toads (adds txid)
+thriftyx match                                 # -> data.match
+thriftyx tdoa -s 6M                            # -> data.tdoa (needs pos-rx.cfg, pos-beacon.cfg)
+thriftyx pos                                   # -> data.pos  (needs pos-rx.cfg)
 ```
+
+`tdoa` and `pos` need the surveyed positions, one `id: x y [z]` line
+per receiver in `pos-rx.cfg` and per beacon transmitter in
+`pos-beacon.cfg` (metres, any local Cartesian frame; `-r` / `-b`
+choose other files).  `tdoa -s` is the receivers' sample rate; without
+it `tdoa` reads `sample_rate` from `detector.cfg`, then falls back to the
+`device_type` default with a warning.
 
 `detect`, `analyze_detect` and `template_extract` take the sample rate,
 block geometry and bit depth from the card's `#v2` header, so a card
@@ -299,7 +307,7 @@ defaults come from the `--device-type` profile.
 
 > The `DEFINITIONS` table starts every gain at `0` so deployments must
 > explicitly choose a value — there is no "safe" default.  See the
-> [user guide](docs/user_guide.md#gain-tuning) for a recommended starting
+> [user guide](docs/user_guide.md#45-gain-tuning-procedure) for a recommended starting
 > point per ADC headroom budget.
 
 ### Gain — RTL-SDR
@@ -413,8 +421,13 @@ noise the largest bin is often not the nearest one; the earlier fit
 clipped at ±0.5 bin around the largest bin and was biased by up to the
 lobe width (2.5× the RMS frequency error on synthetic R2 data).  Data
 processed before this change can show `carrier_bin` values one bin
-different for the same transmission.  The correlation interpolator is
-clipped to `±0.6` by `soa_estimator._clip_offset`.
+different for the same transmission.
+
+The correlation-peak offset is clipped to `±0.6` sample by
+`soa_estimator._clip_offset`: a three-point parabolic or Gaussian fit
+can land slightly beyond half a sample when the peak straddles two
+samples, and those values are kept, while runaway fits on flat or
+saturated peaks are bounded (`fastdet` clips at `±0.5`).
 
 ## Using Existing RTL-SDR Data
 
@@ -436,14 +449,18 @@ guards the conversion.
 ## Permissions / udev (Linux)
 
 Airspy devices appear as USB devices; ordinary users need permission to
-open them.  Install the official rules and add your user to `plugdev`:
+open them.  Debian, Ubuntu and Raspberry Pi OS's `libairspy0` package
+already installs the rules (`/usr/lib/udev/rules.d/60-libairspy0.rules`,
+group `plugdev`), so only the group membership is needed:
 
 ```bash
-# From the airspyone_host package, or place equivalent rules manually:
-sudo cp /usr/share/airspy/52-airspy.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger
+sudo apt install airspy            # pulls in libairspy0 and its rules
 sudo usermod -aG plugdev "$USER"   # then log out / back in
 ```
+
+With libairspy built from source, install its rules file yourself:
+`sudo cp airspyone_host/airspy-tools/52-airspy.rules /etc/udev/rules.d/ &&
+sudo udevadm control --reload && sudo udevadm trigger`.
 
 If `airspy_open()` returns `-1000` after that, another process (often
 GNU Radio / SDR# / Gqrx) holds the device open.
@@ -556,7 +573,17 @@ fastdet.
 ## Known Limitations
 
 - **Hot-plug detection** is not handled; if a device is unplugged
-  mid-capture the reader times out after ~10 s and exits.
+  mid-capture the reader stops within ~10 s (`fastcapture` within ~1 s)
+  and exits non-zero, and the systemd unit restarts capture once the
+  device is back.
+- **The 10-bit code pair is not a Gold preferred pair.** The LFSR taps
+  inherited from upstream Thrifty (`thriftyx/gold.py`, 10 bits) give two
+  valid m-sequences, but their cross-correlation reaches ±97 (−20.5 dB)
+  rather than the Gold bound of ±65 (−23.9 dB), so codes of one family
+  separate slightly less well than true Gold codes would.  Deployed
+  transmitters use these codes, so they are kept (and pinned by
+  `tests/unit/test_gold.py`); the 5-, 6-, 7-, 9- and 11-bit pairs are
+  preferred pairs.
 - The C `fastcapture` binary is provided mostly for parity with the
   original `fastcard` workflow — **the Python `thriftyx capture` path is
   the recommended entry point.** Both `fastcapture` and the `fastdet`

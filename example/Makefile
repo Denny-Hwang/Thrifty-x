@@ -4,8 +4,8 @@
 #   -> identify -> .toads -> match -> .match -> tdoa -> .tdoa -> pos -> .pos
 #
 # For RTL-SDR capture:
-#   rtl_sdr -f 162M -s 2.4M - | thriftyx capture rx0.card
-# For Airspy capture:
+#   rtl_sdr -f 162M -s 2.4M - | thriftyx capture rx0.card --device-type rtlsdr
+# For Airspy capture (the default device type):
 #   thriftyx capture rx0.card --device-type airspy_mini
 
 all: rx.toads_analysis
@@ -19,13 +19,17 @@ toad/%.toad: cards/%.card detector.cfg
 rx.toads: $(TOAD_FILES) detector.cfg
 	thriftyx identify $(TOAD_FILES) -o rx.toads
 
+# Statistics to rx.toads_analysis, plots to plots/rx_<n>.png (no display
+# needed).
 rx.toads_analysis: rx.toads detector.cfg
-	thriftyx analyze_toads rx.toads > rx.toads_analysis
+	@mkdir -p plots
+	thriftyx analyze_toads -i rx.toads --export plots/rx > rx.toads_analysis
 
 rx.match: rx.toads detector.cfg
 	thriftyx match rx.toads -o rx.match
 
-rx.tdoa: rx.toads rx.match pos-beacon.cfg pos-rx.cfg
+# tdoa reads the receivers' sample_rate from detector.cfg.
+rx.tdoa: rx.toads rx.match pos-beacon.cfg pos-rx.cfg detector.cfg
 	thriftyx tdoa rx.toads rx.match -o rx.tdoa \
 		-b pos-beacon.cfg -r pos-rx.cfg
 
@@ -42,5 +46,6 @@ pos: rx.pos
 
 clean:
 	rm -f toad/*.toad rx.toads rx.toads_analysis rx.match rx.tdoa rx.pos
+	rm -rf plots
 
 .PHONY: all detect identify analyze_toads match tdoa pos clean

@@ -10,7 +10,7 @@ Date: 2026-05-06
 
 ## 2) Installation Validation
 - [ ] `libairspy` installation complete
-- [ ] `pip install -e .[all]` succeeded
+- [ ] `pip install -e ".[analysis,fft]"` succeeded (or `".[analysis]"` where pyFFTW does not build — see `rpi/installation_pi5.md` §4)
 - [ ] `python -c "import thriftyx"` succeeded
 - [ ] Airspy serial enumeration succeeded
 
