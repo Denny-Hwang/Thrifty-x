@@ -7,8 +7,8 @@ by Schalk Willem Krüger (North-West University, 2016) — the original work
 targets RTL-SDR.  Thrifty-X keeps the signal-processing pipeline intact and
 extends the hardware support to [Airspy Mini](https://airspy.com/airspy-mini/)
 and [Airspy R2](https://airspy.com/airspy-r2/), modernises the codebase for
-Python 3.10+, and adds a unified Qt-based detection viewer plus a
-Raspberry Pi 5 deployment story.
+Python 3.10+, ports the Qt detection viewer to current Qt bindings, and
+adds a Raspberry Pi 5 deployment story.
 
 **Forked from** [swkrueger/Thrifty](https://github.com/swkrueger/Thrifty)
 at commit
@@ -49,10 +49,15 @@ All documentation is in English.
 |----------|----------|
 | [docs/user_guide.md](docs/user_guide.md) | End users — install, hardware, gain tuning (incl. `--gain-mode`), template extraction, config reference, threshold tuning, command reference, troubleshooting |
 | [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation |
-| [docs/rpi5_deployment_report.md](docs/rpi5_deployment_report.md) | Pi 5 deployment analysis report |
 | [docs/rpi5_runbook.md](docs/rpi5_runbook.md) | Pi 5 operational runbook |
 | [docs/rpi5_validation_checklist.md](docs/rpi5_validation_checklist.md) | Pi 5 acceptance/validation checklist |
-| [docs/verification/](docs/verification/) | Engineering verification reports (sample format, sub-offset bounds, gain mode, threshold path, auto-classify, comprehensive A–Z refactoring review) |
+| [docs/design/](docs/design/) | Design proposals for features not yet built |
+
+Reviews, investigations and their findings are recorded in pull requests
+and issues, not in the tree: the repository documents how the code
+works now.  Design rationale that matters for using or changing the
+code lives next to that code (docstrings and comments) or in the user
+guide.
 
 ## What's Changed from Original Thrifty
 
@@ -65,10 +70,10 @@ All documentation is in English.
 | AGC | n/a | Optional `--lna-agc` / `--mixer-agc` for R820T2 |
 | LO correction | n/a | Software `--ppm` |
 | C capture binary | `fastcard` (librtlsdr) | `fastcapture` (libairspy) |
-| Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
+| Detection viewer | PyQt4 window with block and plot tab bars | Same layout ported to PyQt5/PySide6, with lazy plotting, a single-window matplotlib fallback, and headless PNG export |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` (PEP 621); dynamic version |
-| Tests | Minimal | 37 test modules (≈390 tests — the exact count varies with optional dependencies); lint + type-check + pytest (3.10 & 3.13) + C builds & int16 card round-trip gated in CI |
+| Tests | Minimal | Unit tests per module plus an end-to-end 6 MSPS capture → pos test; ruff, mypy, pytest (3.10 & 3.13), C builds, C unit tests and the int16 card round trip gated in CI |
 | Pi deployment | Pi 3 / Jessie + RTL-SDR | Pi 5 / Bookworm + Airspy with systemd, soak test, idempotent update |
 
 **Signal-processing pipeline is preserved.** Carrier detection (Dirichlet
@@ -401,10 +406,9 @@ strict; a `10*snr` starting point is documented in
 interpolator now passes `bounds=([0, -0.5], [∞, 0.5])` to
 `scipy.optimize.curve_fit`, so `CarrierSyncInfo.offset` and the
 `carrier_offset` column of `.toad(s)` are guaranteed in
-`[-0.5, 0.5]` (Krüger §4.4.2). The correlation interpolator is
-clipped to `±0.6` by `soa_estimator._clip_offset`. See
-[`docs/verification/sub_offset_investigation.md`](docs/verification/sub_offset_investigation.md)
-for the reasoning. If you are re-running an analysis on data captured
+`[-0.5, 0.5]` (Krüger §4.4.2); unbounded, noisy fits returned
+offsets beyond ±1 bin. The correlation interpolator is clipped to
+`±0.6` by `soa_estimator._clip_offset`. If you are re-running an analysis on data captured
 before this fix landed, the TX1 carrier-offset distribution will shift
 by up to ±0.5 of a bin (~76 Hz at 10 Msps / 65536 FFT) on previously
 out-of-bound detections.
@@ -456,10 +460,12 @@ Thrifty-x/
 ├── fastcapture/         # ▶ Active C library binding to libairspy
 ├── fastdet/             # ▶ Active C++ correlation detector (links fastcapture)
 ├── tests/
-│   ├── unit/            #   28 unit-test modules
-│   ├── integration/     #   1 integration test (block_data + mock capture)
-│   └── test_*.py        #   8 top-level pipeline-stage tests
-├── scripts/             # Standalone analysis helper scripts
+│   ├── unit/            #   Unit tests, one module per area
+│   ├── integration/     #   End-to-end pipeline tests
+│   ├── mocks/           #   Scripted SDR devices and signal generators
+│   └── test_*.py        #   Tests carried over from upstream Thrifty
+├── scripts/             # Helper scripts, e.g. card_stats.py (headroom vs ADC
+│                        #   full scale), airspy_scale_probe.sh, upstream_diff.sh
 ├── example/             # Example detector configs + template
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
 └── docs/                # User & deployment documentation
@@ -502,7 +508,6 @@ guide:
 
 Operational documents live under `docs/`:
 
-- [`docs/rpi5_deployment_report.md`](docs/rpi5_deployment_report.md) — design analysis
 - [`docs/rpi5_runbook.md`](docs/rpi5_runbook.md) — day-to-day operations
 - [`docs/rpi5_validation_checklist.md`](docs/rpi5_validation_checklist.md) — acceptance checklist
 
@@ -541,10 +546,9 @@ The suite covers, among other things:
 
 CI runs `ruff check .` over the whole tree, `mypy`, the full `pytest`
 suite, the `fastcapture` ring-buffer unit tests, and the `fastcapture`
-and `fastdet` CMake builds on every push and pull request. fastdet links the fastcapture static archive: the workflow
+and `fastdet` CMake builds on every push and pull request. fastdet links the fastcapture static archive, so the workflow
 builds and installs fastcapture to `/usr/local` before configuring
-fastdet — details in
-[`docs/verification/c_build_ci_failure.md`](docs/verification/c_build_ci_failure.md) §7.
+fastdet.
 
 ## Known Limitations
 

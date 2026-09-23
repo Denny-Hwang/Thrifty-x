@@ -514,9 +514,7 @@ device — the threshold is `sqrt(const + snr·noise_rms² + stddev·stddev²)`
 in `carrier_detect._calculate_threshold` / `soa_estimator.calculate_threshold`.
 There is **no device-specific branching** in the threshold path: the same
 expression yields the same absolute threshold given the same noise stats,
-on RTL-SDR and Airspy alike (see
-[`docs/verification/threshold_path.md`](verification/threshold_path.md)).
-So a threshold change is a per-site tuning decision, not a code default.
+on RTL-SDR and Airspy alike.  So a threshold change is a per-site tuning decision, not a code default.
 
 **When to lower `corr_threshold`:**
 
@@ -739,7 +737,10 @@ The dispatch table lives in `thriftyx/cli.py`.
 - `-a / --append` — append to an existing output file (`detect` only).
 - `--quiet` — suppress per-block status output (`detect`).
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,
-  `analyze_detect`).
+  `analyze_detect`).  Raw files record nothing about the capture, so
+  the sample format and rate follow `--device-type` (default Airspy
+  Mini: int16, 3 MSPS) unless `--bit-depth` / `--sample-rate` are given;
+  for `rtl_sdr` output pass `--device-type rtlsdr`.
 
 ### Selected `capture` options
 
@@ -804,7 +805,8 @@ arrives as `|I + jQ| ≈ 8·A`, and full scale (2048 codes) is int16
 16384; the detector divides by 16384. `scripts/airspy_scale_probe.sh`
 reproduces the measurement on libairspy's own conversion code. On
 hardware, a strong tone at high gain should top out near ±16 000 before
-distorting.
+distorting; `python scripts/card_stats.py rx0.card` prints a card's
+peak and RMS magnitude as a fraction of ADC full scale.
 
 Airspy `.toad` files written before this scale was corrected used a
 divisor of 2048, so their `carrier_energy`, `corr_energy` and noise
@@ -821,8 +823,8 @@ carrier-bin histogram. The auto-classifier
 (`thriftyx/identify.py:detect_transmitter_windows`) handles the
 common BatRF dual-bin pattern, but it is **not robust to extremely
 uneven transmitter populations** (40:1 detection-count ratios can
-make the weak transmitter disappear; see
-[`docs/verification/auto_classify_robustness.md`](verification/auto_classify_robustness.md)).
+make the weak transmitter disappear: the histogram peak of the rare
+transmitter falls below the clustering threshold).
 
 **For paper-grade or production captures, supply an explicit
 frequency map via `--map`:**

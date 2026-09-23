@@ -2,8 +2,7 @@
 
 This document summarizes the daily inspection and incident response
 procedures for an unattended RX node built with Pi 5 + Airspy. For the
-installation procedure, see `rpi/installation_pi5.md`; for the deployment
-analysis/plan, see `docs/rpi5_deployment_report.md`.
+installation procedure, see `rpi/installation_pi5.md`.
 
 ---
 
