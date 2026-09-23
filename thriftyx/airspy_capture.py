@@ -65,8 +65,129 @@ def _stdout_is_tty():
         return False
 
 
-def _resolve_card_output(output_path):
-    """Resolve the destination for base64 .card lines (RTL/fastcard pattern).
+class CardSink:
+    """Destination for detected blocks: one ``.card`` stream or file set.
+
+    Writes the ``#v2`` header at the top of every file, flushes at most
+    every :data:`FLUSH_INTERVAL_S` seconds or :data:`FLUSH_BLOCKS` lines
+    (per-line fsync is microSD-hostile), and optionally rotates files.
+
+    Parameters
+    ----------
+    stream : file-like or None
+        An already-open text stream (stdout, a test buffer).  Never
+        closed by the sink.
+    path : str or None
+        Output path, opened by :meth:`start` -- after the device has
+        been configured, so a capture that cannot start does not
+        truncate an existing file.
+    rotate : float or None
+        Start a new file every *rotate* seconds, on wall-clock
+        boundaries (every receiver switches files at the same moments).
+        *path* is then a :func:`time.strftime` pattern naming each file
+        by its start time.  Block indices continue across files, so
+        sample-of-arrival stays continuous for the whole run.
+    """
+
+    def __init__(self, stream=None, path=None, rotate=None,
+                 clock=time.time):
+        if (stream is None) == (path is None):
+            raise ValueError("CardSink needs exactly one of stream/path")
+        if rotate is not None and path is None:
+            raise ValueError("rotation needs an output path")
+        self._stream = stream
+        self._path = path
+        self._rotate = rotate
+        self._clock = clock
+        self._file = stream
+        self._header = None
+        self._next_rotation = None
+        self._pending = 0
+        self._last_flush = clock()
+        self.paths = []  # files opened so far
+
+    @property
+    def file(self):
+        """The stream currently written to (``None`` before start)."""
+        return self._file
+
+    def start(self, **header):
+        """Open the first file and write the header (``write_card_header``
+        keyword arguments)."""
+        self._header = header
+        if self._path is None:
+            write_card_header(self._file, **header)
+        else:
+            self._open_next(self._clock())
+
+    def _open_next(self, now):
+        if self._file is not None and self._file is not self._stream:
+            self._file.close()
+        if self._rotate is None:
+            path = self._path
+            self._file = open(path, 'w')
+        else:
+            path = time.strftime(self._path, time.localtime(now))
+            self._file = _open_new(path)
+            path = self._file.name
+            self._next_rotation = (now // self._rotate + 1) * self._rotate
+            logger.info("writing %s", path)
+        self.paths.append(path)
+        write_card_header(self._file, **self._header)
+        self._file.flush()
+        self._pending = 0
+
+    def tick(self, now=None):
+        """Rotate if a rotation boundary has passed.  Call once per block."""
+        if self._next_rotation is None:
+            return
+        now = self._clock() if now is None else now
+        if now >= self._next_rotation:
+            self._open_next(now)
+
+    def write(self, timestamp, block_idx, raw_array):
+        """Write one ``timestamp block_idx base64(raw)`` line."""
+        _write_card_line(self._file, timestamp, block_idx, raw_array)
+        self._pending += 1
+        now = self._clock()
+        if (self._pending >= FLUSH_BLOCKS
+                or now - self._last_flush >= FLUSH_INTERVAL_S):
+            self._file.flush()
+            self._pending = 0
+            self._last_flush = now
+
+    def close(self):
+        """Flush, and close the file if the sink opened it."""
+        if self._file is None:
+            return
+        try:
+            self._file.flush()
+        except (OSError, ValueError):
+            pass
+        if self._file is not self._stream:
+            self._file.close()
+            self._file = None
+
+
+def _open_new(path):
+    """Open *path* for writing without clobbering an existing file.
+
+    Two rotations can map to the same name (a strftime pattern coarser
+    than the interval, or local time falling back an hour); the later
+    file then gets a ``.1``, ``.2``, ... suffix before its extension.
+    """
+    base, ext = os.path.splitext(path)
+    candidate = path
+    for n in range(1, 1000):
+        try:
+            return open(candidate, 'x')
+        except FileExistsError:
+            candidate = "{}.{}{}".format(base, n, ext)
+    raise FileExistsError(path)
+
+
+def _card_sink_for(output_path, rotate=None):
+    """Choose where base64 .card lines go (RTL/fastcard pattern).
 
     Mirrors the RTL reference ``fastcard`` (``fastcapture/fastcard_cli.c``):
     card data is emitted only when a destination is actually requested -- with
@@ -74,22 +195,53 @@ def _resolve_card_output(output_path):
     all, printing diagnostics only.  Adapted to thriftyx's positional
     ``output`` argument:
 
-      - explicit file path        -> open and return that file
+      - explicit file path        -> that file (opened when capture starts)
       - ``-``                     -> stdout (explicit request, e.g. piping)
       - omitted, stdout is PIPED  -> stdout (so ``thriftyx capture | ...``
                                      keeps working)
       - omitted, stdout is a TTY  -> ``None`` (display-only: write nothing,
                                      create no file)
 
-    Returns the open file object to write card data to, or ``None`` when card
-    output must be suppressed.  Carrier-detection diagnostics are emitted to
-    stderr by the capture loop regardless of this value.
+    Carrier-detection diagnostics are emitted to stderr by the capture
+    loop regardless of this value.
     """
     if output_path is not None and output_path != '-':
-        return open(output_path, 'w')
+        return CardSink(path=output_path, rotate=rotate)
     if output_path is None and _stdout_is_tty():
         return None
-    return sys.stdout
+    return CardSink(stream=sys.stdout)
+
+
+def _as_sink(output):
+    """Accept a CardSink, an open text stream, or None."""
+    if output is None or isinstance(output, CardSink):
+        return output
+    return CardSink(stream=output)
+
+
+class _StopOnSignal:
+    """Turn SIGINT/SIGTERM into a flag for the capture loop.
+
+    The previous handlers are restored on exit, so an in-process caller
+    (tests, a notebook) gets its Ctrl-C back.
+    """
+
+    def __init__(self):
+        self.running = True
+        self._previous = {}
+
+    def _handler(self, _sig, _frame):
+        self.running = False
+
+    def __enter__(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            self._previous[sig] = signal.signal(sig, self._handler)
+        return self
+
+    def __exit__(self, *_exc):
+        for sig, handler in self._previous.items():
+            signal.signal(sig, handler)
+        return False
 
 
 def _compute_threshold(fft_mag, thresh_coeffs, noise_rms):
@@ -231,7 +383,7 @@ def _capture_rtlsdr_fastcard(config, extra_args):
 # RTL-SDR capture with Python carrier detection (fallback)
 # ---------------------------------------------------------------------------
 
-def _capture_rtlsdr(config, extra_args, output_file):
+def _capture_rtlsdr(config, extra_args, output):
     """Capture from RTL-SDR with Python-based carrier detection.
 
     Reads raw uint8 I/Q data from *stdin* (piped from ``rtl_sdr``) or from a
@@ -239,7 +391,11 @@ def _capture_rtlsdr(config, extra_args, output_file):
     blocks as ``timestamp block_idx base64`` lines of raw uint8 samples,
     preceded by a ``#v2 bit_depth=8`` header that records the capture
     geometry (readers that predate the header skip it as a comment).
+
+    *output* is a :class:`CardSink`, an open text stream, or ``None``
+    (display only).
     """
+    sink = _as_sink(output)
     sample_rate = int(config.sample_rate)
     block_size = int(config.block_size)
     block_history = int(config.block_history)
@@ -253,106 +409,94 @@ def _capture_rtlsdr(config, extra_args, output_file):
     window = setting_parsers.normalize_freq_range(
         config.carrier_window, bin_freq)
 
-    if output_file is not None:
-        write_card_header(output_file, bit_depth=bit_depth,
-                          sample_rate=sample_rate, block_size=block_size,
-                          block_history=block_history)
-
-    # Print fastcard-compatible header to stderr
-    _print_capture_header(config, window)
-
     # Determine input source
     if input_path and input_path != '-':
         input_stream = open(input_path, 'rb')
     else:
         input_stream = sys.stdin.buffer
 
+    if sink is not None:
+        sink.start(bit_depth=bit_depth, sample_rate=sample_rate,
+                   block_size=block_size, block_history=block_history)
+
+    # Print fastcard-compatible header to stderr
+    _print_capture_header(config, window)
+
     block_idx = 0
     detected_count = 0
     start_time = time.time()
-    running = [True]
-
-    def _sigint_handler(_sig, _frame):
-        running[0] = False
-
-    signal.signal(signal.SIGINT, _sigint_handler)
-    signal.signal(signal.SIGTERM, _sigint_handler)
 
     new_samples = block_size - block_history
     # RTL-SDR: uint8 I/Q interleaved, 1 byte per component
     bytes_per_block = new_samples * 2
 
-    if capture_skip > 0:
-        skip_bytes = capture_skip * bytes_per_block
-        print("\nSkipping {} block(s)...".format(capture_skip),
-              end="", file=sys.stderr)
-        sys.stderr.flush()
-        skipped = 0
-        while skipped < skip_bytes and running[0]:
-            chunk = input_stream.read(min(skip_bytes - skipped, 65536))
-            if not chunk:
-                break
-            skipped += len(chunk)
-        print(" done\n", file=sys.stderr)
+    try:
+        with _StopOnSignal() as stop:
+            if capture_skip > 0:
+                skip_bytes = capture_skip * bytes_per_block
+                print("\nSkipping {} block(s)...".format(capture_skip),
+                      end="", file=sys.stderr)
+                sys.stderr.flush()
+                skipped = 0
+                while skipped < skip_bytes and stop.running:
+                    chunk = input_stream.read(
+                        min(skip_bytes - skipped, 65536))
+                    if not chunk:
+                        break
+                    skipped += len(chunk)
+                print(" done\n", file=sys.stderr)
 
-    # History buffer for block overlap
-    history_raw = np.zeros(block_history * 2, dtype=np.uint8)
+            # History buffer for block overlap
+            history_raw = np.zeros(block_history * 2, dtype=np.uint8)
 
-    last_flush_t = time.time()
-    pending_writes = 0
+            while stop.running:
+                if (duration is not None
+                        and (time.time() - start_time) >= duration):
+                    break
 
-    while running[0]:
-        if duration is not None and (time.time() - start_time) >= duration:
-            break
-
-        raw_bytes = input_stream.read(bytes_per_block)
-        if len(raw_bytes) < bytes_per_block:
-            break
-
-        new_raw = np.frombuffer(raw_bytes, dtype=np.uint8)
-
-        # Build full block with history
-        block_raw = np.concatenate([history_raw, new_raw])
-        block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
-
-        # Carrier detection via FFT (pyfftw when available)
-        fft_mag = np.abs(compute_fft(block_complex))
-        detected, peak_idx, peak_mag, noise_rms = carrier_detect_block(
-            fft_mag, thresh_coeffs, window=window)
-
-        if detected:
-            threshold = _compute_threshold(fft_mag, thresh_coeffs, noise_rms)
-            _print_detection_line(block_idx, peak_idx, peak_mag,
-                                  threshold, noise_rms)
-            detected_count += 1
-            # Card data is written only when a destination exists.
-            # Display-only runs (output_file is None) emit the stderr
-            # diagnostic above but no base64.
-            if output_file is not None:
-                # Raw uint8 bytes, no conversion loss
-                _write_card_line(output_file, time.time(), block_idx,
-                                 block_raw)
-                pending_writes += 1
+                raw_bytes = input_stream.read(bytes_per_block)
+                if len(raw_bytes) < bytes_per_block:
+                    break
                 now = time.time()
-                if (pending_writes >= FLUSH_BLOCKS
-                        or (now - last_flush_t) >= FLUSH_INTERVAL_S):
-                    output_file.flush()
-                    pending_writes = 0
-                    last_flush_t = now
+                if sink is not None:
+                    sink.tick(now)
 
-        # history 0 must carry over nothing ([-0:] slices everything).
-        history_raw = (new_raw[-block_history * 2:] if block_history > 0
-                       else new_raw[:0])
-        block_idx += 1
+                new_raw = np.frombuffer(raw_bytes, dtype=np.uint8)
 
-    if output_file is not None and pending_writes:
-        try:
-            output_file.flush()
-        except Exception:
-            pass
+                # Build full block with history
+                block_raw = np.concatenate([history_raw, new_raw])
+                block_complex = raw_to_complex(block_raw,
+                                               bit_depth=bit_depth)
 
-    if input_stream not in (sys.stdin, sys.stdin.buffer):
-        input_stream.close()
+                # Carrier detection via FFT (pyfftw when available)
+                fft_mag = np.abs(compute_fft(block_complex))
+                detected, peak_idx, peak_mag, noise_rms = \
+                    carrier_detect_block(fft_mag, thresh_coeffs,
+                                         window=window)
+
+                if detected:
+                    threshold = _compute_threshold(fft_mag, thresh_coeffs,
+                                                   noise_rms)
+                    _print_detection_line(block_idx, peak_idx, peak_mag,
+                                          threshold, noise_rms)
+                    detected_count += 1
+                    # Card data is written only when a destination
+                    # exists.  Display-only runs emit the stderr
+                    # diagnostic above but no base64.
+                    if sink is not None:
+                        # Raw uint8 bytes, no conversion loss
+                        sink.write(now, block_idx, block_raw)
+
+                # history 0 must carry over nothing ([-0:] slices
+                # everything).
+                history_raw = (new_raw[-block_history * 2:]
+                               if block_history > 0 else new_raw[:0])
+                block_idx += 1
+    finally:
+        if sink is not None:
+            sink.close()
+        if input_stream not in (sys.stdin, sys.stdin.buffer):
+            input_stream.close()
 
     print("\nRead {} blocks.".format(block_idx), file=sys.stderr)
     logger.info("Detected %d blocks out of %d", detected_count, block_idx)
@@ -363,16 +507,28 @@ def _capture_rtlsdr(config, extra_args, output_file):
 # Airspy capture with Python carrier detection
 # ---------------------------------------------------------------------------
 
-def _capture_airspy(config, extra_args, output_file):
+def _capture_airspy(config, extra_args, output):
     """Capture from a HAL device (Airspy Mini / R2) with carrier detection.
 
     Uses only the :class:`~thriftyx.hal.base.SDRDevice` contract, so any
     device registered with the HAL factory works.  Detected blocks are
     written in v2 .card format (``#v2`` header + ``timestamp block_idx
     base64`` lines of raw samples).
+
+    *output* is a :class:`CardSink`, an open text stream, or ``None``
+    (display only).  A file sink is opened only once the device is
+    configured.
+
+    Block *k* starts ``k * (block_size - block_history)`` samples into
+    the run: the HAL zero-fills samples lost in transit, so indices
+    (and hence sample-of-arrival) stay aligned after a drop.  Each line
+    is stamped with the arrival time of the block's last sample when
+    the driver reports it (``last_read_time``), not with the time the
+    block happened to be processed.
     """
     from thriftyx.hal.device_factory import create_device
 
+    sink = _as_sink(output)
     device_type = config.device_type
     sample_rate = int(config.sample_rate)
     center_freq = int(config.tuner_freq)
@@ -423,12 +579,18 @@ def _capture_airspy(config, extra_args, output_file):
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
         sys.exit(1)
 
-    # The device's own sample format, not the bit_depth setting, decides
-    # how the raw samples on disk must be decoded.
-    bit_depth = device.get_info().bit_depth
-
+    dropped_total = 0
     try:
-        device.set_sample_rate(sample_rate)
+        # The device's own sample format, not the bit_depth setting,
+        # decides how the raw samples on disk must be decoded.
+        bit_depth = device.get_info().bit_depth
+
+        actual_rate = device.set_sample_rate(sample_rate)
+        if actual_rate and int(actual_rate) != sample_rate:
+            # The header must record the rate the data was taken at.
+            logger.info("sample rate %d snapped to %d", sample_rate,
+                        int(actual_rate))
+            sample_rate = int(actual_rate)
         # Optional 12-bit USB packing (saves USB bandwidth at the highest
         # sample rates).  Must be applied before set_center_freq /
         # set_gain so the device is fully reconfigured before streaming.
@@ -453,125 +615,103 @@ def _capture_airspy(config, extra_args, output_file):
             )
         device.set_bias_tee(bool(config.get('bias_tee', False)))
 
-        # Write v2 .card header -- only when card data has a destination.
-        # When display-only (no output file + interactive TTY) output_file is
-        # None and nothing is written to disk or screen, matching fastcard's
-        # ``out == NULL`` behaviour when no ``-o`` is given.
-        if output_file is not None:
-            write_card_header(output_file, bit_depth=bit_depth,
-                              sample_rate=sample_rate,
-                              block_size=block_size,
-                              block_history=block_history)
+        # Open the destination and write the v2 header -- only when card
+        # data has a destination.  When display-only (no output file +
+        # interactive TTY) nothing is written to disk or screen,
+        # matching fastcard's ``out == NULL`` behaviour.
+        if sink is not None:
+            sink.start(bit_depth=bit_depth, sample_rate=sample_rate,
+                       block_size=block_size, block_history=block_history)
 
         # Print fastcard-compatible configuration header (always, to stderr)
         _print_capture_header(config, window, device_type=device_type)
 
         start_time = time.time()
-        running = [True]
         new_samples = block_size - block_history
 
         # Persistent history buffer: always exactly block_history * 2 int16
         # values.  Initialised to zeros for the first block (no prior data).
         history_raw = np.zeros(block_history * 2, dtype=np.int16)
 
-        # Total IQ pairs received since the start of the *processed* capture
-        # window (i.e., after capture_skip).  Used to compute block indices.
-        total_samples_received = 0
+        with _StopOnSignal() as stop:
+            if capture_skip > 0:
+                print("\nSkipping {} block(s)...".format(capture_skip),
+                      end="", file=sys.stderr)
+                sys.stderr.flush()
+                blocks_skipped = 0
+                while blocks_skipped < capture_skip and stop.running:
+                    raw = device.read_sync(new_samples)
+                    if len(raw) < new_samples * 2:
+                        break
+                    # With correct block parameters new_samples >=
+                    # block_history, so this slice always yields exactly
+                    # block_history * 2 values.  (history 0 must carry
+                    # over nothing: [-0:] is a full slice.)
+                    history_raw = (raw[-(block_history * 2):]
+                                   if block_history > 0 else raw[:0])
+                    blocks_skipped += 1
+                print(" done\n", file=sys.stderr)
 
-        def _sigint_handler(_sig, _frame):
-            running[0] = False
+            # Match RTL behaviour: the first processed block is index 0
+            # regardless of the number of skipped blocks.
+            dropped_seen = device.dropped_samples
 
-        signal.signal(signal.SIGINT, _sigint_handler)
-        signal.signal(signal.SIGTERM, _sigint_handler)
+            while stop.running:
+                if (duration is not None
+                        and (time.time() - start_time) >= duration):
+                    break
 
-        if capture_skip > 0:
-            print("\nSkipping {} block(s)...".format(capture_skip),
-                  end="", file=sys.stderr)
-            sys.stderr.flush()
-            blocks_skipped = 0
-            while blocks_skipped < capture_skip and running[0]:
                 raw = device.read_sync(new_samples)
                 if len(raw) < new_samples * 2:
                     break
-                total_samples_received += len(raw) // 2
-                # Update history from the tail of raw.  With correct
-                # block parameters new_samples >= block_history, so this
-                # slice always yields exactly block_history * 2 values.
+                block_idx = blocks_processed
+                timestamp = device.last_read_time or time.time()
+                if sink is not None:
+                    sink.tick()
+
+                dropped_now = device.dropped_samples
+                if dropped_now > dropped_seen:
+                    dropped_total += dropped_now - dropped_seen
+                    logger.warning(
+                        "%d sample pairs lost before block %d (USB "
+                        "overflow or a slow host); zero-filled so block "
+                        "indices stay aligned", dropped_now - dropped_seen,
+                        block_idx)
+                    dropped_seen = dropped_now
+
+                block_raw = np.concatenate([history_raw, raw])
+                # A block of lost samples (all zeros) cannot hold a
+                # carrier; skipping its FFT lets capture catch up after
+                # a long drop.
+                detected = False
+                if raw.any():
+                    block_complex = raw_to_complex(block_raw,
+                                                   bit_depth=bit_depth)
+                    # Carrier detection via FFT (pyfftw when available)
+                    fft_mag = np.abs(compute_fft(block_complex))
+                    detected, peak_idx, peak_mag, noise_rms = \
+                        carrier_detect_block(fft_mag, thresh_coeffs,
+                                             window=window)
+
+                if detected:
+                    threshold = _compute_threshold(
+                        fft_mag, thresh_coeffs, noise_rms)
+                    _print_detection_line(block_idx, peak_idx, peak_mag,
+                                          threshold, noise_rms)
+                    detected_count += 1
+                    # Card data is written only when a destination
+                    # exists.  Display-only runs emit the stderr
+                    # diagnostic above but no base64.
+                    if sink is not None:
+                        # v2 format line (raw int16 bytes)
+                        sink.write(timestamp, block_idx, block_raw)
+
+                # Update history from the tail of the raw read buffer.
                 # (history 0 must carry over nothing: [-0:] is a full
                 # slice.)
                 history_raw = (raw[-(block_history * 2):]
                                if block_history > 0 else raw[:0])
-                blocks_skipped += 1
-            print(" done\n", file=sys.stderr)
-            # Match RTL behaviour: first processed block starts at index 0
-            # regardless of the number of skipped blocks.
-            total_samples_received = 0
-
-        # Baseline dropped-sample counter at the start of the processed
-        # window.  AirspyMiniDevice exposes cumulative dropped samples.
-        dropped_base = device.dropped_samples
-
-        last_flush_t = time.time()
-        pending_writes = 0
-
-        while running[0]:
-            if duration is not None and (time.time() - start_time) >= duration:
-                break
-
-            raw = device.read_sync(new_samples)
-            if len(raw) < new_samples * 2:
-                break
-
-            total_samples_received += len(raw) // 2
-
-            # Account for samples dropped by the hardware, if the HAL
-            # exposes a counter.  This ensures block_idx reflects real
-            # elapsed time rather than just processed-block count.
-            dropped = max(0, device.dropped_samples
-                          - dropped_base)
-            block_idx = ((total_samples_received + dropped)
-                         // new_samples) - 1
-
-            block_raw = np.concatenate([history_raw, raw])
-            block_complex = raw_to_complex(block_raw, bit_depth=bit_depth)
-
-            # Carrier detection via FFT (pyfftw when available)
-            fft_mag = np.abs(compute_fft(block_complex))
-            detected, peak_idx, peak_mag, noise_rms = carrier_detect_block(
-                fft_mag, thresh_coeffs, window=window)
-
-            if detected:
-                threshold = _compute_threshold(
-                    fft_mag, thresh_coeffs, noise_rms)
-                _print_detection_line(block_idx, peak_idx, peak_mag,
-                                      threshold, noise_rms)
-                detected_count += 1
-                # Card data is written only when a destination exists.
-                # Display-only runs (output_file is None) emit the stderr
-                # diagnostic above but no base64.
-                if output_file is not None:
-                    # Write v2 format line (raw int16 bytes)
-                    _write_card_line(output_file, time.time(), block_idx,
-                                     block_raw)
-                    pending_writes += 1
-                    now = time.time()
-                    if (pending_writes >= FLUSH_BLOCKS
-                            or (now - last_flush_t) >= FLUSH_INTERVAL_S):
-                        output_file.flush()
-                        pending_writes = 0
-                        last_flush_t = now
-
-            # Update history from the tail of the raw read buffer.
-            # (history 0 must carry over nothing: [-0:] is a full slice.)
-            history_raw = (raw[-(block_history * 2):]
-                           if block_history > 0 else raw[:0])
-            blocks_processed += 1
-
-        if output_file is not None and pending_writes:
-            try:
-                output_file.flush()
-            except Exception:
-                pass
+                blocks_processed += 1
 
     except DeviceConfigError as e:
         print("ERROR configuring device: {}".format(e), file=sys.stderr)
@@ -582,11 +722,17 @@ def _capture_airspy(config, extra_args, output_file):
     except KeyboardInterrupt:
         pass
     finally:
+        if sink is not None:
+            sink.close()
         try:
             device.close()
         except Exception:
             logger.debug("device.close() raised during cleanup", exc_info=True)
         print("\nRead {} blocks.".format(blocks_processed), file=sys.stderr)
+        if dropped_total:
+            print("WARNING: {} sample pairs were lost and zero-filled; "
+                  "detections spanning a gap are degraded".format(
+                      dropped_total), file=sys.stderr)
         logger.info("Detected %d blocks out of %d",
                      detected_count, blocks_processed)
 
@@ -625,6 +771,13 @@ def capture_cli(args=None):
                              "Ctrl+C)")
     parser.add_argument('--fastcard', dest='fastcard', default='fastcard',
                         help="Path to fastcard binary")
+    parser.add_argument('--rotate', dest='rotate', type=float,
+                        default=None, metavar='SECONDS',
+                        help="start a new output file every SECONDS "
+                             "(on wall-clock boundaries); the output "
+                             "path is then a strftime pattern, e.g. "
+                             "'rx0_%%Y%%m%%dT%%H%%M%%S.card'.  Block "
+                             "indices continue across files")
     parser.add_argument('-d', '--device-index', dest='device_index',
                         type=int, default=0,
                         help="0-based device enumeration index (any device "
@@ -655,36 +808,43 @@ def capture_cli(args=None):
         sys.exit(EXIT_CONFIG)
 
     device_type = config.device_type
+    output_path = extra_args.get('output')
+    rotate = extra_args.get('rotate')
+    fastcard_path = extra_args.get('fastcard', 'fastcard')
+    use_fastcard = device_type == 'rtlsdr' and shutil.which(fastcard_path)
+    if rotate is not None:
+        problem = None
+        if not rotate > 0:
+            problem = "--rotate needs a positive number of seconds"
+        elif output_path is None or output_path == '-':
+            problem = "--rotate needs an output file path"
+        elif '%' not in output_path:
+            problem = ("--rotate needs a strftime pattern in the output "
+                       "path (e.g. rx0_%Y%m%dT%H%M%S.card), or every "
+                       "file would get the same name")
+        elif use_fastcard:
+            problem = ("--rotate is not supported with the fastcard "
+                       "binary; pass --fastcard '' to use the Python "
+                       "capture")
+        if problem:
+            print("ERROR: {}".format(problem), file=sys.stderr)
+            sys.exit(EXIT_CONFIG)
 
     try:
-        if device_type == 'rtlsdr':
+        if use_fastcard:
             # Prefer the fastcard binary for RTL-SDR (matches original Thrifty)
-            fastcard_path = extra_args.get('fastcard', 'fastcard')
-            if shutil.which(fastcard_path):
-                logger.info("Using fastcard binary: %s", fastcard_path)
-                _capture_rtlsdr_fastcard(config, extra_args)
-            else:
-                # Python fallback: carrier detection + v1 .card format
-                logger.info("fastcard not found; using Python carrier "
-                            "detection")
-                output_path = extra_args.get('output')
-                output_file = _resolve_card_output(output_path)
-                try:
-                    _capture_rtlsdr(config, extra_args, output_file)
-                finally:
-                    if (output_file is not None
-                            and output_file not in (sys.stdout, sys.stderr)):
-                        output_file.close()
+            logger.info("Using fastcard binary: %s", fastcard_path)
+            _capture_rtlsdr_fastcard(config, extra_args)
+        elif device_type == 'rtlsdr':
+            # Python fallback: carrier detection + v1 .card format
+            logger.info("fastcard not found; using Python carrier "
+                        "detection")
+            _capture_rtlsdr(config, extra_args,
+                            _card_sink_for(output_path, rotate))
         else:
             # Every other (validated) device type is a HAL device.
-            output_path = extra_args.get('output')
-            output_file = _resolve_card_output(output_path)
-            try:
-                _capture_airspy(config, extra_args, output_file)
-            finally:
-                if (output_file is not None
-                        and output_file not in (sys.stdout, sys.stderr)):
-                    output_file.close()
+            _capture_airspy(config, extra_args,
+                            _card_sink_for(output_path, rotate))
     except BrokenPipeError:
         # Downstream consumer closed the pipe (e.g. ``head``)
         pass

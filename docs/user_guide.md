@@ -751,6 +751,29 @@ The dispatch table lives in `thriftyx/cli.py`.
 - `--fastcard <path>` — alternate path to the `fastcard` binary
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
   to its Python carrier detector.
+- `--rotate <sec>` — start a new output file every N seconds, on
+  wall-clock boundaries (`--rotate 3600` switches files on the hour on
+  every receiver).  The output path is then a `strftime` pattern, e.g.
+  `rx0_%Y%m%dT%H%M%S.card`; each file gets its own `#v2` header, and
+  block indices continue across files, so sample-of-arrival stays
+  continuous for the whole run.  Finished files can be processed or
+  deleted while capture keeps running.  Not available with the
+  `fastcard` binary.
+
+Card lines are stamped with the time the block's last sample arrived
+from the SDR, not the time the block was processed, so a host that
+falls behind for a moment does not skew the timestamps `match` pairs
+receivers by.  Samples lost on the way (USB overflow, a host too slow
+for the rate) are replaced by zeros and reported on stderr: block
+indices keep their meaning after a drop, and only detections that
+overlap the gap are affected.
+
+The output file is opened only once the SDR has been opened and
+configured, so a capture that fails to start leaves an existing file
+with the same name untouched.  A bad setting (unknown device type,
+unparseable value, invalid `--rotate`) exits with status 78
+(`EX_CONFIG`); systemd units use it to stop restarting a node whose
+configuration needs fixing.
 
 ---
 

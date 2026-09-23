@@ -56,12 +56,20 @@ class SDRDevice(ABC):
     ----------
     dropped_samples : int
         I/Q sample pairs lost since streaming started (USB overflow or a
-        full internal buffer).  Capture uses it to keep block indices
-        aligned with elapsed samples.
+        full internal buffer).  ``read_sync`` returns lost samples as
+        zeros, so the stream stays time-contiguous (sample *k* is *k*
+        sample periods after the first) and block indices stay aligned;
+        the counter is for reporting.
+    last_read_time : float or None
+        Wall-clock time at which the last sample returned by
+        ``read_sync`` arrived from the device, or ``None`` when the
+        driver does not track it (capture then stamps blocks when it
+        processes them).
     """
 
     PROFILE: ClassVar['DeviceProfile']
     dropped_samples: int = 0
+    last_read_time: 'float | None' = None
 
     @abstractmethod
     def open(self) -> None:
@@ -76,8 +84,15 @@ class SDRDevice(ABC):
         """Return device information."""
 
     @abstractmethod
-    def set_sample_rate(self, rate: int) -> None:
-        """Set sample rate in samples per second."""
+    def set_sample_rate(self, rate: int) -> 'int | None':
+        """Set sample rate in samples per second.
+
+        Returns
+        -------
+        int or None
+            The rate actually configured, when the driver snaps *rate*
+            to one the hardware supports; ``None`` means *rate* itself.
+        """
 
     @abstractmethod
     def set_center_freq(self, freq: int) -> None:
@@ -135,6 +150,14 @@ class SDRDevice(ABC):
             logger.warning("%s does not support sample packing; ignored",
                            type(self).__name__)
 
+    def discard_buffered(self) -> None:
+        """Drop samples queued for ``read_sync`` (default: none queued).
+
+        Live displays call this before reading so they show the newest
+        samples rather than a backlog.
+        """
+        return None
+
     @abstractmethod
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:
         """Start asynchronous sample capture.
@@ -161,7 +184,8 @@ class SDRDevice(ABC):
         Returns
         -------
         np.ndarray
-            Interleaved I/Q samples as int16 array.
+            Interleaved I/Q samples as int16 array; samples lost in
+            transit are zeros (see ``dropped_samples``).
         """
 
     @property

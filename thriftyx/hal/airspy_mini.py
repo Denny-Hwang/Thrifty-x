@@ -185,6 +185,10 @@ class _AirspyTransfer(ctypes.Structure):
 _CALLBACK_TYPE = ctypes.CFUNCTYPE(ctypes.c_int,
                                    ctypes.POINTER(_AirspyTransfer))
 
+# A read_sync queue entry: (int16 chunk, or a count of int16 values lost
+# in a gap; wall-clock arrival time of the entry's last sample).
+_StreamItem = tuple['np.ndarray | int', float]
+
 AIRSPY_SAMPLE_FLOAT32_IQ = 0
 AIRSPY_SAMPLE_FLOAT32_REAL = 1
 AIRSPY_SAMPLE_INT16_IQ = 2
@@ -333,19 +337,26 @@ class AirspyMiniDevice(SDRDevice):
         # frequency-correction knob (unlike rtlsdr_set_freq_correction),
         # so we instead pre-scale the requested LO frequency.
         self._ppm = float(ppm)
-        # Persistent streaming state for read_sync()
+        # Persistent streaming state for read_sync().  Each queued item
+        # is ``(data, arrived)``: *data* is an int16 chunk, or an int
+        # counting int16 values lost in a gap (materialized as zeros by
+        # read_sync); *arrived* is the wall-clock time the item's last
+        # sample arrived.
         self._stream_started = False
-        self._stream_chunks: collections.deque[np.ndarray] = \
+        self._stream_chunks: collections.deque[_StreamItem] = \
             collections.deque()
-        self._stream_total = 0  # total int16 values buffered
+        self._stream_total = 0  # int16 values queued, gaps included
+        self._stream_mem = 0    # int16 values held in memory
+        # Arrival time of the last sample returned by read_sync().
+        self.last_read_time: 'float | None' = None
         self._stream_lock = threading.Lock()
         self._stream_event = threading.Event()
         # for start_capture() async mode
         self._user_callback: 'Callable[[np.ndarray], None] | None' = None
-        # Cumulative count of IQ sample pairs that libairspy reported as
-        # dropped (e.g. due to USB overflow).  Exposed as a public
-        # attribute so that higher-level code (_capture_airspy) can
-        # adjust block indices to reflect real elapsed time.
+        # Cumulative count of IQ sample pairs lost to libairspy drops
+        # (USB overflow) or a full internal buffer.  read_sync() fills
+        # the gaps with zeros, so the stream stays time-contiguous and
+        # block indices stay aligned; this counter is for reporting.
         self.dropped_samples = 0
         # Bounded internal stream buffer: at most ``max_buffer_seconds``
         # of samples are queued for read_sync(); beyond that, incoming
@@ -356,7 +367,7 @@ class AirspyMiniDevice(SDRDevice):
         self._buffer_full_logged = False
         # IQ pairs dropped by *this* layer because the bounded buffer was
         # full (in addition to hardware/USB drops).  Also folded into
-        # ``dropped_samples`` so block-index accounting stays honest.
+        # ``dropped_samples``.
         self.software_dropped_samples = 0
         # First exception raised inside the RX callback (ctypes swallows
         # them otherwise); surfaced by read_sync()/stop_capture().
@@ -495,7 +506,7 @@ class AirspyMiniDevice(SDRDevice):
             max_gain_stages={k: v[1] for k, v in profile.gain_stages.items()},
         )
 
-    def set_sample_rate(self, rate: int) -> None:
+    def set_sample_rate(self, rate: int) -> int:
         rates = self._supported_sample_rates
         if not self.PROFILE.supports_sample_rate(rate, rates):
             raise DeviceConfigError(
@@ -510,6 +521,7 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
         # Sizes the bounded read_sync buffer in _start_rx.
         self._sample_rate = int(rate)
+        return self._sample_rate
 
     def set_center_freq(self, freq: int) -> None:
         lib = self._check_open()
@@ -704,7 +716,7 @@ class AirspyMiniDevice(SDRDevice):
             self.set_sensitivity_gain(int(combined))
 
     def set_packing(self, enabled: bool) -> None:
-        """Enable libairspy's 12-bit USB packing (saves ~33% bandwidth).
+        """Enable libairspy's 12-bit USB packing (saves 25% bandwidth).
 
         Most useful at the highest Airspy R2 rate (10 MSPS) on USB 2.0
         hosts.  Falls back to a no-op when the library lacks the API.
@@ -744,26 +756,47 @@ class AirspyMiniDevice(SDRDevice):
         self._stop_rx()
         self._user_callback = None
 
-    def _on_samples(self, arr: np.ndarray) -> None:
+    def _on_samples(self, arr: np.ndarray, dropped_pairs: int = 0,
+                    arrived: 'float | None' = None) -> None:
         """Route one chunk of interleaved int16 samples.
 
         Runs on the libairspy callback thread.  Either forwards to the
         user callback (``start_capture`` mode) or appends to the bounded
         internal stream buffer (``read_sync`` mode).
+
+        Parameters
+        ----------
+        arr : numpy.ndarray
+            Interleaved int16 I/Q.
+        dropped_pairs : int
+            I/Q pairs libairspy lost immediately before *arr*.
+        arrived : float or None
+            Wall-clock arrival time of *arr* (default: now).
         """
+        if arrived is None:
+            arrived = time.time()
+        if dropped_pairs > 0:
+            self.dropped_samples += dropped_pairs
         if self._user_callback is not None:
             self._user_callback(arr)
             return
         with self._stream_lock:
+            if dropped_pairs > 0:
+                # The gap ended when the first sample of *arr* arrived.
+                rate = self._sample_rate
+                gap_end = (arrived - (len(arr) // 2) / rate
+                           if rate else arrived)
+                self._queue_gap(dropped_pairs * 2, gap_end)
             cap = self._max_stream_values
-            if cap is not None and self._stream_total + len(arr) > cap:
+            if cap is not None and self._stream_mem + len(arr) > cap:
                 # Bounded buffer: the consumer is persistently too slow.
                 # Drop the *newest* chunk (the same end of the stream
-                # where USB overflow drops occur) and account for it so
-                # downstream block-index math stays honest.
-                dropped_pairs = len(arr) // 2
-                self.software_dropped_samples += dropped_pairs
-                self.dropped_samples += dropped_pairs
+                # where USB overflow drops occur); it is queued as a gap
+                # so the stream stays time-contiguous.
+                dropped = len(arr) // 2
+                self.software_dropped_samples += dropped
+                self.dropped_samples += dropped
+                self._queue_gap(len(arr), arrived)
                 if not self._buffer_full_logged:
                     logger.warning(
                         "read_sync buffer full (%d int16 values, "
@@ -772,9 +805,34 @@ class AirspyMiniDevice(SDRDevice):
                     self._buffer_full_logged = True
                 return
             self._buffer_full_logged = False
-            self._stream_chunks.append(arr)
+            self._stream_chunks.append((arr, arrived))
             self._stream_total += len(arr)
+            self._stream_mem += len(arr)
             self._stream_event.set()
+
+    def _queue_gap(self, values: int, arrived: float) -> None:
+        """Queue *values* int16 zeros (lost samples); lock held."""
+        self._stream_total += values
+        if self._stream_chunks:
+            previous = self._stream_chunks[-1][0]
+            if isinstance(previous, int):
+                # Consecutive losses form one gap.
+                self._stream_chunks.pop()
+                values += previous
+        self._stream_chunks.append((values, arrived))
+        self._stream_event.set()
+
+    def discard_buffered(self) -> None:
+        """Drop queued samples so the next read_sync() returns fresh data.
+
+        For live displays that read occasionally and want the newest
+        samples rather than a backlog.
+        """
+        with self._stream_lock:
+            self._stream_chunks.clear()
+            self._stream_total = 0
+            self._stream_mem = 0
+            self._stream_event.clear()
 
     def _start_rx(self) -> None:
         """Start the Airspy RX stream (called once, shared by both modes)."""
@@ -803,12 +861,13 @@ class AirspyMiniDevice(SDRDevice):
                 buf = (ctypes.c_int16 * count).from_address(
                     ctypes.cast(t.samples, ctypes.c_void_p).value)
                 arr = np.frombuffer(buf, dtype=np.int16).copy()
-                # Track samples dropped by hardware (USB overflow, etc.)
+                # Samples libairspy lost before this transfer (USB
+                # overflow, ...) are queued as a zero-filled gap.
                 if t.dropped_samples > 0:
-                    self.dropped_samples += t.dropped_samples
                     logger.debug("Airspy dropped %d samples (total %d)",
-                                 t.dropped_samples, self.dropped_samples)
-                self._on_samples(arr)
+                                 t.dropped_samples,
+                                 self.dropped_samples + t.dropped_samples)
+                self._on_samples(arr, int(t.dropped_samples))
             except Exception as exc:
                 # ctypes would only print the traceback and carry on,
                 # silently degrading the capture.  Record the first
@@ -834,9 +893,11 @@ class AirspyMiniDevice(SDRDevice):
         self.dropped_samples = 0
         self.software_dropped_samples = 0
         self._buffer_full_logged = False
+        self.last_read_time = None
         with self._stream_lock:
             self._stream_chunks.clear()
             self._stream_total = 0
+            self._stream_mem = 0
             self._stream_event.clear()
 
     def read_sync(self, num_samples: int) -> np.ndarray:
@@ -851,6 +912,12 @@ class AirspyMiniDevice(SDRDevice):
         ----------
         num_samples : int
             Number of I/Q sample pairs to read.
+
+        Samples lost on the way (libairspy drops, a full internal
+        buffer) are returned as zeros, so sample *k* of the stream is
+        always *k* sample periods after the first.  ``last_read_time``
+        is set to the wall-clock arrival time of the last sample
+        returned.
 
         Returns
         -------
@@ -888,21 +955,8 @@ class AirspyMiniDevice(SDRDevice):
                     f"Airspy RX callback failed: {exc!r}") from exc
             with self._stream_lock:
                 if self._stream_total >= needed:
-                    parts = []
-                    remaining = needed
-                    while remaining > 0:
-                        chunk = self._stream_chunks[0]
-                        if len(chunk) <= remaining:
-                            parts.append(self._stream_chunks.popleft())
-                            self._stream_total -= len(chunk)
-                            remaining -= len(chunk)
-                        else:
-                            parts.append(chunk[:remaining])
-                            self._stream_chunks[0] = chunk[remaining:]
-                            self._stream_total -= remaining
-                            remaining = 0
                     self._stream_event.clear()
-                    return np.concatenate(parts)
+                    return self._take(needed)
 
             wait_time = deadline - time.monotonic()
             if wait_time <= 0:
@@ -913,6 +967,37 @@ class AirspyMiniDevice(SDRDevice):
                     f"collected {have}/{num_samples} samples")
             self._stream_event.wait(timeout=min(wait_time, 0.05))
             self._stream_event.clear()
+
+    def _take(self, needed: int) -> np.ndarray:
+        """Dequeue *needed* int16 values (lock held, enough queued)."""
+        out = np.empty(needed, dtype=np.int16)
+        filled = 0
+        leftover = 0
+        arrived = None
+        while filled < needed:
+            data, arrived = self._stream_chunks[0]
+            length = data if isinstance(data, int) else len(data)
+            take = min(length, needed - filled)
+            if isinstance(data, int):
+                out[filled:filled + take] = 0
+            else:
+                out[filled:filled + take] = data[:take]
+                self._stream_mem -= take
+            leftover = length - take
+            if leftover:
+                rest = leftover if isinstance(data, int) else data[take:]
+                self._stream_chunks[0] = (rest, arrived)
+            else:
+                self._stream_chunks.popleft()
+            filled += take
+        self._stream_total -= needed
+        # The item's last sample arrived at *arrived*; the last sample
+        # returned came *leftover* values earlier.
+        rate = self._sample_rate
+        if arrived is not None:
+            self.last_read_time = (arrived - (leftover // 2) / rate
+                                   if rate else arrived)
+        return out
 
     @property
     def is_open(self) -> bool:

@@ -175,6 +175,10 @@ def scope_cli(args=None):
             _raw_data[0] = raw
             _data[0] = raw_to_complex(raw, bit_depth=bit_depth)
         else:
+            # The device streams continuously but frames are drawn every
+            # ~100 ms: show the newest samples, not a growing backlog
+            # (which also overflows the driver's buffer).
+            device.discard_buffered()
             raw = device.read_sync(block_size)
             if len(raw) < block_size * 2:
                 return False
