@@ -265,7 +265,7 @@ def _main():
                         help="toad file(s) from receivers [default: *.toad]")
     parser.add_argument('-o', '--output', type=argparse.FileType('w'),
                         default='data.toads',
-                        help="output file [default: *.toads]")
+                        help="output file [default: data.toads]")
     parser.add_argument('-m', '--map', type=argparse.FileType('r'),
                         help="schema for mapping DFT index to transmitter ID "
                              "[default: auto-detect]")

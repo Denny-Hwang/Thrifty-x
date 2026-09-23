@@ -1,12 +1,9 @@
 """Robustness tests for ``thriftyx.identify.detect_transmitter_windows``.
 
-This is the auto-classifier that ``thrifty identify`` falls back to when
-no ``--map`` (freq_map) is supplied. The prompt that motivated these
-tests assumed the implementation was an `auto_classify(detections,
-threshold_std=2.0)` that thresholds gaps in the carrier-bin histogram
-with a (mean + 2*std) rule. In fact the implementation is the
-histogram-peak detector ``detect_transmitter_windows``
-(``thriftyx/identify.py:33-83`` / ``thrifty/identify.py:26-76``):
+This is the auto-classifier that ``thriftyx identify`` falls back to
+when no ``--map`` (freq_map) is supplied. It is the histogram-peak
+detector ``detect_transmitter_windows`` inherited unchanged from
+upstream Thrifty, not a threshold on gaps in the carrier-bin histogram:
 
   1. ``cnts = np.bincount(freqs - min(freqs))``
   2. ``low_thresh, high_thresh = 0.4*std(cnts), 1.25*std(cnts)``
@@ -15,11 +12,9 @@ histogram-peak detector ``detect_transmitter_windows``
   4. Each peak becomes one transmitter; split-edges are placed at the
      midpoint of the gap between consecutive peaks.
 
-The two algorithms behave differently on the prompt's test corpus:
-the std-of-gaps version FAILS on the [101, 102, 128] case, but the
-histogram-peak version PASSES (the histogram has 27 zero-count bins
-between the two non-zero clusters, which is well below the low
-threshold).
+A gap-threshold classifier would merge the [101, 102, 128] case; the
+histogram-peak detector separates it (the histogram has 27 zero-count
+bins between the two non-zero clusters, well below the low threshold).
 
 These tests record the actual behaviour of the current implementation.
 """

@@ -325,8 +325,8 @@ def _auto_adjust_block_params(values, explicit=None):
     assumes a ``DEFAULT_CODE_LENGTH``-chip Gold code and may not match
     the actual template.
 
-    Adjustments are logged at WARNING level: changing ``block_size``
-    changes the FFT length and bin width, which the operator should see.
+    Adjusting defaults is logged at INFO (it happens on every Airspy
+    run); keeping an explicit value that is too small is a WARNING.
 
     Parameters
     ----------

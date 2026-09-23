@@ -93,20 +93,25 @@ source .venv/bin/activate
 pip install -e ".[all]"          # numpy + scipy + matplotlib + dev tools
 ```
 
-The `[all]` extra pulls in `[fft]` (pyFFTW), `[analysis]` (matplotlib), and
-`[dev]` (pytest, mypy, ruff). Use `pip install -e ".[analysis]"` for the
-minimum runtime + plotting setup.
+The `[all]` extra pulls in `[fft]` (pyFFTW), `[analysis]` (matplotlib),
+`[gui]` (PyQt5, for the `analyze_detect` viewer) and `[dev]` (pytest,
+mypy, ruff). Use `pip install -e ".[analysis]"` for the minimum runtime +
+plotting setup; on a Raspberry Pi RX node use `.[analysis,fft]` (see
+`rpi/installation_pi5.md`).
 
 ### 2.3 udev Rules (Linux Only)
 
-Airspy devices must be reachable as a non-root user:
+Airspy devices must be reachable as a non-root user.  apt's
+`libairspy0` (pulled in by `airspy`) installs the rules as
+`/usr/lib/udev/rules.d/60-libairspy0.rules` for group `plugdev`:
 
 ```bash
-# Use the rules shipped with airspyone_host (apt's airspy package)
-sudo cp /usr/share/airspy/52-airspy.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger
 sudo usermod -aG plugdev "$USER"    # log out and back in
 ```
+
+(With libairspy built from source, copy `airspy-tools/52-airspy.rules`
+from its tree to `/etc/udev/rules.d/`, then
+`sudo udevadm control --reload && sudo udevadm trigger`.)
 
 For RTL-SDR, install `rtl-sdr` and blacklist the kernel DVB driver:
 
@@ -230,12 +235,13 @@ R820T2 driver distributes it across LNA and Mixer. Typical values:
 - `14.4` to `49.6` — common manual values (the driver snaps to the
   nearest supported step)
 
-Set this in `detector.cfg` as `tuner_gain: 0.0`. When the
-`fastcard` C binary is available it's invoked with `-g <value>`;
-otherwise the Python fallback applies the same gain via librtlsdr.
-
-> The RTL-SDR scope/capture log line "gain = 0.00 dB" is a known
-> cosmetic display issue and does not affect operation.
+Set this in `detector.cfg` as `tuner_gain: 0.0`. It takes effect only
+when the upstream `fastcard` C binary is on `PATH`: capture then runs
+it with `-g <value>`.  Without `fastcard`, capture's Python fallback
+does not open the dongle at all -- it reads samples from `rtl_sdr`
+(`rtl_sdr -f 433.83M -s 2.4M -g 40 - | thriftyx capture rx0.card
+--device-type rtlsdr`), so set the gain with `rtl_sdr -g`; the
+`gain = ... dB` in capture's banner then only echoes `tuner_gain`.
 
 ### 4.3 Airspy 3-Stage Gain (LNA → Mixer → VGA)
 
@@ -347,7 +353,8 @@ A reproducible procedure that works for both Airspy devices:
 5. **Tune Mixer** for fine adjustment of in-band signal level.
 6. **Use VGA last**, only to set the final ADC drive level. If the
    sample histogram from `analyze_detect ... -p overview` shows
-   clipping at ±2047, drop the VGA.
+   samples piling up near ±16384 (libairspy's int16 full scale for the
+   12-bit ADC), drop the VGA.
 
 **Suggested starting points:**
 
@@ -464,10 +471,14 @@ freq_shift_method:  integer
 soa_interpolation:  parabolic
 ```
 
-To switch hardware, copy the appropriate file over `detector.cfg`:
+To switch hardware, copy the appropriate file to `detector.cfg` in the
+directory you run the commands from (every command reads
+`./detector.cfg`).  Keep it outside the checkout: editing the tracked
+`example/` files makes the tree dirty, and `rpi/update_node.sh` refuses
+to update a dirty tree.
 
 ```bash
-cp example/detector_mini.cfg example/detector.cfg
+cp ~/Thrifty-x/example/detector_mini.cfg ~/thriftyx-run/detector.cfg
 ```
 
 ### 5.3 Parameter Dependencies
@@ -477,7 +488,7 @@ keep the table below internally consistent.
 
 | Parameter | Formula | RTL @ 2.4 M | Mini @ 6 M | R2 @ 10 M |
 |---|---|---|---|---|
-| template length | (2^code_len − 1) × sample_rate / chip_rate | 2,457 | 6,139 | 10,232 |
+| template length | (2^code_len − 1) × sample_rate / chip_rate | 2,455 | 6,139 | 10,232 |
 | `block_size`     | ≥ 2 × `block_history`, power of 2 | 16,384 | 32,768 | 65,536 |
 | `block_history`  | ≥ template length | 4,920 | 12,278 | 20,464 |
 | block period     | `block_size` / `sample_rate` | 6.83 ms | 5.46 ms | 6.55 ms |
@@ -633,11 +644,13 @@ production runs.
 ### 6.5 Template Regeneration When Changing Devices
 
 `template.npy` is **specific to a sample rate**. Switching from RTL-SDR
-to Airspy Mini changes the sample count per code period from 2,457 to
-6,139 — the old template won't correlate. Whenever you change the
+to Airspy Mini changes the sample count per code period from 2,455 to
+6,139 — the old template won't correlate (`detect` warns when a
+template's length does not match the sample rate). Whenever you change the
 sample rate (or device):
 
-1. `cp example/detector_<device>.cfg example/detector.cfg`
+1. `cp ~/Thrifty-x/example/detector_<device>.cfg detector.cfg` (in your
+   working directory)
 2. `thriftyx template_generate 10 <code_index> -o template_ideal.npy`
 3. `thriftyx capture initial.card --duration 10`
 4. `thriftyx template_extract initial.card --template template_ideal.npy -o template.npy`
@@ -646,17 +659,16 @@ sample rate (or device):
 
 ## 7. Quick Start: Single TX / Single RX Test
 
-A complete first-light pipeline. Run it from `example/` with a single
-beacon transmitter on air.
+A complete first-light pipeline with a single beacon transmitter on
+air.  It works in its own directory, so the checkout stays clean.
 
 ```bash
-# 0. Activate the environment
-cd ~/Thrifty-x
-source .venv/bin/activate
-cd example
+# 0. Activate the environment and make a working directory
+source ~/Thrifty-x/.venv/bin/activate
+mkdir -p ~/thriftyx-run && cd ~/thriftyx-run
 
 # 1. Pick the device-specific config
-cp detector_r2.cfg detector.cfg          # adjust for your hardware
+cp ~/Thrifty-x/example/detector_r2.cfg detector.cfg   # adjust for your hardware
 
 # 2. Generate a theoretical seed template
 thriftyx template_generate 10 3 -o template_ideal.npy
@@ -686,8 +698,10 @@ thriftyx analyze_detect rx0.card -m 2 -p overview
 
 - Step 3 / 5 — `block #N: mag[bin] = … (thresh = …, noise = …)` lines
   on stderr, one per detected block.
-- Step 6 — lines like `block #… cardet: yes corr: yes …` on stdout;
-  the number of `corr: yes` lines is the detection count.
+- Step 6 — one summary line per block on stdout, like
+  `blk=12; carrier: yes @ 50.171 kHz / 274:+0.21, SNR = ... ; corr: yes @ ...`;
+  the number of `corr: yes` lines is the detection count (the same
+  detections are written to `rx0.toad`).
 - Step 7 — one line per unique transmission written to `rx0.toads`.
 - Step 8 — `analyze_toads` prints summary statistics; `analyze_detect`
   pops up a 4-panel overview plot.
@@ -746,8 +760,10 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 - `--device-type {rtlsdr, airspy_mini, airspy_r2}` — overrides config.
 - `--duration <sec>` — stop after N seconds (default: until Ctrl+C).
-- `--input <path>` — read from a file or `-` (stdin) instead of a live
-  device. Useful with `rtl_sdr -f … -s … - | thriftyx capture …`.
+- `--input <path>` — RTL-SDR Python path only: read raw samples from a
+  file or `-` (stdin, the default) instead of the `fastcard` binary.
+  Useful with `rtl_sdr -f … -s … - | thriftyx capture … --device-type
+  rtlsdr`.
 - `--fastcard <path>` — alternate path to the `fastcard` binary
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
   to its Python carrier detector.
@@ -804,20 +820,27 @@ usable without conversion.
 
 ### 9.2 `.toad` File Format
 
-One detection per line, whitespace-separated:
+One detection per line, 12 whitespace-separated columns in this order
+(`toads_data.DetectionResult.serialize`):
 
-| Column | Meaning |
-|---|---|
-| `rxid` | Receiver ID (`rxid:` from the config) |
-| `timestamp` | Linux epoch time of the block |
-| `block_idx` | Block number within the capture |
-| `soa` | Sample-of-arrival (sub-sample precision) |
-| `corr_idx`, `corr_offset`, `corr_energy` | Correlation peak metadata |
-| `carrier_idx`, `carrier_offset`, `carrier_energy` | Carrier-detection metadata |
-| `noise_rms`, `block_energy` | Noise / energy stats used for thresholding |
+| # | Column | Meaning |
+|---|---|---|
+| 1 | `rxid` | Receiver ID (`rxid:` from the config) |
+| 2 | `timestamp` | Linux epoch time at which the block's last sample arrived |
+| 3 | `block` | Block index within the capture (continues across `--rotate` files) |
+| 4 | `soa` | Sample-of-arrival: `block * (block_size - block_history) + sample + offset` |
+| 5 | `corr_sample` | Correlation peak index within the block |
+| 6 | `corr_offset` | Sub-sample offset of the correlation peak (clipped to ±0.6) |
+| 7 | `corr_energy` | Correlation peak amplitude |
+| 8 | `corr_noise` | Correlation noise RMS |
+| 9 | `carrier_bin` | FFT bin nearest the carrier |
+| 10 | `carrier_offset` | Sub-bin carrier offset, in [-0.5, 0.5] |
+| 11 | `carrier_energy` | Carrier peak amplitude |
+| 12 | `carrier_noise` | Carrier-detection noise RMS |
 
-The `.toads` file produced by `identify` adds a `txid` column and
-de-duplicates per-receiver detections.
+The `.toads` file produced by `identify` inserts a `txid` column after
+`rxid` and drops per-receiver duplicates (a burst detected in two
+overlapping blocks).
 
 **Magnitude note for `carrier_energy` / `corr_energy`.** Samples are
 normalised so that ADC full scale is `|z| = 1` on every device. RTL-SDR
@@ -903,8 +926,8 @@ Use `-p overview` first.
 
 What "good" looks like:
 
-- **Histogram** centred near 0, no clusters at ±127 (RTL-SDR) or
-  ±2047 (Airspy).
+- **Histogram** centred near 0, no clusters at the ends of the range
+  (0 / 255 for RTL-SDR's unsigned bytes, about ±16384 for Airspy).
 - **FFT** with a clear carrier peak inside the configured
   `carrier_window`.
 - **Correlation** with one tall peak and a low side-lobe floor.
