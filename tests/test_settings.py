@@ -119,10 +119,16 @@ class TestAutoAdjustBlockParams:
     hardcoded 1023-chip template estimate.
     """
 
-    def test_defaults_untouched_at_stock_rate(self):
-        values = settings.load(None, None)
+    def test_defaults_untouched_at_rtlsdr_rate(self):
+        values = settings.load({'device_type': 'rtlsdr'}, None)
         assert values['block_size'] == 16384
         assert values['block_history'] == 4920
+
+    def test_default_device_gets_6msps_block_params(self):
+        # The default device (Airspy Mini) defaults to 6 MSPS.
+        values = settings.load(None, None)
+        assert (values['block_size'], values['block_history']) == \
+            (32768, 12278)
 
     def test_defaults_adjusted_at_6msps(self, caplog):
         import logging as _logging

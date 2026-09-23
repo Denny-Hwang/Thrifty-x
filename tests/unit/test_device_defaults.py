@@ -21,8 +21,8 @@ from thriftyx.hal import profiles
 
 class TestDerivedDefaults:
     @pytest.mark.parametrize("device_type,rate,bit_depth", [
-        ('airspy_mini', 3_000_000, 12),
-        ('airspy_r2', 2_500_000, 12),
+        ('airspy_mini', 6_000_000, 12),
+        ('airspy_r2', 10_000_000, 12),
         ('rtlsdr', 2_400_000, 8),
     ])
     def test_defaults_follow_device_type(self, device_type, rate, bit_depth):
@@ -38,8 +38,8 @@ class TestDerivedDefaults:
 
     def test_explicit_values_are_kept(self):
         values = settings.load({'device_type': 'airspy_mini',
-                                'sample_rate': '6M', 'bit_depth': '8'})
-        assert values['sample_rate'] == 6e6
+                                'sample_rate': '3M', 'bit_depth': '8'})
+        assert values['sample_rate'] == 3e6
         assert values['bit_depth'] == 8
 
     def test_block_params_adjust_for_the_derived_rate(self):
@@ -55,7 +55,7 @@ class TestDerivedDefaults:
     def test_help_lists_per_device_defaults(self):
         parser = argparse.ArgumentParser()
         settings.add_argparse_arguments(parser, ['sample_rate'])
-        assert "airspy_r2 2.5M" in parser.format_help()
+        assert "airspy_r2 10M" in parser.format_help()
 
     @pytest.mark.parametrize("device_type", list(profiles.PROFILES))
     def test_stock_config_validates_without_warnings(self, device_type):

@@ -181,5 +181,8 @@ def test_detect_cli_processes_6msps_card_without_config(monkeypatch,
 def test_detect_cli_reports_headerless_mismatch_cleanly(monkeypatch,
                                                          tmp_path):
     with pytest.raises(FileFormatError, match="block 0 holds"):
-        _run_detect(monkeypatch, tmp_path, _card_text(header=False),
+        # 16384-sample blocks, but a headerless card cannot say so and
+        # the default (6 MSPS) geometry expects 32768.
+        _run_detect(monkeypatch, tmp_path,
+                    _card_text(header=False, block_size=16384),
                     '--bit-depth', '12', template_len=2455)
