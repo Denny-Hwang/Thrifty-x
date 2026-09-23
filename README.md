@@ -269,7 +269,7 @@ defaults come from the `--device-type` profile.
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--sample-rate, -s` | by device: `3M` Mini, `2.5M` R2, `2.4M` RTL-SDR | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M.  `tdoa` falls back to the same default. |
+| `--sample-rate, -s` | by device: `6M` Mini, `10M` R2, `2.4M` RTL-SDR | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M.  `tdoa` falls back to the same default.  At 10 MSPS on a USB 2.0 host, enable `--packing`. |
 | `--freq, -f`        | `433.83M` | Tuner centre frequency (Hz) |
 | `--block-size, -b`  | `16384` | Samples per block; must be a power of 2 |
 | `--history, -y`     | `4920`  | Sample overlap between blocks (block_history) |
@@ -278,8 +278,9 @@ defaults come from the `--device-type` profile.
 > `block_size` / `block_history` are left at their defaults but the
 > sample rate makes them too small for the estimated template length
 > (assuming a 1023-chip Gold code), the loader enlarges them and logs a
-> warning — e.g. at 6 MSPS the defaults become `32768` / `12278`
-> (matching the user-guide tables). Explicitly-set values are **never**
+> warning.  With the default Airspy rates the effective defaults are
+> therefore `32768` / `12278` (Mini, 6 MSPS) and `65536` / `20464`
+> (R2, 10 MSPS), matching the user-guide tables. Explicitly-set values are **never**
 > rewritten; if they look too small a warning is logged and the value
 > is kept. Note that changing `block_size` changes the FFT length and
 > bin width.

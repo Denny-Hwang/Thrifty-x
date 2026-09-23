@@ -42,7 +42,9 @@ class DeviceProfile:
         Supported I/Q sample rates (Hz).  For RTL-SDR these are the
         common rates; others only produce a warning.
     default_sample_rate : int
-        Rate used when ``sample_rate`` is not configured.
+        Rate used when ``sample_rate`` is not configured, by capture and
+        by every later stage (detect for headerless input, tdoa), so a
+        default capture is processed at the rate it was recorded.
     frequency_range : (int, int)
         Tunable centre-frequency range (Hz).
     bit_depth : int
@@ -89,10 +91,14 @@ class DeviceProfile:
 _AIRSPY_GAIN_STAGES = MappingProxyType(
     {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)})
 
+# Airspy defaults are each board's highest rate, the canonical rate of
+# the shipped example configs (example/detector_mini.cfg, _r2.cfg).
+# Block parameters left at their defaults are enlarged for it by
+# settings (32768/12278 at 6 MSPS, 65536/20464 at 10 MSPS).
 AIRSPY_MINI = DeviceProfile(
     name="Airspy Mini",
     sample_rates=(3_000_000, 6_000_000),
-    default_sample_rate=3_000_000,
+    default_sample_rate=6_000_000,
     frequency_range=(24_000_000, 1_800_000_000),
     bit_depth=12,
     sample_format=SampleFormat.INT16,
@@ -104,7 +110,7 @@ AIRSPY_MINI = DeviceProfile(
 AIRSPY_R2 = DeviceProfile(
     name="Airspy R2",
     sample_rates=(2_500_000, 10_000_000),
-    default_sample_rate=2_500_000,
+    default_sample_rate=10_000_000,
     frequency_range=(24_000_000, 1_800_000_000),
     bit_depth=12,
     sample_format=SampleFormat.INT16,

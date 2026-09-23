@@ -739,7 +739,7 @@ The dispatch table lives in `thriftyx/cli.py`.
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,
   `analyze_detect`).  Raw files record nothing about the capture, so
   the sample format and rate follow `--device-type` (default Airspy
-  Mini: int16, 3 MSPS) unless `--bit-depth` / `--sample-rate` are given;
+  Mini: int16, 6 MSPS) unless `--bit-depth` / `--sample-rate` are given;
   for `rtl_sdr` output pass `--device-type rtlsdr`.
 
 ### Selected `capture` options
