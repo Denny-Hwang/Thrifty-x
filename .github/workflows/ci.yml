@@ -17,7 +17,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev,analysis]'
       - name: Run ruff (style + dead code)
-        # The whole tree: package, tests, scripts/, diag/ and rpi/ helpers.
+        # The whole tree: package, tests, scripts/ and rpi/ helpers.
         run: ruff check .
       - name: Run mypy (static type check)
         run: mypy thriftyx/

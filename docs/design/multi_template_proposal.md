@@ -110,10 +110,9 @@ templates:
 | Option 2 (N templates, txid-guided) | 1 | 1 | 1 (one chosen template) |
 
 **Option 1's cost grows linearly with N.** With Thrifty-X's 2 templates
-(TX1, TX2) it doubles correlation cost. Per the rpi5 deployment
-report (`docs/rpi5_deployment_report.md` §1.1: "single-thread FFT
-... 10 MSPS"), the Pi 5 has headroom to absorb 2x correlation cost in
-batch mode but it could matter at real-time edge.
+(TX1, TX2) it doubles correlation cost. The Pi 5 has headroom to
+absorb 2x correlation cost in batch mode (its single-thread FFT keeps
+up with 10 MSPS), but it could matter at the real-time edge.
 
 **Option 2's cost is identical to the status quo** — we still only do
 one correlation per block, just against a different template.
@@ -159,7 +158,8 @@ prohibitively expensive on Pi 5 in real-time; Option 2 stays flat.
 1. **Cost.** Per-block work is unchanged; throughput on Pi 5 stays
    intact.
 2. **Semantics.** The freq-map → txid → template chain is the natural
-   evolution of how Thrifty already uses `--freq-map`. A user who's
+   evolution of how Thrifty already maps frequencies to transmitters
+   (`identify --map`). A user who's
    already curated a freq-map only needs to provide a parallel
    template-map.
 3. **Test surface.** Single template selection per block keeps the
@@ -181,8 +181,8 @@ unidentified.
 - Cross-correlation against a *bank* of templates simultaneously
   (would require a different signal-processing approach; not a quick
   win on existing scipy.fft hardware).
-- Per-template threshold tuning (separate concern; see
-  `docs/verification/threshold_path.md`).
+- Per-template threshold tuning (separate concern: thresholds are
+  SNR expressions evaluated identically for every template).
 
 ## 9. Implementation order if/when this is greenlit
 
@@ -196,11 +196,12 @@ unidentified.
 5. Optional: implement Option 1 if a customer asks for
    freq-map-free operation.
 
-## 10. Linked artefacts
+## 10. Background
 
-- `docs/verification/threshold_path.md` — confirms thresholds are
-  template-agnostic (so multi-template doesn't need per-template
-  thresholds).
-- `docs/verification/auto_classify_robustness.md` — explains why
-  `--freq-map` is already the recommended production workflow.
-- `docs/rpi5_deployment_report.md` §1.1 — Pi 5 throughput context.
+- Thresholds are SNR expressions evaluated the same way for every
+  template, so multi-template detection needs no per-template
+  thresholds.
+- The histogram auto-classifier in `identify` loses a transmitter with
+  very few detections next to a busy one, which is why an explicit
+  frequency map (`identify --map`) is already the recommended
+  production workflow.
