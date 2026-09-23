@@ -130,8 +130,29 @@ static void test_cancel_unblocks_producer(void) {
     circbuf_destroy(&cb);
 }
 
+/* A stalled producer (Airspy unplugged) must not block the reader
+ * forever: the timed get returns CIRCBUF_TIMEOUT, consumes nothing, and
+ * succeeds once the data arrives. */
+static void test_get_timeout_consumes_nothing(void) {
+    enum { SIZE = 64 };
+    char in[16], out[16];
+    circbuf_t cb;
+    CHECK(circbuf_init(&cb, SIZE));
+    fill(in, sizeof(in), 3);
+    CHECK(circbuf_put(&cb, in, 8));
+    CHECK(circbuf_get_timeout(&cb, out, 16, 50) == CIRCBUF_TIMEOUT);
+    CHECK(cb.len == 8);
+    CHECK(circbuf_put(&cb, in + 8, 8));
+    CHECK(circbuf_get_timeout(&cb, out, 16, 50) == CIRCBUF_OK);
+    CHECK(memcmp(in, out, 16) == 0);
+    circbuf_cancel(&cb);
+    CHECK(circbuf_get_timeout(&cb, out, 1, 50) == CIRCBUF_CANCELLED);
+    circbuf_destroy(&cb);
+}
+
 int main(void) {
     alarm(10);  /* any deadlock fails the test instead of hanging CI */
+    test_get_timeout_consumes_nothing();
     test_put_exactly_size_does_not_block();
     test_put_larger_than_size_fails();
     test_fill_to_full_across_wrap();

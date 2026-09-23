@@ -1,10 +1,30 @@
+#include <stdio.h>
 #include <sys/time.h>
 
 #include "parse.h"
 #include "fargs.h"
 
+/* Block geometry defaults follow thriftyx capture
+ * (settings._auto_adjust_block_params): start from 16384 / 4920 and,
+ * when the template (a 1023-chip Gold code at the Thrifty chip rate)
+ * does not fit that history, use twice the template as history and the
+ * next power of two that holds template + history and at least twice
+ * the history.  3M and 2.5M keep 16384 / 4920; 6M: 32768 / 12278;
+ * 10M: 65536 / 20464. */
 #define DEFAULT_BLOCK_LEN           16384
 #define DEFAULT_HISTORY_LEN         4920
+#define CHIP_RATE                   999707.0
+#define CODE_LENGTH                 1023
+#define MAX_BLOCK_LEN               65536
+
+/* Airspy sample rates (Mini 3M/6M, R2 2.5M/10M).  libairspy reads a
+ * "rate" below 100 as an index into its rate table, so a typo such as
+ * "-s 6" would select some rate while the card header recorded 6. */
+#define MIN_SDR_SAMPLE_RATE         1000000
+#define MAX_SDR_SAMPLE_RATE         10000000
+/* R820T2 tuning range. */
+#define MIN_SDR_FREQ                24000000.0
+#define MAX_SDR_FREQ                1800000000.0
 #define DEFAULT_THRESHOLD_CONST     100
 #define DEFAULT_THRESHOLD_SNR       2
 #define DEFAULT_CARRIER_FREQ_MIN    0
@@ -42,11 +62,13 @@ const fargs_option_t fargs_options[] = {
     // Blocks
     {0, 0, 0, 0, "Block settings:", 2},
     {"block-len", 'b', "<length>", 0,
-        "Length of fixed-sized blocks, which should be a power of two "
-        "[default: 16384]", 2},
+        "Length of fixed-sized blocks, a power of two up to 65536 "
+        "[default: derived from the sample rate: 32768 at 6M]", 2},
     {"history", 'h', "<length>", 0,
         "The number of samples at the beginning of a block that should be "
-        "copied from the end of the previous block [default: 4920]", 2},
+        "copied from the end of the previous block "
+        "[default: 4920, or twice the template length when that is "
+        "longer: 12278 at 6M]", 2},
     {"skip", 'k', "<num_blocks>", 0,
         "Number of blocks to skip while waiting for the SDR to stabilize "
         "[default: 1]", 2},
@@ -56,7 +78,7 @@ const fargs_option_t fargs_options[] = {
     {"frequency", 'f', "<hz>", 0,
         "Frequency to tune to [default: 433.83M]", 3},
     {"sample-rate", 's', "<sps>", 0,
-        "Sample rate [default: 6M]", 3},
+        "Sample rate: Mini 3M or 6M, R2 2.5M or 10M [default: 6M]", 3},
     {"gain", 'g', "<index>", 0,
         "LNA gain index (0-14) [default: 0]", 3},
     {"mixer-gain", 'M', "<index>", 0,
@@ -88,8 +110,10 @@ fargs_t* fargs_new() {
         return NULL;
     }
     
-    fargs->block_len = DEFAULT_BLOCK_LEN;
-    fargs->history_len = DEFAULT_HISTORY_LEN;
+    fargs->block_len = 0;       /* derived in fargs_finalize */
+    fargs->history_len = 0;
+    fargs->block_len_set = false;
+    fargs->history_len_set = false;
     
     fargs->threshold_const = DEFAULT_THRESHOLD_CONST;
     fargs->threshold_snr = DEFAULT_THRESHOLD_SNR;
@@ -112,6 +136,53 @@ fargs_t* fargs_new() {
     fargs->silent = false;
 
     return fargs;
+}
+
+/* Parse a gain index 0..max, printing why when it is not one. */
+static bool parse_gain_index(const char* arg, int max, const char* stage,
+                             int* out) {
+    char* endptr;
+    long value = strtol(arg, &endptr, 10);
+    if (*arg == '\0' || *endptr != '\0' || value < 0 || value > max) {
+        fprintf(stderr, "invalid %s gain index '%s': expected 0-%d\n",
+                stage, arg, max);
+        return false;
+    }
+    *out = (int)value;
+    return true;
+}
+
+int fargs_finalize(fargs_t *fa) {
+    size_t template_len = (size_t)(fa->sdr_sample_rate / CHIP_RATE
+                                   * CODE_LENGTH);
+    if (!fa->history_len_set) {
+        fa->history_len = DEFAULT_HISTORY_LEN;
+        if (fa->history_len + 1 < template_len) {
+            fa->history_len = 2 * template_len;
+        }
+    }
+    if (!fa->block_len_set) {
+        size_t min_block = template_len + fa->history_len + 1;
+        if (2 * fa->history_len > min_block) {
+            min_block = 2 * fa->history_len;
+        }
+        size_t block = DEFAULT_BLOCK_LEN;
+        while (block < min_block) {
+            block *= 2;
+        }
+        fa->block_len = block;
+    }
+    if (fa->block_len > MAX_BLOCK_LEN) {
+        fprintf(stderr, "block length %zu exceeds %d; set -b/-h "
+                "explicitly\n", fa->block_len, MAX_BLOCK_LEN);
+        return FARGS_INVALID_VALUE;
+    }
+    if (fa->history_len >= fa->block_len) {
+        fprintf(stderr, "history length %zu must be smaller than the "
+                "block length %zu\n", fa->history_len, fa->block_len);
+        return FARGS_INVALID_VALUE;
+    }
+    return 0;
 }
 
 int fargs_parse_opt(fargs_t *fargs,
@@ -148,16 +219,18 @@ int fargs_parse_opt(fargs_t *fargs,
              * corr_detector.cpp), so an FFT longer than 65536 bins
              * would silently wrap peak indices.  Also enforce the
              * documented power-of-two requirement (FFT length). */
-            if (fargs->block_len > 65536
+            if (fargs->block_len > MAX_BLOCK_LEN
                     || (fargs->block_len & (fargs->block_len - 1)) != 0) {
                 return FARGS_INVALID_VALUE;
             }
+            fargs->block_len_set = true;
             break;
         case 'h':
             fargs->history_len = strtoul(arg, &endptr, 10);
             if (*endptr != '\0' || fargs->history_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
+            fargs->history_len_set = true;
             break;
         case 'k':
             fargs->skip = strtoul(arg, &endptr, 10);
@@ -168,33 +241,51 @@ int fargs_parse_opt(fargs_t *fargs,
         case 'q':
             fargs->silent = true;
             break;
-        case 'f':
-            fargs->sdr_freq = (uint32_t)parse_si_float(arg);
+        case 'f': {
+            double freq = parse_si_float(arg);
+            if (!(freq >= MIN_SDR_FREQ && freq <= MAX_SDR_FREQ)) {
+                fprintf(stderr, "invalid frequency '%s': the Airspy tunes "
+                        "24M-1.8G\n", arg);
+                return FARGS_INVALID_VALUE;
+            }
+            fargs->sdr_freq = (uint32_t)freq;
             break;
+        }
         case 'g':
-            fargs->sdr_gain = (int)strtoul(arg, &endptr, 10);
-            if (*endptr != '\0') {
+            if (!parse_gain_index(arg, 14, "LNA", &fargs->sdr_gain)) {
                 return FARGS_INVALID_VALUE;
             }
             break;
-        case 'M':
-            fargs->sdr_mixer_gain = (uint8_t)strtoul(arg, &endptr, 10);
-            if (*endptr != '\0') {
+        case 'M': {
+            int gain;
+            if (!parse_gain_index(arg, 15, "mixer", &gain)) {
                 return FARGS_INVALID_VALUE;
             }
+            fargs->sdr_mixer_gain = (uint8_t)gain;
             break;
-        case 'V':
-            fargs->sdr_vga_gain = (uint8_t)strtoul(arg, &endptr, 10);
-            if (*endptr != '\0') {
+        }
+        case 'V': {
+            int gain;
+            if (!parse_gain_index(arg, 15, "VGA", &gain)) {
                 return FARGS_INVALID_VALUE;
             }
+            fargs->sdr_vga_gain = (uint8_t)gain;
             break;
+        }
         case 'B':
             fargs->sdr_bias_tee = 1;
             break;
-        case 's':
-            fargs->sdr_sample_rate = (uint32_t)parse_si_float(arg);
+        case 's': {
+            double rate = parse_si_float(arg);
+            if (!(rate >= MIN_SDR_SAMPLE_RATE
+                    && rate <= MAX_SDR_SAMPLE_RATE)) {
+                fprintf(stderr, "invalid sample rate '%s': expected Mini "
+                        "3M or 6M, R2 2.5M or 10M\n", arg);
+                return FARGS_INVALID_VALUE;
+            }
+            fargs->sdr_sample_rate = (uint32_t)(rate + 0.5);
             break;
+        }
         case 'd':
             fargs->sdr_dev_index = strtoul(arg, &endptr, 10);
             if (*endptr != '\0') {

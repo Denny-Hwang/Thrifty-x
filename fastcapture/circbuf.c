@@ -1,5 +1,7 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "circbuf.h"
 
@@ -30,7 +32,18 @@ bool circbuf_init(circbuf_t* circbuf, size_t size) {
         goto fail;
     }
     produce_ok = 1;
-    if (pthread_cond_init(&circbuf->can_consume, NULL) != 0) {
+    // The consumer's timed wait (circbuf_get_timeout) measures on the
+    // monotonic clock, so an NTP step cannot stretch or cut it short.
+    pthread_condattr_t attr;
+    if (pthread_condattr_init(&attr) != 0) {
+        goto fail;
+    }
+    int cond_ret = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (cond_ret == 0) {
+        cond_ret = pthread_cond_init(&circbuf->can_consume, &attr);
+    }
+    pthread_condattr_destroy(&attr);
+    if (cond_ret != 0) {
         goto fail;
     }
     consume_ok = 1;
@@ -84,6 +97,23 @@ void circbuf_free(circbuf_t* circbuf) {
 }
 
 bool circbuf_get(circbuf_t* circbuf, char* dest, size_t len) {
+    return circbuf_get_timeout(circbuf, dest, len, 0) == CIRCBUF_OK;
+}
+
+circbuf_status_t circbuf_get_timeout(circbuf_t* circbuf, char* dest,
+                                     size_t len, unsigned timeout_ms) {
+    circbuf_status_t status = CIRCBUF_CANCELLED;
+    struct timespec deadline;
+    if (timeout_ms > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += timeout_ms / 1000;
+        deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+        if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec += 1;
+            deadline.tv_nsec -= 1000000000L;
+        }
+    }
+
     pthread_mutex_lock(&circbuf->mutex);
 
     if (len > circbuf->size) {
@@ -92,7 +122,16 @@ bool circbuf_get(circbuf_t* circbuf, char* dest, size_t len) {
 
     // wait for producer on underflow
     while (!circbuf->cancel && circbuf->len < len) {
-        pthread_cond_wait(&circbuf->can_consume, &circbuf->mutex);
+        if (timeout_ms == 0) {
+            pthread_cond_wait(&circbuf->can_consume, &circbuf->mutex);
+        } else if (pthread_cond_timedwait(&circbuf->can_consume,
+                                          &circbuf->mutex,
+                                          &deadline) == ETIMEDOUT) {
+            if (!circbuf->cancel && circbuf->len < len) {
+                status = CIRCBUF_TIMEOUT;
+                goto fail;
+            }
+        }
     }
 
     if (circbuf->cancel) {
@@ -117,11 +156,11 @@ bool circbuf_get(circbuf_t* circbuf, char* dest, size_t len) {
     pthread_cond_signal(&circbuf->can_produce);
 
     pthread_mutex_unlock(&circbuf->mutex);
-    return true;
+    return CIRCBUF_OK;
 
 fail:
     pthread_mutex_unlock(&circbuf->mutex);
-    return false;
+    return status;
 }
 
 bool circbuf_put(circbuf_t* circbuf, char* src, size_t len) {

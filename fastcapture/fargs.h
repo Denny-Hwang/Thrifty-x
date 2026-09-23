@@ -38,6 +38,13 @@ int fargs_parse_opt(fargs_t *fargs,
                     int key,
                     char *arg);
 
+/// Complete the arguments after parsing: derive block_len/history_len
+/// from the sample rate when they were not given (the correlation needs
+/// history >= template length, which grows with the rate), and check
+/// that the geometry is consistent.  Prints the problem and returns
+/// FARGS_INVALID_VALUE when it is not; 0 otherwise.
+int fargs_finalize(fargs_t *fargs);
+
 // TODO: move print functions to another module
 void fargs_print_summary(fargs_t *fa, FILE* out, bool sdr);
 void fargs_print_card_header(fargs_t *fa,

@@ -44,6 +44,18 @@ void circbuf_free(circbuf_t* circbuf);
 /// Will wait for producer if enough data is not available.
 bool circbuf_get(circbuf_t* circbuf, char* dest, size_t len);
 
+typedef enum {
+    CIRCBUF_OK = 0,
+    CIRCBUF_CANCELLED,   // cancelled, or len > size (can never be read)
+    CIRCBUF_TIMEOUT,     // not enough data arrived in time; nothing read
+} circbuf_status_t;
+
+/// Like circbuf_get, but give up after "timeout_ms" milliseconds without
+/// enough data (0 waits forever).  On CIRCBUF_TIMEOUT nothing has been
+/// consumed, so the call can simply be repeated.
+circbuf_status_t circbuf_get_timeout(circbuf_t* circbuf, char* dest,
+                                     size_t len, unsigned timeout_ms);
+
 /// Write exactly "len" bytes to the circular buffer.
 /// If the data does not fit in the free space, increases the overflow
 /// counter and waits for the consumer.  A write may fill the buffer

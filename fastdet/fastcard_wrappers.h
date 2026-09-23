@@ -108,6 +108,8 @@ class CFile {
     void close();
     void printf(const char* format, ...);
     FILE* file() { return file_; };
+    // Whether a write to the file has failed.
+    bool failed() { return file_ != NULL && ferror(file_); };
 
     // non-copyconstructible
     CFile(const CFile&) = delete;

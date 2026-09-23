@@ -14,6 +14,8 @@ extern "C"
 typedef struct {
     size_t block_len;
     size_t history_len;
+    bool block_len_set;     /* given with -b (else derived from the rate) */
+    bool history_len_set;   /* given with -h (else derived from the rate) */
     
     float threshold_const;
     float threshold_snr;

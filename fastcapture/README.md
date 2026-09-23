@@ -16,9 +16,13 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Bias Tee | Not supported | Supported |
 | Max Sample Rate | ~2.4 MSPS | 3/6 MSPS (Mini), 2.5/10 MSPS (R2) |
 | Sample ring buffer | 32 MiB fixed | max(1 s of samples, 32 MiB); libairspy delivers 256 KiB per USB transfer |
-| Streaming starts | `reader_start` | `reader_start`, after FFT planning and signal-handler setup |
+| Streaming starts | `reader_start` | `reader_start`, after FFT planning |
 | Block timestamp | Arrival of the block's last sample (stamped in the USB callback) | Same: per-transfer arrival times are recorded in the callback (`stamp_queue.c`), not the time the block leaves the ring |
-| Ctrl-C / SIGTERM | Clean stop | Clean stop: exit status 0 and capture statistics printed |
+| Ctrl-C / SIGTERM | Clean stop | Clean stop: exit status 0 and capture statistics printed. Signals are taken by a dedicated thread (`sigthread.c`), not a signal handler; a second Ctrl-C exits at once |
+| Block geometry default | 16384 / 4920 | Enlarged for `-s` exactly as `thriftyx capture` does: 16384 / 4920 at 2.5M and 3M, 32768 / 12278 at 6M, 65536 / 20464 at 10M (`-b`/`-h` override) |
+| Device unplugged | Hangs | The reader notices within 1 s (`airspy_is_streaming`), or after 10 s without samples, and exits non-zero so a supervisor restarts it |
+| Output write fails | — | Full disk or a closed pipe ends the run with an error (SIGPIPE is ignored) |
+| Argument checks | — | `-s` must be a rate (1M-10M: libairspy reads values below 100 as a rate *index*), `-f` 24M-1.8G, `-g` 0-14, `-M`/`-V` 0-15 |
 
 ## Hardware-Independent Components (unchanged)
 
@@ -38,11 +42,15 @@ These components operate on float FFT data and have no hardware dependency:
 ## Building
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build          # Release (optimised) unless CMAKE_BUILD_TYPE is set
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # ring-buffer and timestamp unit tests
 sudo cmake --install build
 ```
+
+Replaying a card through `--card` needs the geometry it was captured
+with: pass `-b`/`-h` (see its `#v2` header) when it differs from the
+default for `-s`.
 
 Configuration fails if libairspy, FFTW3f or volk are not found by
 pkg-config.
