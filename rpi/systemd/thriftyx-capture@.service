@@ -1,12 +1,20 @@
 [Unit]
 Description=Thrifty-X capture service for receiver %i
 Documentation=https://github.com/Denny-Hwang/thrifty-x
-After=network-online.target time-sync.target
-Wants=network-online.target time-sync.target
-# Rate-limit restarts (these keys live in [Unit]; systemd ignores them
-# under [Service]).
-StartLimitIntervalSec=300
-StartLimitBurst=10
+# TDOA needs receiver clocks in sync before the first timestamp is
+# written.  chrony-wait.service (shipped with Debian's chrony) blocks
+# until chronyd reports a synchronised clock, up to its start timeout;
+# ordering after it keeps capture from stamping cards with an unsynced
+# clock at boot (the Pi 5 RTC has no battery by default).  Wants=, not
+# Requires=: if sync cannot be reached in time, capture still starts and
+# chronyd keeps correcting, rather than the node never recording.
+After=network-online.target time-sync.target chrony-wait.service
+Wants=network-online.target time-sync.target chrony-wait.service
+# No start rate limit: an unattended node must keep retrying through a
+# USB brown-out or a slow Airspy enumeration.  (With the old limit of 10
+# starts in 300 s, about 100 s of trouble stopped the unit for good
+# until someone ran `systemctl reset-failed`.)  This key lives in [Unit].
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -28,8 +36,10 @@ ExecStart=/bin/bash -lc '\
         --config "${THRIFTYX_CONFIG}" \
     '
 
-# Restart on any failure (incl. USB enumeration races at boot).
-Restart=on-failure
+# Restart whenever capture exits, including a clean exit (e.g. the
+# device vanished and read_sync ended the stream).  `systemctl stop`
+# still stops it.
+Restart=always
 RestartSec=10
 
 # Hardening — relax if blocking your setup.

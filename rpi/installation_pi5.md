@@ -75,8 +75,17 @@ groups | grep plugdev
 ```bash
 sudo systemctl disable --now systemd-timesyncd
 sudo systemctl enable --now chrony
+# Make time-sync.target wait for a real sync at boot.  The capture unit
+# is ordered after chrony-wait.service, so it does not stamp cards with
+# an unsynced clock (the Pi 5 RTC has no battery by default).
+sudo systemctl enable chrony-wait.service
 chronyc tracking         # Check synchronization status
 ```
+
+`chrony-wait.service` gives up after its start timeout (three minutes
+on Debian's unit) so a node without network still records; chronyd
+keeps correcting the clock afterwards.  Check `chronyc tracking` before
+trusting the first minutes of such a capture.
 
 For sites without WAN, configure one of the adjacent nodes as a chrony server.
 
@@ -104,16 +113,16 @@ pip install -e ".[analysis,fft]"   # fft = pyfftw, analysis = matplotlib
 >    pip install -e ".[analysis]"   # excluding the fft extra
 >    ```
 >
-> 2. **Build with the bundled long-double removal patch applied** —
->    `rpi/pyFFTW-0.9.2-no-fftwl.patch` is for that purpose. Roughly:
+> 2. **Build pyfftw from source against Debian's FFTW** — `libfftw3-dev`
+>    ships the single, double and long-double libraries the source build
+>    links, so no patch is needed:
 >    ```bash
->    pip download --no-binary=:all: --no-deps pyfftw==0.13.* -d /tmp/pyfftw-src
->    cd /tmp/pyfftw-src && tar xzf pyFFTW-*.tar.gz && cd pyFFTW-*
->    patch -p1 < ~/thrifty-x/rpi/pyFFTW-0.9.2-no-fftwl.patch
->    pip install .
+>    sudo apt install -y libfftw3-dev
+>    pip install -e ".[analysis,fft]"
+>    python -c "import pyfftw; print(pyfftw.__version__)"
 >    ```
->    After applying, verify with
->    `python -c "import pyfftw; print(pyfftw.__version__)"`.
+>    (`rpi/pyFFTW-0.9.2-no-fftwl.patch` is a legacy patch for pyFFTW
+>    0.9.2 and does not apply to current releases.)
 
 ### 4.1 Installation Verification
 
