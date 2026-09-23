@@ -1,0 +1,100 @@
+# Copyright (C) 2025-2026 Sungjoo Hwang, PNNL
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""estimate_tdoas against exact arrival times.
+
+Two receivers with unsynchronised sample clocks (offset, frequency
+error and quadratic drift) record a beacon at a known position and a
+mobile transmitter.  The beacon-referenced clock model must turn the
+receivers' sample-of-arrival values back into the true time difference
+of arrival of the mobile transmitter.
+"""
+
+import numpy as np
+
+from thriftyx import tdoa_est
+from thriftyx.toads_data import CorrDetectionInfo, DetectionResult
+
+C = tdoa_est.SPEED_OF_LIGHT
+FS = 6e6
+RX_POS = {0: (0.0, 0.0), 1: (1200.0, 0.0)}
+BEACON = 7
+MOBILE = 3
+BEACON_POS = {BEACON: (1000.0, 800.0)}   # 456 m nearer rx1
+MOBILE_POS = (350.0, 250.0)
+
+
+def _dist(a, b):
+    return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+
+def _sample_index(rxid, t):
+    """Receiver *rxid*'s sample counter at true time *t*."""
+    if rxid == 0:
+        return FS * t
+    # Offset, +20 ppm frequency error and a drifting rate.
+    return 1_234_567.25 + FS * (1 + 20e-6) * t + 0.5 * FS * 3e-6 * t ** 2
+
+
+def _detections():
+    detections, matches = [], []
+    emissions = ([(BEACON, BEACON_POS[BEACON], 0.05 * i) for i in range(20)]
+                 + [(MOBILE, MOBILE_POS, 0.025 + 0.05 * i)
+                    for i in range(19)])
+    for txid, pos, t_emit in emissions:
+        group = []
+        for rxid, rx in RX_POS.items():
+            arrival = t_emit + _dist(pos, rx) / C
+            info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
+            detections.append(DetectionResult(
+                arrival, 0, _sample_index(rxid, arrival), None, info,
+                rxid=rxid, txid=txid))
+            group.append(len(detections) - 1)
+        matches.append(group)
+    return detections, matches
+
+
+def _true_tdoa():
+    return (_dist(MOBILE_POS, RX_POS[0]) - _dist(MOBILE_POS, RX_POS[1])) / C
+
+
+def test_mobile_tdoa_matches_geometry():
+    detections, matches = _detections()
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    assert failures == []
+    assert len(groups) == 19
+    assert all(g.tx == MOBILE for g in groups)
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    # 1e-10 s = 3 cm: the quadratic model captures this clock exactly.
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+def test_beacon_geometry_is_applied():
+    """Treating the beacon as equidistant (dropping its TDOA) must give
+    a visibly wrong answer -- the check an equidistant test beacon could
+    never make."""
+    detections, matches = _detections()
+    groups, _ = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    beacon_tdoa = (_dist(BEACON_POS[BEACON], RX_POS[0])
+                   - _dist(BEACON_POS[BEACON], RX_POS[1])) / C
+    assert abs(beacon_tdoa) * C > 400
+    got = groups[0].tdoas['tdoa'][0]
+    assert abs(got - _true_tdoa()) * C < 0.1
+    assert abs(got - (_true_tdoa() - beacon_tdoa)) * C > 400
+
+
+def test_too_few_beacons_is_a_failure_not_a_guess():
+    detections, matches = _detections()
+    # Keep two beacon groups: a quadratic model needs three.
+    beacon_groups = [m for m in matches
+                     if detections[m[0]].txid == BEACON][:2]
+    mobile_groups = [m for m in matches
+                     if detections[m[0]].txid == MOBILE]
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, beacon_groups + mobile_groups, 0.3, BEACON_POS,
+        RX_POS, FS)
+    assert groups == []
+    assert len(failures) == len(mobile_groups)
+
