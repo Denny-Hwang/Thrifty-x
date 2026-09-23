@@ -30,6 +30,25 @@
 #include "circbuf.h"
 #include "reader.h"
 
+/* Ring-buffer sizing.  libairspy hands the callback a fixed 256 KiB of
+ * int16 I/Q per USB transfer, independent of the FFT block size, so the
+ * ring must be sized from the sample rate, not from block_size: it has
+ * to absorb at least one second of samples (4 bytes per I/Q pair) and
+ * never less than the 32 MiB the original RTL-SDR fastcard used.  The
+ * former block_size * 16 bytes was exactly one transfer at the default
+ * block size, which deadlocked, and smaller than one transfer below it,
+ * which silently discarded every sample. */
+#define AIRSPY_RING_MIN_BYTES   ((size_t)32 * 1024 * 1024)
+#define AIRSPY_RING_SECONDS     1
+#define AIRSPY_BYTES_PER_SAMPLE (2 * sizeof(int16_t))
+
+static size_t _ring_size(uint32_t sample_rate)
+{
+    size_t by_rate = (size_t)sample_rate * AIRSPY_RING_SECONDS
+                     * AIRSPY_BYTES_PER_SAMPLE;
+    return by_rate > AIRSPY_RING_MIN_BYTES ? by_rate : AIRSPY_RING_MIN_BYTES;
+}
+
 /* Internal state for async capture */
 typedef struct {
     struct airspy_device *device;
@@ -72,7 +91,21 @@ static int _airspy_callback(airspy_transfer_t *transfer)
     int16_t *src = (int16_t *)transfer->samples;
     size_t   n   = (size_t)(transfer->sample_count) * 2; /* I and Q */
 
-    circbuf_put(&state->circbuf, (char *)src, n * sizeof(int16_t));
+    if (!circbuf_put(&state->circbuf, (char *)src, n * sizeof(int16_t))) {
+        /* A put fails only when the ring was cancelled (shutdown, when
+         * running is already 0) or when the transfer can never fit.
+         * The latter is fatal: every later transfer would be dropped too
+         * and the consumer would wait forever for data.  Cancel the ring
+         * so the consumer's read fails, and stop streaming. */
+        if (atomic_exchange(&state->running, 0)) {
+            fprintf(stderr,
+                    "airspy: a %zu-byte transfer does not fit the %zu-byte "
+                    "ring buffer; stopping capture\n",
+                    n * sizeof(int16_t), state->circbuf.size);
+            circbuf_cancel(&state->circbuf);
+        }
+        return -1;
+    }
     return 0;
 }
 
@@ -137,6 +170,20 @@ static int _airspy_reader_next(void *context)
 {
     airspy_state_t *state = (airspy_state_t *)context;
     return _reader_read_next(state->reader);
+}
+
+static int _airspy_reader_start(void *context)
+{
+    airspy_state_t *state = (airspy_state_t *)context;
+    atomic_store(&state->running, 1);
+    int ret = airspy_start_rx(state->device, _airspy_callback, state);
+    if (ret != AIRSPY_SUCCESS) {
+        atomic_store(&state->running, 0);
+        fprintf(stderr, "airspy_start_rx() failed: %s\n",
+                airspy_error_name(ret));
+        return -1;
+    }
+    return 0;
 }
 
 static int _airspy_reader_stop(void *context)
@@ -267,8 +314,7 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     ret = airspy_set_sample_type(state->device, AIRSPY_SAMPLE_INT16_IQ);
     if (ret != AIRSPY_SUCCESS) goto err;
 
-    /* Initialize circular buffer (holds 4 * block_size samples) */
-    size_t circbuf_size = (size_t)(reader->block_size) * 4 * 2 * sizeof(int16_t);
+    size_t circbuf_size = _ring_size(config->sample_rate);
     if (!circbuf_init(&state->circbuf, circbuf_size)) {
         fprintf(stderr, "circbuf_init failed: could not allocate %zu bytes\n",
                 circbuf_size);
@@ -277,26 +323,22 @@ int airspy_reader_open(const airspy_reader_config_t *config,
         return -1;
     }
 
-    atomic_store(&state->running, 1);
+    /* The device is configured but not streaming yet: reader->start
+     * (called by fastcard_start) begins RX after FFT planning and after
+     * the CLI has installed its signal handlers, so no samples pile up
+     * or get dropped while the process is still initialising. */
     state->reader          = reader;
     reader->context        = state;
     reader->read_next  = _reader_read_next;
     reader->sample_format = SAMPLE_FORMAT_INT16;
     reader->next = (reader_func_t)_airspy_reader_next;
-    reader->start = NULL;
+    reader->start = (reader_func_t)_airspy_reader_start;
     reader->stop = (reader_func_t)_airspy_reader_stop;
     reader->cancel = (reader_func_void_t)_airspy_reader_cancel;
     reader->free = (reader_func_void_t)_airspy_reader_free;
 
-    ret = airspy_start_rx(state->device, _airspy_callback, state);
-    if (ret != AIRSPY_SUCCESS) goto err_circbuf;
-
     return 0;
 
-err_circbuf:
-    /* The ring buffer was initialized before this point; destroy it so
-     * a start_rx failure does not leak block_size*16 bytes. */
-    circbuf_destroy(&state->circbuf);
 err:
     fprintf(stderr, "airspy device configuration failed: %s\n",
             airspy_error_name(ret));

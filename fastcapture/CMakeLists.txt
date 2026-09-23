@@ -74,6 +74,16 @@ add_executable(fastcapture_bin fastcard_cli.c)
 set_target_properties(fastcapture_bin PROPERTIES OUTPUT_NAME fastcapture)
 target_link_libraries(fastcapture_bin fastcapture_lib)
 
+# Unit tests (run with `ctest --test-dir <build-dir>`).  include(CTest)
+# defines BUILD_TESTING, ON by default; configure with
+# -DBUILD_TESTING=OFF to skip them.
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_circbuf tests/test_circbuf.c circbuf.c)
+    target_link_libraries(test_circbuf Threads::Threads)
+    add_test(NAME circbuf COMMAND test_circbuf)
+endif()
+
 # Installation
 install(TARGETS fastcapture_bin DESTINATION bin)
 install(TARGETS fastcapture_lib DESTINATION lib)

@@ -134,11 +134,15 @@ bool circbuf_put(circbuf_t* circbuf, char* src, size_t len) {
     if (circbuf->len < circbuf->size) {
         circbuf->histogram[circbuf->len*CIRCBUF_HISTOGRAM_LEN/circbuf->size]++;
     }
-    // wait for consumer on overflow
-    if (circbuf->len + len >= circbuf->size) {
+    // Wait for the consumer only when the data does not fit.  Occupancy
+    // is tracked in `len`, so a completely full ring (len == size,
+    // head == tail) is unambiguous and a put that fills it exactly must
+    // proceed.  The former `>=` made a put of exactly `size` bytes wait
+    // forever on an empty ring.
+    if (circbuf->len + len > circbuf->size) {
         circbuf->num_overflows++;
     }
-    while (!circbuf->cancel && circbuf->len + len >= circbuf->size) {
+    while (!circbuf->cancel && circbuf->len + len > circbuf->size) {
         pthread_cond_wait(&circbuf->can_produce, &circbuf->mutex);
     }
     if (circbuf->cancel) {

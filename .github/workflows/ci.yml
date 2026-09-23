@@ -73,6 +73,12 @@ jobs:
         run: cmake -S ${{ matrix.target }} -B build/${{ matrix.target }}
       - name: Build ${{ matrix.target }}
         run: cmake --build build/${{ matrix.target }} --config Release -j
+      - name: C unit tests
+        # Ring-buffer tests, including the exact-size put that used to
+        # deadlock live Airspy capture.  test_circbuf aborts itself on a
+        # hang, so a regression fails instead of stalling the runner.
+        if: matrix.target == 'fastcapture'
+        run: ctest --test-dir build/fastcapture --output-on-failure
       - name: Smoke-check binary output
         # Both CLIs use argp, so --help exits 0.  This step must FAIL
         # when the binary is missing or --help crashes — no `|| true`.

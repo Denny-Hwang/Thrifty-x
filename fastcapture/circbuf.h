@@ -45,7 +45,10 @@ void circbuf_free(circbuf_t* circbuf);
 bool circbuf_get(circbuf_t* circbuf, char* dest, size_t len);
 
 /// Write exactly "len" bytes to the circular buffer.
-/// Will increase overflow counter and wait for consumer if the buffer is full.
+/// If the data does not fit in the free space, increases the overflow
+/// counter and waits for the consumer.  A write may fill the buffer
+/// completely.  Returns false when len > size (the write can never fit)
+/// or when the buffer was cancelled.
 bool circbuf_put(circbuf_t* circbuf, char* src, size_t len);
 
 /// Return the number of overflow events that occurred.
