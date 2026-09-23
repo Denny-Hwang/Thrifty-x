@@ -8,12 +8,20 @@
 
 """Abstract SDR device interface for Thrifty-X."""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, ClassVar, Literal
 
 import numpy as np
+
+from thriftyx.exceptions import DeviceConfigError
+
+if TYPE_CHECKING:
+    from thriftyx.hal.profiles import DeviceProfile
+
+logger = logging.getLogger(__name__)
 
 
 class SampleFormat(Enum):
@@ -36,7 +44,24 @@ class DeviceInfo:
 
 
 class SDRDevice(ABC):
-    """Abstract base class for SDR devices."""
+    """Abstract base class for SDR devices.
+
+    Class attributes
+    ----------------
+    PROFILE : DeviceProfile
+        Hardware facts for the model (see :mod:`thriftyx.hal.profiles`).
+        Drivers read ranges from it rather than keeping their own copies.
+
+    Attributes
+    ----------
+    dropped_samples : int
+        I/Q sample pairs lost since streaming started (USB overflow or a
+        full internal buffer).  Capture uses it to keep block indices
+        aligned with elapsed samples.
+    """
+
+    PROFILE: ClassVar['DeviceProfile']
+    dropped_samples: int = 0
 
     @abstractmethod
     def open(self) -> None:
@@ -73,6 +98,42 @@ class SDRDevice(ABC):
     @abstractmethod
     def set_bias_tee(self, enabled: bool) -> None:
         """Enable or disable bias tee voltage on antenna port."""
+
+    def apply_gain_mode(self, mode: str, *,
+                        lna: 'int | None' = None,
+                        mixer: 'int | None' = None,
+                        vga: 'int | None' = None,
+                        lna_agc: bool = False,
+                        mixer_agc: bool = False,
+                        combined: 'int | None' = None) -> None:
+        """Apply a gain configuration.
+
+        The default supports ``'manual'`` mode without AGC by calling
+        :meth:`set_gain` for each stage that is given.  Devices with
+        preset gain ladders or AGC loops override this.
+
+        Raises
+        ------
+        DeviceConfigError
+            For a preset mode or an AGC request the device cannot honour.
+        """
+        if mode != 'manual' or lna_agc or mixer_agc:
+            raise DeviceConfigError(
+                f"{type(self).__name__} supports only gain_mode='manual' "
+                "without AGC")
+        for stage, value in (('lna', lna), ('mixer', mixer), ('vga', vga)):
+            if value is not None:
+                self.set_gain(stage, int(value))
+
+    def set_packing(self, enabled: bool) -> None:
+        """Enable or disable USB sample packing, where supported.
+
+        The default has no packing: disabling is a no-op and enabling
+        logs a warning, since capture still works unpacked.
+        """
+        if enabled:
+            logger.warning("%s does not support sample packing; ignored",
+                           type(self).__name__)
 
     @abstractmethod
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:

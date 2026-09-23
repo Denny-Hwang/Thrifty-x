@@ -22,6 +22,7 @@ import sys
 import numpy as np
 
 from thriftyx import settings as settings_module
+from thriftyx.hal.profiles import get_profile
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +56,11 @@ def scope_cli(args=None):
     config, extra = settings_module.load_args(parser, setting_keys, argv=args)
     trigger_level = extra.get('trigger_level')
 
-    device_type = config.get('device_type', 'rtlsdr')
+    device_type = config.device_type
     sample_rate = int(config.sample_rate)
     center_freq = int(config.tuner_freq)
     block_size = int(config.block_size)
-
-    if device_type in ('airspy_mini', 'airspy_r2'):
-        bit_depth = 12
-    else:
-        bit_depth = 8
+    bit_depth = get_profile(device_type).bit_depth
 
     from thriftyx.block_data import raw_to_complex
     from thriftyx.exceptions import DeviceNotFoundError

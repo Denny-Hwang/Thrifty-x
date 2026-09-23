@@ -6,7 +6,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Airspy Mini SDR driver using ctypes binding to libairspy."""
+"""Airspy SDR driver using ctypes binding to libairspy.
+
+:class:`AirspyMiniDevice` drives every libairspy board; model-specific
+facts (rates, ranges) come from its ``PROFILE`` (see
+:mod:`thriftyx.hal.profiles`), so :class:`~thriftyx.hal.airspy_r2.AirspyR2Device`
+only swaps the profile.
+"""
 
 import collections
 import ctypes
@@ -19,7 +25,8 @@ from typing import Callable
 
 import numpy as np
 
-from thriftyx.hal.base import SDRDevice, DeviceInfo, SampleFormat
+from thriftyx.hal.base import SDRDevice, DeviceInfo
+from thriftyx.hal.profiles import AIRSPY_MINI, GAIN_MODES
 from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
                                    DeviceCaptureError, DeviceError)
 
@@ -183,25 +190,10 @@ AIRSPY_SAMPLE_FLOAT32_REAL = 1
 AIRSPY_SAMPLE_INT16_IQ = 2
 AIRSPY_SAMPLE_INT16_REAL = 3
 
-_DEVICE_NAME = "Airspy Mini"
-_SUPPORTED_SAMPLE_RATES = (3_000_000, 6_000_000)
-_FREQUENCY_RANGE = (24_000_000, 1_800_000_000)
-_GAIN_STAGES = {'lna': (0, 14), 'mixer': (0, 15), 'vga': (0, 15)}
-
-# Combined-gain ladder range used by ``airspy_set_linearity_gain`` and
-# ``airspy_set_sensitivity_gain``.  These map a single 0–21 index to an
-# appropriate combination of LNA / Mixer / VGA gains tuned for either
-# linearity (low-IMD) or sensitivity (high-NF) operation.
-_COMBINED_GAIN_RANGE = (0, 21)
-
-# Valid values for ``gain_mode``.
-GAIN_MODES = ('manual', 'linearity', 'sensitivity')
-
-# Tolerance applied when validating a sample rate against the value(s)
-# returned by ``airspy_get_samplerates``.  Some libairspy builds return
-# slightly off values (e.g. 5_999_998 instead of 6_000_000), so a small
-# tolerance avoids false rejections.
-_SAMPLE_RATE_TOLERANCE_HZ = 100
+# ``GAIN_MODES`` is re-exported from thriftyx.hal.profiles for callers
+# that import it from here.
+__all__ = ['AirspyMiniDevice', 'GAIN_MODES', 'libairspy_version',
+           'list_airspy_serials', 'parse_airspy_serial']
 
 
 class _AirspyLibVersion(ctypes.Structure):
@@ -243,14 +235,6 @@ def libairspy_version() -> str:
         return raw.decode('ascii', errors='replace')
     except AttributeError:
         return str(raw)
-
-
-def _rate_is_supported(rate: int, supported: 'tuple[int, ...] | list[int]') -> bool:
-    """Return True when ``rate`` matches one of the supported rates within
-    the small tolerance that absorbs libairspy rounding noise."""
-    rate = int(rate)
-    return any(abs(rate - int(s)) <= _SAMPLE_RATE_TOLERANCE_HZ
-               for s in supported)
 
 
 def list_airspy_serials() -> list[int]:
@@ -307,14 +291,15 @@ def parse_airspy_serial(value: 'int | str') -> int:
 
 
 class AirspyMiniDevice(SDRDevice):
-    """Airspy Mini SDR driver.
+    """Airspy SDR driver (Airspy Mini profile).
 
     Class attributes
     ----------------
-    _SUPPORTED_SAMPLE_RATES : tuple of int
-        Hardcoded fallback rates used when libairspy does not expose
-        ``airspy_get_samplerates``.  The dynamic query result, when
-        available, is stored on the *instance* during ``open()``.
+    PROFILE : DeviceProfile
+        Model facts.  ``PROFILE.sample_rates`` is the fallback used when
+        libairspy does not expose ``airspy_get_samplerates``; the rates
+        the connected board reports are stored on the instance during
+        ``open()``.
 
     Parameters
     ----------
@@ -328,7 +313,7 @@ class AirspyMiniDevice(SDRDevice):
         ``airspy_list_devices``.  ``0`` is the first connected device.
     """
 
-    _SUPPORTED_SAMPLE_RATES = _SUPPORTED_SAMPLE_RATES
+    PROFILE = AIRSPY_MINI
 
     def __init__(self, serial: 'int | str | None' = None,
                  device_index: 'int | None' = None,
@@ -341,9 +326,9 @@ class AirspyMiniDevice(SDRDevice):
         self._serial = "unknown"
         self._requested_serial = serial
         self._requested_index = device_index
-        # Populated by ``open()``; defaults to the class-level fallback so
+        # Populated by ``open()``; defaults to the profile's rates so
         # that ``set_sample_rate`` works even when called before open().
-        self._supported_sample_rates = type(self)._SUPPORTED_SAMPLE_RATES
+        self._supported_sample_rates = self.PROFILE.sample_rates
         # Software PPM correction.  Airspy does not expose a hardware
         # frequency-correction knob (unlike rtlsdr_set_freq_correction),
         # so we instead pre-scale the requested LO frequency.
@@ -469,11 +454,10 @@ class AirspyMiniDevice(SDRDevice):
     def _query_supported_sample_rates(self) -> tuple:
         """Query libairspy for the device's supported sample rates.
 
-        Falls back to the class-level ``_SUPPORTED_SAMPLE_RATES`` constant
-        when the API is unavailable or returns nothing.
+        Falls back to ``PROFILE.sample_rates`` when the API is
+        unavailable or returns nothing.
         """
-        default = type(self)._SUPPORTED_SAMPLE_RATES if hasattr(
-            type(self), '_SUPPORTED_SAMPLE_RATES') else _SUPPORTED_SAMPLE_RATES
+        default = self.PROFILE.sample_rates
         if _lib is None or not hasattr(_lib, 'airspy_get_samplerates'):
             return default
         try:
@@ -497,36 +481,39 @@ class AirspyMiniDevice(SDRDevice):
             self._stop_rx()
             _lib.airspy_close(self._handle)
             self._open = False
-            logger.debug("Airspy Mini closed")
+            logger.debug("%s closed", self.PROFILE.name)
 
     def get_info(self) -> DeviceInfo:
-        serial = getattr(self, '_serial', 'unknown')
+        profile = self.PROFILE
         return DeviceInfo(
-            name=_DEVICE_NAME,
-            serial=serial,
-            supported_sample_rates=getattr(self, '_supported_sample_rates',
-                                            _SUPPORTED_SAMPLE_RATES),
-            frequency_range=_FREQUENCY_RANGE,
-            bit_depth=12,
-            sample_format=SampleFormat.INT16,
-            max_gain_stages={k: v[1] for k, v in _GAIN_STAGES.items()},
+            name=profile.name,
+            serial=self._serial,
+            supported_sample_rates=self._supported_sample_rates,
+            frequency_range=profile.frequency_range,
+            bit_depth=profile.bit_depth,
+            sample_format=profile.sample_format,
+            max_gain_stages={k: v[1] for k, v in profile.gain_stages.items()},
         )
 
     def set_sample_rate(self, rate: int) -> None:
         rates = self._supported_sample_rates
-        if not _rate_is_supported(rate, rates):
+        if not self.PROFILE.supports_sample_rate(rate, rates):
             raise DeviceConfigError(
-                f"Sample rate {rate} not supported. "
+                f"Sample rate {rate} not supported by {self.PROFILE.name}. "
                 f"Valid rates: {rates}")
+        # Request the enumerated rate itself: libairspy matches its rate
+        # table exactly and treats anything else as a custom rate.
+        rate = min(rates, key=lambda r: abs(int(r) - int(rate)))
         lib = self._check_open()
         ret = lib.airspy_set_samplerate(self._handle, ctypes.c_uint32(rate))
         if ret != 0:
             raise DeviceConfigError(f"airspy_set_samplerate() failed: {ret}")
+        # Sizes the bounded read_sync buffer in _start_rx.
         self._sample_rate = int(rate)
 
     def set_center_freq(self, freq: int) -> None:
         lib = self._check_open()
-        min_f, max_f = _FREQUENCY_RANGE
+        min_f, max_f = self.PROFILE.frequency_range
         if not (min_f <= int(freq) <= max_f):
             raise DeviceConfigError(
                 f"Frequency {freq} Hz out of range "
@@ -553,11 +540,12 @@ class AirspyMiniDevice(SDRDevice):
 
     def set_gain(self, gain_type: str, value: int) -> None:
         lib = self._check_open()
-        if gain_type not in _GAIN_STAGES:
+        stages = self.PROFILE.gain_stages
+        if gain_type not in stages:
             raise DeviceConfigError(
                 f"Unknown gain type '{gain_type}'. "
-                f"Valid types: {list(_GAIN_STAGES.keys())}")
-        min_v, max_v = _GAIN_STAGES[gain_type]
+                f"Valid types: {list(stages)}")
+        min_v, max_v = stages[gain_type]
         if not (min_v <= value <= max_v):
             raise DeviceConfigError(
                 f"Gain {value} for '{gain_type}' out of range "
@@ -652,18 +640,22 @@ class AirspyMiniDevice(SDRDevice):
 
     def _check_combined_gain(self, name: str, value: int) -> None:
         self._check_open()
-        lo, hi = _COMBINED_GAIN_RANGE
+        combined_range = self.PROFILE.combined_gain_range
+        if combined_range is None:
+            raise DeviceConfigError(
+                f"{self.PROFILE.name} has no {name} gain ladder")
+        lo, hi = combined_range
         if not (lo <= int(value) <= hi):
             raise DeviceConfigError(
                 f"{name} gain {value} out of range [{lo}, {hi}]")
 
     def apply_gain_mode(self, mode: str, *,
-                         lna: 'int | None' = None,
-                         mixer: 'int | None' = None,
-                         vga: 'int | None' = None,
-                         lna_agc: bool = False,
-                         mixer_agc: bool = False,
-                         combined: 'int | None' = None) -> None:
+                        lna: 'int | None' = None,
+                        mixer: 'int | None' = None,
+                        vga: 'int | None' = None,
+                        lna_agc: bool = False,
+                        mixer_agc: bool = False,
+                        combined: 'int | None' = None) -> None:
         """Apply one of the three top-level gain configurations.
 
         Parameters
@@ -680,9 +672,10 @@ class AirspyMiniDevice(SDRDevice):
             0–21 ladder index for ``'linearity'`` / ``'sensitivity'``.
             Required for those modes.
         """
-        if mode not in GAIN_MODES:
+        if mode not in self.PROFILE.gain_modes:
             raise DeviceConfigError(
-                f"Unknown gain_mode '{mode}'. Valid: {GAIN_MODES}")
+                f"Unknown gain_mode '{mode}'. "
+                f"Valid: {self.PROFILE.gain_modes}")
         if mode == 'manual':
             if lna is not None:
                 self.set_gain('lna', int(lna))
@@ -790,8 +783,8 @@ class AirspyMiniDevice(SDRDevice):
         lib = self._check_open()
 
         # Size the bounded read_sync buffer from the configured sample
-        # rate (int16 values = pairs * 2); fall back to the highest Mini
-        # rate when set_sample_rate has not been called yet.
+        # rate (int16 values = pairs * 2); fall back to the highest
+        # supported rate when set_sample_rate has not been called yet.
         rate = self._sample_rate or max(self._supported_sample_rates)
         self._max_stream_values = int(rate * 2 * self.max_buffer_seconds)
         self._callback_error = None

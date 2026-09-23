@@ -111,9 +111,15 @@ in the direction of correctness:
 from before this was corrected used `/2048`, so their absolute
 energy/noise columns are 8× larger; SNRs are unchanged.
 
-The Airspy HAL lives in `thriftyx/hal/` and talks to `libairspy` via
-`ctypes`.  Device selection (index or 64-bit serial) is handled by
-`thriftyx/hal/device_factory.py`.
+The HAL lives in `thriftyx/hal/`.  `thriftyx/hal/profiles.py` holds
+every hardware fact (sample rates, tuning and gain ranges, bit depth)
+for each device type; the drivers, the config validator, the settings
+defaults and `tdoa` all read it, so there is one place to add or
+correct a device.  The Airspy driver talks to `libairspy` via `ctypes`
+and is loaded only when a device is actually opened.  Capture drives
+devices only through the `SDRDevice` interface, so a new driver
+registered with `thriftyx.hal.register_device` (plus a profile) works
+without touching capture.
 
 ## Requirements
 
@@ -235,14 +241,14 @@ command works as an alias for everything above.
 
 The capture command is generic over device type; flags are interpreted by
 the matching HAL.  Defaults below come from `thriftyx/settings.py`
-(`DEFINITIONS`) — they are populated unconditionally, so no callsite
-needs a `.get(default)` fallback.
+(`DEFINITIONS`), except `--sample-rate` and `--bit-depth`, whose
+defaults come from the `--device-type` profile.
 
 ### Device selection
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--device-type {rtlsdr, airspy_mini, airspy_r2}` | `airspy_mini` | Drives which HAL is loaded and which packing/ADC width applies |
+| `--device-type {rtlsdr, airspy_mini, airspy_r2}` | `airspy_mini` | Selects the driver and sets the default sample rate and bit depth |
 | `-d, --device-index N` | `0` | 0-based enumeration index when multiple devices are connected |
 | `--airspy-serial SERIAL` | _(unset)_ | 64-bit Airspy board serial (hex or decimal); overrides index |
 
@@ -250,7 +256,7 @@ needs a `.get(default)` fallback.
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--sample-rate, -s` | `2.4M` | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M |
+| `--sample-rate, -s` | by device: `3M` Mini, `2.5M` R2, `2.4M` RTL-SDR | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M.  `tdoa` falls back to the same default. |
 | `--freq, -f`        | `433.83M` | Tuner centre frequency (Hz) |
 | `--block-size, -b`  | `16384` | Samples per block; must be a power of 2 |
 | `--history, -y`     | `4920`  | Sample overlap between blocks (block_history) |
@@ -438,7 +444,7 @@ Thrifty-x/
 │   ├── detect.py
 │   ├── detect_analysis.py # Unified Qt viewer (`analyze_detect`)
 │   ├── gold.py, matchmaker.py, tdoa_est.py, pos_est.py, ...
-│   └── hal/             #   Airspy/RTL-SDR HAL (ctypes-based)
+│   └── hal/             #   SDR HAL: profiles.py (device facts), drivers
 ├── fastcapture/         # ▶ Active C library binding to libairspy
 ├── fastdet/             # ▶ Active C++ correlation detector (links fastcapture)
 ├── thrifty/             # ◌ Reference only — original Schalk-Krüger Thrifty

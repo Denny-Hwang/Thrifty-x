@@ -13,8 +13,8 @@ import ctypes
 import pytest
 
 from thriftyx.hal import airspy_mini as am
-from thriftyx.hal.airspy_mini import (AirspyMiniDevice, parse_airspy_serial,
-                                       _rate_is_supported)
+from thriftyx.hal.airspy_mini import AirspyMiniDevice, parse_airspy_serial
+from thriftyx.hal.profiles import AIRSPY_MINI
 from thriftyx.exceptions import DeviceNotFoundError, DeviceConfigError
 
 
@@ -126,9 +126,9 @@ def test_parse_airspy_serial_none():
 
 
 def test_rate_supported_with_tolerance():
-    assert _rate_is_supported(6_000_000, (3_000_000, 6_000_000))
-    assert _rate_is_supported(5_999_950, (3_000_000, 6_000_000))
-    assert not _rate_is_supported(5_990_000, (3_000_000, 6_000_000))
+    assert AIRSPY_MINI.supports_sample_rate(6_000_000)
+    assert AIRSPY_MINI.supports_sample_rate(5_999_950)
+    assert not AIRSPY_MINI.supports_sample_rate(5_990_000)
 
 
 def test_open_default_uses_airspy_open(fake_lib):
@@ -206,8 +206,8 @@ def test_dynamic_sample_rates_falls_back_when_api_missing(monkeypatch):
     monkeypatch.setattr(am, '_lib', fl, raising=False)
     dev = AirspyMiniDevice(serial=0x1)
     dev.open()
-    # Falls back to the class-level default
-    assert dev._supported_sample_rates == AirspyMiniDevice._SUPPORTED_SAMPLE_RATES
+    # Falls back to the profile's rates
+    assert dev._supported_sample_rates == AIRSPY_MINI.sample_rates
     dev._open = False
 
 

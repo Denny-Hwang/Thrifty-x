@@ -64,7 +64,7 @@ def _main():
     parser.add_argument('-o', '--output', type=argparse.FileType('wb'),
                         default='template.npy', help="Output file (.npy).")
 
-    setting_keys = ['sample_rate', 'chip_rate']
+    setting_keys = ['device_type', 'sample_rate', 'chip_rate']
     config, args = settings.load_args(parser, setting_keys)
 
     sps = config.sample_rate / config.chip_rate

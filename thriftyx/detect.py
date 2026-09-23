@@ -237,7 +237,7 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                        type=argparse.FileType('a'),
                        help="Output file to append to (.toad)")
 
-    setting_keys = ['sample_rate', 'block_size', 'block_history',
+    setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template', 'rxid',
                     'bit_depth', 'freq_shift_method', 'soa_interpolation']
