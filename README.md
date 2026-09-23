@@ -472,21 +472,33 @@ a module with the original Thrifty, run
 
 ## Raspberry Pi 5 Deployment
 
-Thrifty-X ships with a complete Pi 5 + Bookworm deployment layout under
-`rpi/`:
+Thrifty-X ships a Pi 5 + Bookworm deployment layout under `rpi/`.
+
+**Pi 5 (supported)** — the Python capture service with systemd:
 
 | File / Directory | Purpose |
 |------------------|---------|
-| [`rpi/installation_pi5.md`](rpi/installation_pi5.md) | Step-by-step Pi 5 install (libairspy + pyfftw + systemd) |
-| `rpi/systemd/` | Capture/heartbeat unit templates |
-| `rpi/detector.service` | systemd unit for the detector service |
+| [`rpi/installation_pi5.md`](rpi/installation_pi5.md) | Step-by-step Pi 5 install (libairspy, chrony + `chrony-wait`, systemd) |
+| `rpi/systemd/thriftyx-capture@.{service,env.example}` | Capture unit: ordered after clock sync, restarts forever (`Restart=always`, no start limit) |
+| `rpi/systemd/thriftyx-heartbeat.{service,timer,env.example}` | Liveness probe every 60 s, runs as `pi` |
 | `rpi/thriftyx-capture.cfg.example` | Capture config template (sample rate, gain, packing, ppm) |
-| `rpi/heartbeat.py` | Periodic health probe: JSON to stdout/journald, optional POST to `THRIFTYX_HEARTBEAT_URL` |
+| `rpi/heartbeat.py` | Health probe: JSON to stdout/journald, optional POST to `THRIFTYX_HEARTBEAT_URL` |
 | `rpi/soak_test.sh` | 24-hour stability test |
-| `rpi/update_node.sh` | **Idempotent** in-place upgrade script (safe to re-run) |
+| `rpi/update_node.sh` | In-place upgrade script (safe to re-run) |
 | `rpi/cleanup_old_captures.sh` | Retention policy for `.card` files |
-| `rpi/ntp-after-online.{service,sh}` | Force NTP sync after network is up |
-| `rpi/pyFFTW-0.9.2-no-fftwl.patch` | Build patch for `pyfftw` on Pi 5 (no `long double` FFTW) |
+
+**Legacy (unsupported)** — kept from the original Pi 3 / RTL-SDR
+deployment and the C `fastdet` path; not installed or tested by the Pi 5
+guide:
+
+| File | What it is |
+|------|------------|
+| `rpi/installation.md` | Original Pi 3 / Jessie installation guide |
+| `rpi/detect.sh`, `rpi/detector.cfg` | RTL-SDR capture + detect pipeline (needs the upstream `fastcard` binary) |
+| `rpi/detector.service`, `rpi/fastdet.sh`, `rpi/fastdet.cfg`, `rpi/template.tpl` | C `fastdet` service (needs `fastdet` built and `/home/pi/detector`) |
+| `rpi/freq-map.cfg`, `rpi/template.npy` | Example frequency map and template for the legacy pipeline |
+| `rpi/ntp-after-online.{service,sh}` | Older clock-sync helper, superseded by `chrony-wait.service` |
+| `rpi/pyFFTW-0.9.2-no-fftwl.patch` | Build patch for pyFFTW 0.9.2; current pyFFTW does not need it |
 
 Operational documents live under `docs/`:
 

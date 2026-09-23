@@ -4,15 +4,21 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=pi
+# Default install path; /etc/default/thriftyx-heartbeat (optional)
+# overrides it, since EnvironmentFile= takes precedence over
+# Environment=.  Setting the default here, rather than with a shell
+# ${VAR:-default}, matters: systemd substitutes ${THRIFTYX_HOME} in
+# ExecStart itself, so an unset variable would become an empty string
+# before bash runs.
+Environment=THRIFTYX_HOME=/home/pi/thrifty-x
 EnvironmentFile=-/etc/default/thriftyx-heartbeat
-# Resolve the project venv via THRIFTYX_HOME (falls back to system python).
-ExecStart=/bin/bash -lc '\
-    if [ -x "${THRIFTYX_HOME:-/home/pi/thrifty-x}/.venv/bin/python" ]; then \
-        PY="${THRIFTYX_HOME}/.venv/bin/python"; \
-    else \
-        PY=python3; \
-    fi; \
-    exec "$PY" "${THRIFTYX_HOME:-/home/pi/thrifty-x}/rpi/heartbeat.py" \
+# Use the project venv's Python when present, else the system python3.
+# $$ passes a literal $ through to bash.
+ExecStart=/bin/bash -c '\
+    py="${THRIFTYX_HOME}/.venv/bin/python"; \
+    [ -x "$$py" ] || py=python3; \
+    exec "$$py" "${THRIFTYX_HOME}/rpi/heartbeat.py" \
     '
 NoNewPrivileges=true
 SyslogIdentifier=thriftyx-heartbeat
