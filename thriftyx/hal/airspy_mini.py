@@ -813,11 +813,12 @@ class AirspyMiniDevice(SDRDevice):
     def _queue_gap(self, values: int, arrived: float) -> None:
         """Queue *values* int16 zeros (lost samples); lock held."""
         self._stream_total += values
-        if self._stream_chunks and isinstance(self._stream_chunks[-1][0],
-                                              int):
-            # Consecutive losses form one gap.
-            previous, _ = self._stream_chunks.pop()
-            values += previous
+        if self._stream_chunks:
+            previous = self._stream_chunks[-1][0]
+            if isinstance(previous, int):
+                # Consecutive losses form one gap.
+                self._stream_chunks.pop()
+                values += previous
         self._stream_chunks.append((values, arrived))
         self._stream_event.set()
 
