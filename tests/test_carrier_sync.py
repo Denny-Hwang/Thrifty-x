@@ -47,10 +47,8 @@ def test_dirichlet_kernel():
     np.testing.assert_allclose(got, expected, rtol=2e-3)
 
 
-# In-bound offsets: the interpolator recovers them within numerical
-# precision. The bound is [-0.5, 0.5] per Krueger Section 4.4.2; the
-# tolerance is set wide enough to absorb scipy's bounded-optimizer
-# rounding when the true value sits exactly on the boundary.
+# Offsets within half a bin (where a clean carrier's largest bin puts
+# them) are recovered within numerical precision.
 INTERPOLATOR_OFFSETS = [-0.5, -0.25, -0.1263, -0.1, 0.,
                         0.001, 0.2, 0.4995, 0.5]
 
@@ -69,22 +67,15 @@ def test_dirichlet_interpolator(offset):
     np.testing.assert_allclose(got, offset, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("true_offset,expected", [
-    (-0.51, -0.5),  # below the bound -> clipped to -0.5
-    (0.56,  0.5),   # above the bound -> clipped to +0.5
-    (-1.0,  -0.5),  # far below
-    (1.0,   0.5),   # far above
-])
-def test_dirichlet_interpolator_clips_out_of_bounds(true_offset, expected):
-    """Offsets outside [-0.5, 0.5] clip to the boundary.
+@pytest.mark.parametrize("true_offset", [-2.4, -1.0, -0.51, 0.56, 1.0, 1.7])
+def test_dirichlet_interpolator_recovers_offsets_beyond_half_bin(
+        true_offset):
+    """Offsets beyond half a bin from the given peak are recovered.
 
-    The carrier interpolator now passes ``bounds=([0.0, -0.5], [np.inf, 0.5])``
-    to ``scipy.optimize.curve_fit`` (see ``carrier_sync.py``). This test
-    documents that clipping behaviour: when the algorithm is fed a peak
-    whose true sub-bin position falls outside the spec bound, the
-    returned offset is clamped to the nearest spec edge rather than
-    drifting arbitrarily. Without bounds, real field captures saw the
-    interpolator return |offset| > 1.0 (PR #39 reproducer).
+    Noise moves the largest bin around the flat top of the carrier's
+    main lobe (N / carrier_len ~ 4 bins wide here), so the offset from
+    that bin can genuinely exceed 0.5.  The fit used to be clipped to
+    +/-0.5, biasing such estimates by up to the lobe width.
     """
     peak_idx, width, block_len, carrier_len = 10, 6, 8192, 2024
     freq = (true_offset + peak_idx) * carrier_len / block_len
@@ -94,7 +85,17 @@ def test_dirichlet_interpolator_clips_out_of_bounds(true_offset, expected):
     interpolator = carrier_sync.make_dirichlet_interpolator(
         block_len, carrier_len, width)
     got = interpolator(signal_fft, peak_idx)
-    np.testing.assert_allclose(got, expected, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(got, true_offset, atol=1e-4)
+
+
+def test_dirichlet_interpolator_stays_inside_fit_window():
+    """A fit that runs off into the noise is held to the window."""
+    peak_idx, width, block_len, carrier_len = 10, 6, 8192, 2024
+    rs = np.random.RandomState(3)
+    noise = np.abs(np.fft.fft(rs.randn(block_len) + 1j * rs.randn(block_len)))
+    interpolator = carrier_sync.make_dirichlet_interpolator(
+        block_len, carrier_len, width)
+    assert abs(interpolator(noise, peak_idx)) <= width // 2
 
 
 def test_freq_shift_matches_legacy_phase():

@@ -1,21 +1,20 @@
-"""Regression tests: carrier sub_offset is bound-clipped to [-0.5, 0.5].
+"""Carrier sub-bin offset: accurate, and re-centred to [-0.5, 0.5].
 
-These tests started life (PR #39) as a REPRODUCER for an unbounded
-carrier sub-bin interpolator that returned ``|offset|`` up to ~1.07 on
-synthetic noisy CW, consistent with the field-observed 0.845 from R2.
+History: PR #39 saw the Dirichlet fit return |offset| up to ~1.07 on
+noisy CW (0.845 in the field on R2 TX1) and clipped the fit to
+[-0.5, 0.5].  Those offsets were not a fitting bug: the carrier's main
+lobe is ``block_len / carrier_len`` bins wide (6.4 at R2's 10 Msps) and
+flat on top, so noise often makes a neighbour the largest bin and the
+carrier really is more than half a bin from it.  Clipping biased every
+such estimate by up to the lobe width.
 
-After the fix landed (``curve_fit(bounds=([0.0, -0.5], [np.inf, 0.5]))``
-in ``thrifty/carrier_sync.py`` and ``thriftyx/carrier_sync.py``), the
-assertions are inverted to assert the bound is now respected. The
-synthetic stress cases are preserved as regression tests so any future
-change that drops the bounds would resurrect the bug and fail here.
+Now the fit may range over its window, and ``Synchronizer.sync``
+re-centres on the nearest bin, so ``CarrierSyncInfo.offset`` (the
+``.toad`` column) still lies in [-0.5, 0.5] while ``bin + offset``
+tracks the true carrier frequency.
 
-Bound: ``[-0.5, 0.5]`` per Krueger Section 4.4.2 (carrier peak) and
-Section 3.2 Eqs 3.4-3.6 (correlation peak). The C++ ``fastdet``
-implementation enforces the same bound (``fastdet/corr_detector.cpp:97-98``);
-the Python correlation path uses ``soa_estimator._clip_offset`` with
-``max_=0.6`` (slightly wider than spec for parabolic/Gaussian
-interpolators).
+The correlation-peak side is unchanged: ``soa_estimator._clip_offset``
+bounds it to +/-0.6.
 
 Parameters (block_len=65536, carrier_len=10232) match Thrifty-X's
 Airspy R2 configuration at 10 Msps - see ``example/detector_r2.cfg``.
@@ -32,13 +31,9 @@ import numpy as np
 import pytest
 
 from thriftyx import carrier_sync as thriftyx_cs
+from thriftyx.signal_utils import Signal
 from thriftyx.soa_estimator import (_clip_offset, parabolic_interpolation,
                                     gaussian_interpolation)
-
-# The shipped package is ``thriftyx``. The legacy ``thrifty`` package is a
-# frozen upstream reference (not packaged, not imported by the active suite)
-# - see README. These tests therefore exercise ``thriftyx`` only.
-
 
 BLOCK_LEN = 65536
 CARRIER_LEN = 10232
@@ -89,59 +84,90 @@ def test_clean_carrier_offset_just_past_half_wraps_via_argmax(interp_module):
 
 
 # ----------------------------------------------------------------------
-# Reproducer tests: the carrier interpolator IS NOT bound-clipped, and
-# under realistic noise it returns |offset| > 0.5.
+# Re-centring and accuracy under noise.
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("interp_module", [thriftyx_cs])
-def test_noisy_carrier_stays_within_half_bin_bound(interp_module):
-    """Under moderate noise, the bounded curve_fit stays within [-0.5, 0.5].
+class _Stub:
+    """Synchronizer parts with a fixed peak and interpolated offset."""
 
-    Pre-fix behaviour: this same sweep produced |offset| up to ~1.07,
-    matching the field-observed 0.845 on R2 TX1. After the bounded
-    curve_fit landed, every trial must respect the spec bound.
+    def __init__(self, peak_idx, offset):
+        self.peak_idx, self.offset = peak_idx, offset
+        self.shift = None
 
-    Sweep: 200 trials, each with a random true offset in [-0.5, 0.5] and
-    additive complex Gaussian noise at amplitude 0.5 (carrier amplitude 1.0).
-    """
-    interp = interp_module.make_dirichlet_interpolator(BLOCK_LEN, CARRIER_LEN)
-    rs = np.random.RandomState(42)
+    def detector(self, _fft_mag):
+        return True, self.peak_idx, 1.0, 0.1
 
-    max_abs_offset = 0.0
+    def interpolator(self, _fft_mag, _peak_idx):
+        return self.offset
+
+    def shifter(self, _signal, shift):
+        self.shift = shift
+        return np.zeros(8)
+
+
+@pytest.mark.parametrize("peak_idx, fitted, want_bin, want_offset", [
+    (100, 0.3, 100, 0.3),
+    (100, 1.3, 101, 0.3),
+    (100, -0.7, 99, 0.3),
+    (100, -2.2, 98, -0.2),
+    (0, -0.7, BLOCK_LEN - 1, 0.3),   # wraps like the FFT bins
+])
+def test_sync_recentres_on_nearest_bin(peak_idx, fitted, want_bin,
+                                       want_offset):
+    stub = _Stub(peak_idx, fitted)
+    sync = thriftyx_cs.Synchronizer(stub.detector, stub.interpolator,
+                                    stub.shifter)
+    signal = Signal(np.zeros(BLOCK_LEN, dtype=np.complex64))
+    _, info = sync(signal)
+    assert info.bin == want_bin
+    np.testing.assert_allclose(info.offset, want_offset, atol=1e-12)
+    # The shift applied is unchanged by re-centring (mod N).
+    assert (stub.shift + peak_idx + fitted) % BLOCK_LEN == \
+        pytest.approx(0, abs=1e-9)
+
+
+def _noisy_trials(noise_amp, trials=60, seed=42):
+    """Estimate errors and reported offsets for noisy R2 transmissions."""
+    sync = thriftyx_cs.DefaultSynchronizer((0, 0, 0), (7, 124),
+                                           BLOCK_LEN, CARRIER_LEN)
+    rs = np.random.RandomState(seed)
+    errors, offsets = [], []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        for _ in range(200):
-            true_offset = rs.uniform(-0.5, 0.5)
-            signal = _make_carrier(101, true_offset)
-            noise_amp = 0.5
-            noise = (rs.randn(BLOCK_LEN) + 1j * rs.randn(BLOCK_LEN)) * noise_amp
-            fft_mag = np.abs(np.fft.fft(signal + noise))
-            peak_idx = _argmax_in_window(fft_mag)
-            got = interp(fft_mag, peak_idx)
-            assert -0.5 <= got <= 0.5, (
-                "Bound violation: noisy CW trial returned offset {:.6f} "
-                "outside [-0.5, 0.5]. The bounded curve_fit must have been "
-                "removed from {}.".format(got, interp_module.__name__))
-            max_abs_offset = max(max_abs_offset, abs(got))
+        for _ in range(trials):
+            true = 101 + rs.uniform(-0.5, 0.5)
+            start = rs.randint(0, BLOCK_LEN - CARRIER_LEN)
+            n = np.arange(CARRIER_LEN)
+            x = np.zeros(BLOCK_LEN, dtype=complex)
+            x[start:start + CARRIER_LEN] = np.exp(
+                2j * np.pi * true * (start + n) / BLOCK_LEN)
+            x += (rs.randn(BLOCK_LEN) + 1j * rs.randn(BLOCK_LEN)) * noise_amp
+            _, info = sync(Signal(x))
+            errors.append(info.bin + info.offset - true)
+            offsets.append(info.offset)
+    return np.array(errors), np.array(offsets)
 
-    # Sanity: the algorithm is actually exercising its full range, not
-    # stuck at zero - we want to confirm the bound is active, not
-    # vacuous.
-    assert max_abs_offset > 0.3, (
-        "All offsets stayed within +/-0.3; the bound assertion above is "
-        "vacuous. Check that the noise injection is actually perturbing "
-        "the curve_fit away from the true offset.")
+
+def test_noisy_carrier_frequency_is_accurate():
+    """Against ground truth: with the fit clipped to +/-0.5 this sweep
+    had RMS error 0.20 bin and worst case 0.56 bin; unclipped and
+    re-centred it is 0.075 / 0.19."""
+    errors, offsets = _noisy_trials(noise_amp=1.0)
+    assert np.all(np.abs(offsets) <= 0.5)
+    assert np.sqrt(np.mean(errors ** 2)) < 0.12
+    assert np.max(np.abs(errors)) < 0.35
+
+
+def test_noisy_offsets_exercise_the_full_range():
+    """The re-centred offsets are not stuck near zero."""
+    _, offsets = _noisy_trials(noise_amp=0.5)
+    assert np.max(np.abs(offsets)) > 0.3
 
 
 @pytest.mark.parametrize("interp_module", [thriftyx_cs])
-def test_dual_bin_equal_peaks_stays_at_boundary(interp_module):
-    """Two coherent carriers at adjacent bins do NOT by themselves break the bound.
-
-    With perfectly equal amplitudes the Dirichlet fit picks the midpoint
-    (offset ~ +-0.5). This test documents that the dual-bin pattern alone
-    is not the trigger - noise plus dual-bin energy together drive the
-    fit out of bounds.
-    """
+def test_dual_bin_equal_peaks_fit_the_midpoint(interp_module):
+    """Two equal coherent carriers at adjacent bins fit at their midpoint
+    (offset ~ +/-0.5 from either bin)."""
     freq1 = 101.0 * CARRIER_LEN / BLOCK_LEN
     freq2 = 102.0 * CARRIER_LEN / BLOCK_LEN
     arr = np.arange(CARRIER_LEN)
@@ -152,20 +178,17 @@ def test_dual_bin_equal_peaks_stays_at_boundary(interp_module):
     interp = interp_module.make_dirichlet_interpolator(BLOCK_LEN, CARRIER_LEN)
     peak_idx = _argmax_in_window(fft_mag)
     got = interp(fft_mag, peak_idx)
-    assert abs(got) < 0.5  # stays inside (just)
-    assert abs(got) > 0.4  # but right at the edge
+    np.testing.assert_allclose(peak_idx + got, 101.5, atol=0.05)
 
 
-@pytest.mark.parametrize("interp_module", [thriftyx_cs])
-def test_dual_bin_plus_noise_stays_within_bound(interp_module):
-    """TX1-like pattern (energy split across bins 101+102) + noise still
-    yields ``|offset| <= 0.5``.
-
-    This is the closest synthetic analogue to the observed BatRF TX1
-    behaviour. The bounded curve_fit must keep every trial inside the
-    spec bound even under the dual-bin + noise stressor.
-    """
-    interp = interp_module.make_dirichlet_interpolator(BLOCK_LEN, CARRIER_LEN)
+def test_dual_bin_plus_noise_reports_offsets_within_half_bin():
+    """TX1-like pattern (energy split across bins 101+102) + noise: the
+    reported offset stays in [-0.5, 0.5], and the typical estimate lies
+    between the two carriers.  (With near-opposite phases the two lobes
+    cancel between the carriers and the largest bin moves outside them;
+    such a spectrum has no single carrier frequency to recover.)"""
+    sync = thriftyx_cs.DefaultSynchronizer((0, 0, 0), (7, 124),
+                                           BLOCK_LEN, CARRIER_LEN)
     freq1 = 101.0 * CARRIER_LEN / BLOCK_LEN
     freq2 = 102.0 * CARRIER_LEN / BLOCK_LEN
     arr = np.arange(CARRIER_LEN)
@@ -175,19 +198,17 @@ def test_dual_bin_plus_noise_stays_within_bound(interp_module):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         rs = np.random.RandomState(7)
-        for trial in range(200):
+        estimates = []
+        for trial in range(60):
             ratio = rs.uniform(0.7, 1.3)
             phase = rs.uniform(0, 2 * np.pi)
             sig_t = c1 + ratio * c2 * np.exp(1j * phase)
             signal = np.concatenate([sig_t, np.zeros(BLOCK_LEN - CARRIER_LEN)])
             noise = (rs.randn(BLOCK_LEN) + 1j * rs.randn(BLOCK_LEN)) * 0.3
-            fft_mag = np.abs(np.fft.fft(signal + noise))
-            peak_idx = _argmax_in_window(fft_mag)
-            got = interp(fft_mag, peak_idx)
-            assert -0.5 <= got <= 0.5, (
-                "Trial {}: dual-bin+noise returned offset {:.6f} outside "
-                "[-0.5, 0.5] from {}.".format(trial, got,
-                                                interp_module.__name__))
+            _, info = sync(Signal(signal + noise))
+            assert -0.5 <= info.offset <= 0.5, trial
+            estimates.append(info.bin + info.offset)
+    assert abs(np.median(estimates) - 101.5) < 0.1
 
 
 # ----------------------------------------------------------------------
