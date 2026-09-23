@@ -245,6 +245,9 @@ sudo chmod 644 /etc/systemd/system/detector.service
 ```
 
 Change `rxid` in `detector/detector.cfg` and `detector/fastdet.cfg`.
+The copied templates are the upstream transmitters' 11-bit code 0 at
+2.4 Msps; for another sample rate or code, regenerate them as the
+comment above `TEMPLATE_FILE` in `fastdet.cfg` describes.
 
 Start and enable the service:
 ```

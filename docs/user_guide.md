@@ -414,7 +414,7 @@ tuner_freq:         433.83M           # adjust to your TX
 tuner_gain:         0.0
 capture_skip:       600
 block_size:         16384             # 2^14, ~6.83 ms at 2.4 MSPS
-block_history:      4920              # >= template length (2455)
+block_history:      4920              # >= 11-bit template length (4914)
 carrier_window:     7 - 130           # ~1 kHz to ~19 kHz offset
 carrier_threshold:  15 * snr
 corr_threshold:     15 * snr
@@ -438,7 +438,7 @@ mixer_gain:         7                 # range 0–15
 vga_gain:           7                 # range 0–15
 bias_tee:           false
 block_size:         32768             # 2^15, ~5.46 ms at 6 MSPS
-block_history:      12278             # 2 × template length (6139)
+block_history:      12349             # 11-bit template (12285) + 64
 carrier_window:     6 - 103           # 1 kHz to 19 kHz @ 183.1 Hz/bin
 carrier_threshold:  15 * snr
 corr_threshold:     15 * snr
@@ -462,7 +462,7 @@ mixer_gain:         7
 vga_gain:           7
 bias_tee:           false
 block_size:         65536             # 2^16, ~6.55 ms at 10 MSPS
-block_history:      20464             # 2 × template length (10232)
+block_history:      20539             # 11-bit template (20475) + 64
 carrier_window:     7 - 124           # 1 kHz to 19 kHz @ 152.6 Hz/bin
 carrier_threshold:  15 * snr
 corr_threshold:     15 * snr
@@ -488,9 +488,9 @@ keep the table below internally consistent.
 
 | Parameter | Formula | RTL @ 2.4 M | Mini @ 6 M | R2 @ 10 M |
 |---|---|---|---|---|
-| template length | (2^code_len − 1) × sample_rate / chip_rate | 2,455 | 6,139 | 10,232 |
-| `block_size`     | ≥ 2 × `block_history`, power of 2 | 16,384 | 32,768 | 65,536 |
-| `block_history`  | ≥ template length | 4,920 | 12,278 | 20,464 |
+| template length | (2^bits − 1) × sample_rate / chip_rate, truncated | 11-bit: 4,914<br>10-bit: 2,455 | 11-bit: 12,285<br>10-bit: 6,139 | 11-bit: 20,475<br>10-bit: 10,232 |
+| `block_size`     | ≥ template + `block_history` and ≥ 2 × `block_history`, power of 2 | 16,384 | 32,768 | 65,536 |
+| `block_history`  | ≥ template length − 1; default: the stock 4,920, or the 11-bit template + 64 where that is longer | 4,920 | 12,349 | 20,539 |
 | block period     | `block_size` / `sample_rate` | 6.83 ms | 5.46 ms | 6.55 ms |
 | bin resolution   | `sample_rate` / `block_size` | 146.5 Hz | 183.1 Hz | 152.6 Hz |
 | `carrier_window` low  | `ceil(1000 / bin_res)` | 7 | 6 | 7 |
@@ -499,7 +499,8 @@ keep the table below internally consistent.
 > ⚠️  `template.npy` **must be generated at the capture's `sample_rate`**.
 > `detect` takes the sample rate and block geometry from the card's
 > `#v2` header, but it cannot correct a template made for another rate:
-> a mismatch silently produces zero detections. When you change the
+> a mismatch produces zero detections (`detect` warns when its template
+> holds no code at the card's sample rate). When you change the
 > sample rate, regenerate the template (see [Section 6.5](#65-template-regeneration-when-changing-devices)).
 
 ### 5.4 Frequently Used Airspy CLI Flags
@@ -563,26 +564,53 @@ tail of false positives; pick a value just above it.
 
 ### 6.1 What Is a Template?
 
-Thrifty-X transmitters emit a Gold-code modulated continuous-wave
-signal. **Gold codes** are length-`(2^n − 1)` binary sequences with
-favourable autocorrelation properties — the same family used for GPS
-C/A codes and CDMA. Thrifty-X uses `code_len = 10`, giving 1023 chips
-per code period.
+A Thrifty transmitter keys its carrier on and off with a binary code of
+`2^n − 1` chips (register length `n` = 5 … 11 bits) at about
+1 Mchip/s, one code period per burst.  Each transmitter is assigned a
+code: a register length, an **index** within its family (0 … 2^n) and,
+for 8 and 10 bits, a **family**:
 
-Each transmitter is assigned a unique `code_index` (0 … 1024). The
-**template** is that Gold code resampled to the receiver's sample rate.
+- **Gold family** (`--family gold`; the only family for 5, 6, 7, 9 and
+  11 bits).  Codes from a *preferred pair* of registers: any two codes
+  periodically cross-correlate at most 65 of 1023 or 2047 chips
+  (−23.9 dB).  The 10-bit family is the one the GPS C/A codes come from
+  (`gold(10, 1025 − d)` is the GPS PRN with G2 delay `d`).
+- **Legacy codes** (`--family legacy`; 8 and 10 bits only).  The codes
+  Thrifty, and Thrifty-X before this was fixed, generated for 8 and 10
+  bits.  They are not Gold codes (the 10-bit ones reach 97 of 1023,
+  −20.5 dB), but transmitters programmed from `template_generate 10 N`
+  of an earlier release send them, and only a legacy template detects
+  those.
+
+Those bounds are periodic.  A burst is correlated once, aperiodically,
+and there the families differ by about 1 dB (median peak sidelobe
+−19.5 dB legacy, −20.2 dB Gold for 10 bits; −22.8 dB for 11 bits), so
+the family a fleet already uses is not worth reprogramming it for.
+
+The upstream Thrifty transmitters send the **11-bit code 0**: the
+template captured from them (`example/template.npy`) is `gold(11, 0)`.
+Which code your transmitters send is a fact about their firmware —
+check it on a capture (Section 6.4) rather than assuming it.
+
+The **template** is that code sampled at the receiver's sample rate.
 Detection is performed by FFT-based correlation between captured blocks
-and this template.
+and this template; `detect` logs which code its template holds.
 
 ### 6.2 Theoretical Template
 
 ```bash
-thriftyx template_generate <code_len> <code_index> -o template.npy
-# Example: code length 10, transmitter index 3
-thriftyx template_generate 10 3 -o template.npy
+thriftyx template_generate <bits> <index> [--family gold|legacy] -o template.npy
+# Upstream Thrifty transmitters: 11-bit code 0
+thriftyx template_generate 11 0 -o template.npy
+# A transmitter programmed with the old 10-bit code 3
+thriftyx template_generate 10 3 --family legacy -o template.npy
 ```
 
-The output is a clean `{−1, +1}` BPSK square wave at the configured
+8- and 10-bit codes need `--family`: the same index is a different code
+in each family, and a template for the wrong one detects nothing.  The
+index must be 0 … 2^n (older releases wrapped larger values).
+
+The output is a clean `{−1, +1}` square wave at the configured
 sample rate. It can be generated **without any hardware**, but it does
 not match the receiver's analog frontend response, so correlation SNR
 is poor (mismatched filter).
@@ -592,18 +620,21 @@ is poor (mismatched filter).
 Extract a matched filter directly from a real capture:
 
 ```bash
-# Step 1 — generate a theoretical seed template
-thriftyx template_generate 10 3 -o template_ideal.npy
-
-# Step 2 — short live capture (5–10 s is plenty)
+# Step 1 — short live capture (5–10 s is plenty)
 thriftyx capture initial.card --duration 10
 
-# Step 3 — extract a continuous-valued template from the capture
+# Step 2 — find the code the transmitter sends (Section 6.4)
+thriftyx gold --identify initial.card
+
+# Step 3 — generate that code as a theoretical seed template, e.g.
+thriftyx template_generate 11 0 -o template_ideal.npy
+
+# Step 4 — extract a continuous-valued template from the capture
 thriftyx template_extract initial.card \
     --template template_ideal.npy \
     -o template_captured.npy
 
-# Step 4 — make it the active template
+# Step 5 — make it the active template
 cp template_captured.npy template.npy
 ```
 
@@ -622,36 +653,53 @@ The 30+ dB gap is enough that detection often fails entirely with a
 theoretical template at long range. **Always extract a captured
 template before serious work.**
 
-### 6.4 When You Don't Know the Gold-Code Index
+### 6.4 Which Code Does a Transmitter Send?
 
-If the transmitter's `code_index` is unknown, brute-force the search
-space. Indices 0–20 cover most field deployments:
+`thriftyx gold --identify` reads a capture and needs no template: a
+`.card` holds only blocks with a carrier, and the code is the envelope
+of an on-off keyed burst.  It cuts out the strongest complete burst,
+tries every code of every register length that fits it, in both
+families, and prints the best match with the command that generates it:
 
 ```bash
-for i in $(seq 0 20); do
-  thriftyx template_generate 10 $i -o /tmp/template_test.npy
-  count=$(thriftyx detect capture.card \
-      --template /tmp/template_test.npy -o /dev/null 2>&1 \
-      | grep -c "corr: yes")
-  echo "index $i: $count corr hits"
-done
+thriftyx gold --identify initial.card
+#   initial.card: burst of 12285 samples
+#   best match: 11-bit Gold code 0: correlation 0.896 (6.001 samples/chip)
+#   runner-up:  11-bit Gold code 356: correlation 0.073, inverted (5.995 samples/chip)
+#   template for this code: thriftyx template_generate 11 0 --family gold --sample-rate 6M
 ```
 
-The index with the most `corr: yes` hits is the transmitter's setting.
-Once identified, regenerate / re-extract the proper template before
-production runs.
+(A transmitter programmed with the old 10-bit code 3 reports
+`best match: 10-bit legacy (not Gold) code 3` and `template_generate 10
+3 --family legacy`.)  The exit status is 0 for a clear match, 1
+otherwise.
+
+- A clear match correlates well above 0.5 and several times the
+  runner-up; otherwise it says that no code matches clearly.  Capture
+  one transmitter at a time, close enough for a clean burst.
+- It also reads a template (`.npy`, or fastdet's `.tpl`): `thriftyx
+  gold --identify template.npy --sample-rate 6M` tells which code an
+  existing template holds — the one that currently detects is the
+  best evidence of what the fleet sends.
+- `--family` and a register length narrow the search (`thriftyx gold 10
+  --family legacy --identify initial.card`).
+- For a template it also reports the cyclic shift: other than 0, the
+  template does not start where a burst does; re-extract it rather than
+  regenerating the code.
 
 ### 6.5 Template Regeneration When Changing Devices
 
 `template.npy` is **specific to a sample rate**. Switching from RTL-SDR
-to Airspy Mini changes the sample count per code period from 2,455 to
-6,139 — the old template won't correlate (`detect` warns when a
-template's length does not match the sample rate). Whenever you change the
+to Airspy Mini changes the samples per 11-bit code period from 4,914 to
+12,285 — the old template won't correlate (`detect` warns when the
+template holds no code at the sample rate). Whenever you change the
 sample rate (or device):
 
 1. `cp ~/Thrifty-x/example/detector_<device>.cfg detector.cfg` (in your
    working directory)
-2. `thriftyx template_generate 10 <code_index> -o template_ideal.npy`
+2. `thriftyx gold --identify template.npy --sample-rate <old rate>` to
+   read the code off the old template, then `thriftyx template_generate
+   <bits> <index> [--family ...] -o template_ideal.npy` with what it reports
 3. `thriftyx capture initial.card --duration 10`
 4. `thriftyx template_extract initial.card --template template_ideal.npy -o template.npy`
 
@@ -670,11 +718,13 @@ mkdir -p ~/thriftyx-run && cd ~/thriftyx-run
 # 1. Pick the device-specific config
 cp ~/Thrifty-x/example/detector_r2.cfg detector.cfg   # adjust for your hardware
 
-# 2. Generate a theoretical seed template
-thriftyx template_generate 10 3 -o template_ideal.npy
-
-# 3. Short capture for template extraction
+# 2. Short capture for template extraction
 thriftyx capture initial.card --duration 5
+
+# 3. Find the transmitter's code (Section 6.4) and generate it as a
+#    theoretical seed template, e.g. for the 11-bit code 0:
+thriftyx gold --identify initial.card
+thriftyx template_generate 11 0 -o template_ideal.npy
 
 # 4. Extract a captured (matched) template
 thriftyx template_extract initial.card \
@@ -696,8 +746,10 @@ thriftyx analyze_detect rx0.card -m 2 -p overview
 
 **What success looks like at each step:**
 
-- Step 3 / 5 — `block #N: mag[bin] = … (thresh = …, noise = …)` lines
+- Step 2 / 5 — `block #N: mag[bin] = … (thresh = …, noise = …)` lines
   on stderr, one per detected block.
+- Step 3 — `best match: …` with a correlation well above the
+  runner-up's (Section 6.4).
 - Step 6 — one summary line per block on stdout, like
   `blk=12; carrier: yes @ 50.171 kHz / 274:+0.21, SNR = ... ; corr: yes @ ...`;
   the number of `corr: yes` lines is the detection count (the same
@@ -742,8 +794,9 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 | Command | One-liner |
 |---|---|
-| `template_generate` | Generate an ideal Gold-code template. `length` `index` `-o file.npy`. |
+| `template_generate` | Generate an ideal code template. `bits` `index` [`--family gold\|legacy`] `-o file.npy`. |
 | `template_extract`  | Extract a matched template from a capture. `input.card --template ideal.npy -o new.npy`. |
+| `gold` | Print a code (`bits` `index` [`--family`]), or identify the one a capture or template holds (`--identify file.card`). |
 
 ### Common options
 
@@ -804,7 +857,7 @@ formats exist:
 - **v1** (original Thrifty, RTL-SDR, no header) — lines of
   `<timestamp> <block_idx> <base64 of raw uint8 I/Q>`.
 - **v2** (Thrifty-X) — a leading header line such as
-  `#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12278`,
+  `#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12349`,
   then the same data lines (int16 I/Q for `bit_depth=12`, uint8 for
   `bit_depth=8`).  Every Thrifty-X writer emits the header, including
   the Python RTL-SDR capture path.
@@ -936,8 +989,8 @@ What "good" looks like:
 What "bad" looks like:
 
 - Histogram clustered at the extremes → ADC clipping (lower gain).
-- Correlation peak buried in noise → wrong template, bad gain, or
-  wrong `code_index`.
+- Correlation peak buried in noise → wrong template (code index,
+  register length or family), or bad gain.
 - Carrier peak outside the window → adjust `tuner_freq` or
   `carrier_window`.
 
@@ -952,7 +1005,7 @@ What "bad" looks like:
 | `usb_claim_interface error -6` | Stale USB handle after Ctrl+C | `usbipd detach` → `usbipd attach`; or `udevadm trigger` |
 | `airspy_info` hangs | WSL USB state stale | `wsl --shutdown` from PowerShell, then re-attach |
 | `airspy_open() returned -1000` | Another process owns the device | Close GNU Radio / SDR# / Gqrx |
-| Zero detections | Wrong Gold-code index | Brute-force scan (Section 6.4) |
+| Zero detections | Template for another code (index, length or family) | `thriftyx gold --identify capture.card` (Section 6.4) |
 | Zero detections | Gain too low | Raise LNA (Section 4.5) |
 | Zero detections | Template ↔ config sample-rate mismatch | Regenerate template (Section 6.5) |
 | `corr: no` everywhere | Theoretical template only | Extract captured template (Section 6.3) |

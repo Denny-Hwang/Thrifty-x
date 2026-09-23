@@ -13,6 +13,7 @@ Supports both 8-bit unsigned (RTL-SDR legacy, v1 .card format) and
 """
 
 import base64
+import re
 import binascii
 import logging
 import time
@@ -267,6 +268,21 @@ def peek_card_header(stream):
             break
         if not _is_non_data_line(text):
             break  # first data line: a headerless (v1) file
+    if header and 'block_history' not in header:
+        # fastcapture/fastdet cards from before the #v2 line recorded
+        # block_history carry it on the next comment line:
+        # "# arguments: { ..., history_size: 4920 }".
+        while True:
+            line = stream.readline()
+            if not line:
+                break
+            consumed.append(line)
+            text = _decode_line(line)
+            if not text.startswith('#'):
+                break
+            match = re.search(r'history_size:\s*(\d+)', text)
+            if text.startswith('# arguments:') and match:
+                header['history_size'] = match.group(1)
     return header, _ReplayStream(consumed, stream)
 
 
@@ -279,7 +295,7 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
     v2 format header, one line of ``key=value`` fields::
 
         #v2 bit_depth=12 sample_rate=6000000 endian=little \\
-            block_size=32768 block_history=12278
+            block_size=32768 block_history=12349
 
     v1 format: no header line (legacy RTL-SDR, 8-bit).
 

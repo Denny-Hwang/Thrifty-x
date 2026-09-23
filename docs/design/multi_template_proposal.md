@@ -93,7 +93,9 @@ Same single-column extension as Option 1.
 ## 4. Cost estimate
 
 Single FFT correlation at Thrifty-X's R2 parameters (block_size=65536,
-template_len=10232):
+template_len=20475 for an 11-bit code, 10232 for a 10-bit one; each
+template is a register length, index and code family, see
+`thriftyx/gold.py`):
 
 - `signal.fft` (size 65536) — single per block, already done in carrier
   sync.

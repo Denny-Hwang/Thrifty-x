@@ -29,17 +29,18 @@ Version: see `thriftyx/__init__.py` (`__version__`).
 5. [Installation](#installation)
 6. [CLI Overview](#cli-overview)
 7. [Typical Workflow](#typical-workflow)
-8. [Capture Reference](#capture-reference)
-9. [Inspecting a Capture (`analyze_detect`)](#inspecting-a-capture-analyze_detect)
-10. [Detector & Signal-Processing Defaults](#detector--signal-processing-defaults)
-11. [Using Existing RTL-SDR Data](#using-existing-rtl-sdr-data)
-12. [Permissions / udev (Linux)](#permissions--udev-linux)
-13. [Repository Layout](#repository-layout)
-14. [Raspberry Pi 5 Deployment](#raspberry-pi-5-deployment)
-15. [Testing](#testing)
-16. [Known Limitations](#known-limitations)
-17. [Publications & Attribution](#publications--attribution)
-18. [License](#license)
+8. [Transmitter Codes](#transmitter-codes)
+9. [Capture Reference](#capture-reference)
+10. [Inspecting a Capture (`analyze_detect`)](#inspecting-a-capture-analyze_detect)
+11. [Detector & Signal-Processing Defaults](#detector--signal-processing-defaults)
+12. [Using Existing RTL-SDR Data](#using-existing-rtl-sdr-data)
+13. [Permissions / udev (Linux)](#permissions--udev-linux)
+14. [Repository Layout](#repository-layout)
+15. [Raspberry Pi 5 Deployment](#raspberry-pi-5-deployment)
+16. [Testing](#testing)
+17. [Known Limitations](#known-limitations)
+18. [Publications & Attribution](#publications--attribution)
+19. [License](#license)
 
 ## Documentation
 
@@ -215,7 +216,7 @@ All commands are dispatched via `thriftyx <command> [args]` (see
 |---------|---------|
 | `template_generate` | Generate an ideal (synthetic) template |
 | `template_extract`  | Extract a template from captured data |
-| `gold`              | Print or analyse a Gold-code sequence |
+| `gold`              | Print a code, or identify the one a capture or template holds (`--identify`) |
 
 Run `thriftyx help <command>` (or `thriftyx <command> --help`) for the
 full argument list of any command.
@@ -224,9 +225,11 @@ full argument list of any command.
 
 ```bash
 # 1. Once per receiver: shared settings and a template generated at the
-#    capture sample rate (every command reads ./detector.cfg).
+#    capture sample rate, for the code your transmitters send (every
+#    command reads ./detector.cfg).  `thriftyx gold --identify rx0.card`
+#    reports that code; see "Transmitter Codes" below.
 cp example/detector_mini.cfg detector.cfg     # or detector_r2.cfg / detector.cfg (RTL-SDR)
-thriftyx template_generate 10 3 -o template.npy
+thriftyx template_generate 11 0 -o template.npy   # upstream Thrifty transmitters' code
 
 # 2. On each receiver: capture, then detect.
 thriftyx capture rx0.card --duration 60
@@ -258,6 +261,63 @@ capture's sample rate.
 The pipeline is identical to the original Thrifty.  The legacy `thrifty`
 command works as an alias for everything above.
 
+## Transmitter Codes
+
+The receiver's template must be the code the transmitters send: the
+same register length, index and — for 8 and 10 bits — code family,
+sampled at the capture rate.  `thriftyx gold --identify rx0.card` reads
+it off a capture, no template needed:
+
+```bash
+thriftyx gold --identify rx0.card
+#   rx0.card: burst of 12285 samples
+#   best match: 11-bit Gold code 0: correlation 0.896 (6.001 samples/chip)
+#   runner-up:  11-bit Gold code 356: correlation 0.073, inverted (5.995 samples/chip)
+#   template for this code: thriftyx template_generate 11 0 --family gold --sample-rate 6M
+```
+
+It also reads a template (`.npy` or `.tpl`): the one that detects today
+is the best evidence of what a fleet sends.  `detect` logs the code its
+template holds on every run and warns when it holds none at the card's
+sample rate.
+
+- **Gold family** (`--family gold`).  Codes `0 … 2^N` of the Gold family
+  of `N`-bit registers (N = 5, 6, 7, 9, 10, 11): any two codes
+  periodically cross-correlate at most 65 of 1023 or 2047 chips
+  (−23.9 dB).  The 10-bit family is the one the GPS C/A codes come from
+  (`gold(10, 1025 − d)` is the GPS PRN with G2 delay `d`;
+  `tests/unit/test_gold.py` checks all 32).
+- **Legacy codes** (`--family legacy`).  Thrifty, and Thrifty-X until
+  this was fixed, generated its 8- and 10-bit codes from register pairs
+  that are not preferred pairs: periodic correlations reach 97 of 1023
+  (−20.5 dB).  Transmitters programmed from that output keep needing
+  them, e.g. `template_generate 10 3 --family legacy`.  An 8-bit Gold
+  family cannot exist (no preferred pair when N is divisible by 4).
+- **5, 6, 7, 9 and 11 bits** are the same in both families and need no
+  `--family`.  The template captured from the upstream Thrifty
+  transmitters (`example/template.npy`) is the 11-bit code 0.
+
+A burst is correlated once, not periodically, so in practice the Gold
+10-bit codes are about 1 dB better than the legacy ones (median peak
+sidelobe −20.2 vs −19.5 dB); 11-bit codes gain about 2.5 dB more.
+
+**Upgrading from an earlier Thrifty-X:**
+- `template_generate 10 N` / `8 N` (and `gold`, and
+  `scripts/chip_rate_search.py`) now stop with an error until you add
+  `--family`: `--family legacy` reproduces what they generated before,
+  bit for bit.  Existing template files are unaffected.
+- Code indices outside `0 … 2^N` are an error (they used to wrap).
+- Default `block_history` grows where it could not hold an 11-bit
+  template: 5182 at 2.5 MSPS, 6206 at 3 MSPS (from 4920), 12349 at 6 MSPS
+  and 20539 at 10 MSPS; block sizes do not change.  A configured
+  (explicit) history that is too short is kept but now logged as a
+  warning, since captures made with it can never be correlated with an
+  11-bit template.  Cards keep the geometry they were captured with:
+  `detect` reads it from the `#v2` header (or, for older cards, the
+  `# arguments` line or the rule used when they were captured), and
+  `fastdet --card` refuses a card whose recorded geometry differs from
+  its arguments.
+
 ## Capture Reference
 
 The capture command is generic over device type; flags are interpreted by
@@ -280,18 +340,20 @@ defaults come from the `--device-type` profile.
 | `--sample-rate, -s` | by device: `6M` Mini, `10M` R2, `2.4M` RTL-SDR | Parsed by metric-float; Airspy Mini supports 3 M / 6 M; Airspy R2 supports 2.5 M / 10 M.  `tdoa` falls back to the same default.  At 10 MSPS on a USB 2.0 host, enable `--packing`. |
 | `--freq, -f`        | `433.83M` | Tuner centre frequency (Hz) |
 | `--block-size, -b`  | `16384` | Samples per block; must be a power of 2 |
-| `--history, -y`     | `4920`  | Sample overlap between blocks (block_history) |
+| `--history, -y`     | `4920` (larger above 2.4 MSPS, below) | Sample overlap between blocks (block_history) |
 
 > **Default block parameters auto-adjust with sample rate.** When
 > `block_size` / `block_history` are left at their defaults but the
-> sample rate makes them too small for the estimated template length
-> (assuming a 1023-chip Gold code), the loader enlarges them and logs a
-> warning.  With the default Airspy rates the effective defaults are
-> therefore `32768` / `12278` (Mini, 6 MSPS) and `65536` / `20464`
-> (R2, 10 MSPS), matching the user-guide tables. Explicitly-set values are **never**
-> rewritten; if they look too small a warning is logged and the value
-> is kept. Note that changing `block_size` changes the FFT length and
-> bin width.
+> sample rate makes them too small for the template of the longest
+> supported code (11 bits, 2047 chips), the loader enlarges them (logged
+> at INFO): the history becomes that template + 64 samples, slack for a
+> template made at a transmitter's measured chip rate.  With the
+> default Airspy rates the effective defaults are therefore `32768` /
+> `12349` (Mini, 6 MSPS) and `65536` / `20539` (R2, 10 MSPS), matching
+> the user-guide tables; every shorter code fits as well.
+> Explicitly-set values are **never** rewritten; the log says which code
+> lengths they can still correlate. Note that changing `block_size`
+> changes the FFT length and bin width.
 
 ### Gain — Airspy
 
@@ -522,7 +584,7 @@ guide:
 | `rpi/installation.md` | Original Pi 3 / Jessie installation guide |
 | `rpi/detect.sh`, `rpi/detector.cfg` | RTL-SDR capture + detect pipeline (needs the upstream `fastcard` binary) |
 | `rpi/detector.service`, `rpi/fastdet.sh`, `rpi/fastdet.cfg`, `rpi/template.tpl` | C `fastdet` service (needs `fastdet` built and `/home/pi/detector`) |
-| `rpi/freq-map.cfg`, `rpi/template.npy` | Example frequency map and template for the legacy pipeline |
+| `rpi/freq-map.cfg`, `rpi/template.npy` | Example frequency map and template (11-bit code 0 at 2.4 MSPS, like `rpi/template.tpl`) for the legacy pipeline |
 | `rpi/ntp-after-online.{service,sh}` | Older clock-sync helper, superseded by `chrony-wait.service` |
 | `rpi/pyFFTW-0.9.2-no-fftwl.patch` | Build patch for pyFFTW 0.9.2; current pyFFTW does not need it |
 
@@ -576,14 +638,6 @@ fastdet.
   mid-capture the reader stops within ~10 s (`fastcapture` within ~1 s)
   and exits non-zero, and the systemd unit restarts capture once the
   device is back.
-- **The 10-bit code pair is not a Gold preferred pair.** The LFSR taps
-  inherited from upstream Thrifty (`thriftyx/gold.py`, 10 bits) give two
-  valid m-sequences, but their cross-correlation reaches ±97 (−20.5 dB)
-  rather than the Gold bound of ±65 (−23.9 dB), so codes of one family
-  separate slightly less well than true Gold codes would.  Deployed
-  transmitters use these codes, so they are kept (and pinned by
-  `tests/unit/test_gold.py`); the 5-, 6-, 7-, 9- and 11-bit pairs are
-  preferred pairs.
 - The C `fastcapture` binary is provided mostly for parity with the
   original `fastcard` workflow — **the Python `thriftyx capture` path is
   the recommended entry point.** Both `fastcapture` and the `fastdet`

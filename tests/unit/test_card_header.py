@@ -125,6 +125,32 @@ def test_old_header_without_history_rederives_default_history():
     assert config.block_history == 12278  # capture-side default at 6 MSPS
 
 
+def test_c_card_arguments_line_gives_the_history():
+    """fastcapture/fastdet cards before block_history was on the #v2 line
+    used 16384 / 4920 at every rate, and said so on '# arguments'."""
+    text = ("#v2 bit_depth=12 sample_rate=6000000 endian=little "
+            "block_size=16384\n"
+            "# arguments: { carrier_bin: '1-100', threshold: '100c+15s', "
+            "block_size: 16384, history_size: 4920 }\n"
+            "# tuner: { freq: 433830000; sample_rate: 6000000 }\n"
+            + _card_text(block_size=16384, header=False))
+    header, stream = block_data.peek_card_header(io.StringIO(text))
+    assert header['history_size'] == '4920'
+    assert len(list(block_data.card_reader(stream, bit_depth=12))) == 2
+    config = settings.apply_card_header(_config(), header)
+    assert (config.block_size, config.block_history) == (16384, 4920)
+
+
+def test_unknown_old_geometry_is_assumed_loudly(caplog):
+    """No history anywhere and a block_size the old default rule would
+    not have chosen: the old rule's history, with a warning."""
+    with caplog.at_level(logging.WARNING):
+        config = settings.apply_card_header(
+            _config(), {'sample_rate': '6000000', 'block_size': '16384'})
+    assert (config.block_size, config.block_history) == (16384, 12278)
+    assert 'overlap is unknown' in caplog.text
+
+
 def test_explicit_history_survives_old_header():
     config = _config(explicit={'block_history'}, block_history=15000)
     config = settings.apply_card_header(

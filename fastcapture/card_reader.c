@@ -12,6 +12,43 @@ typedef struct {
     reader_settings_t settings;
 } card_reader_t;
 
+/* The block geometry a card was captured with decides how block indices
+ * map to samples: SoA = (block_size - history) * index + peak.  Replaying
+ * a card with other -b/-h values used to shift every SoA silently, so a
+ * geometry the header records (the #v2 line, or the "# arguments" line
+ * of older fastcapture/fastdet cards) must match this run's.  Returns 0,
+ * or -7 after explaining the mismatch. */
+static int check_recorded(const char* line, const char* key,
+                          size_t expected, const char* flag) {
+    const char* field = strstr(line, key);
+    if (field == NULL) {
+        return 0;
+    }
+    char* end;
+    unsigned long long recorded = strtoull(field + strlen(key), &end, 10);
+    if (end == field + strlen(key) || recorded == (unsigned long long)expected) {
+        return 0;
+    }
+    fprintf(stderr, "card_reader: the card was captured with %s%llu, but "
+            "this run uses %zu; rerun with %s %llu\n",
+            key + (key[0] == ' '), recorded, expected, flag, recorded);
+    return -7;
+}
+
+static int check_header_line(card_reader_t* state, const char* line) {
+    size_t history = state->settings.history_size;
+    if (strncmp(line, "#v2", 3) == 0) {
+        int ret = check_recorded(line, " block_size=",
+                                 state->settings.block_size, "-b");
+        return ret ? ret : check_recorded(line, " block_history=",
+                                          history, "-h");
+    }
+    if (strncmp(line, "# arguments:", 12) == 0) {
+        return check_recorded(line, "history_size: ", history, "-h");
+    }
+    return 0;
+}
+
 void card_reader_free(card_reader_t* state) {
     if (state != NULL && state->base64 != NULL) {
         free(state->base64);
@@ -34,13 +71,31 @@ int card_reader_next(card_reader_t* state) {
             output->raw_samples + new_len * 2,
             history_size * 2 * sizeof(int16_t));
 
+    // Skip comment lines, checking the geometry the header records.
+    int first;
+    while ((first = fgetc(state->file)) == '#') {
+        char line[1024];
+        line[0] = '#';
+        if (fgets(line + 1, sizeof(line) - 1, state->file) == NULL) {
+            break;
+        }
+        size_t line_len = strlen(line);
+        if (line[line_len - 1] != '\n') {      // longer than the buffer
+            int rest;
+            while ((rest = fgetc(state->file)) != EOF && rest != '\n') {
+            }
+        }
+        int ret = check_header_line(state, line);
+        if (ret != 0) {
+            return ret;
+        }
+    }
+    if (first != EOF) {
+        ungetc(first, state->file);
+    }
+
     // Read new data
-    char c;
-    int read;
-    do {
-        read = fscanf(state->file, "#%*[^\n]%c", &c);
-    } while (read && !feof(state->file));
-    read = fscanf(state->file,
+    int read = fscanf(state->file,
                       " %ld.%ld %" PRId64 " ",
                       &output->timestamp.tv_sec,
                       &output->timestamp.tv_usec,

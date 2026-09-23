@@ -94,7 +94,7 @@ _AIRSPY_GAIN_STAGES = MappingProxyType(
 # Airspy defaults are each board's highest rate, the canonical rate of
 # the shipped example configs (example/detector_mini.cfg, _r2.cfg).
 # Block parameters left at their defaults are enlarged for it by
-# settings (32768/12278 at 6 MSPS, 65536/20464 at 10 MSPS).
+# settings (32768/12349 at 6 MSPS, 65536/20539 at 10 MSPS).
 AIRSPY_MINI = DeviceProfile(
     name="Airspy Mini",
     sample_rates=(3_000_000, 6_000_000),

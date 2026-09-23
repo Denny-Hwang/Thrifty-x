@@ -96,6 +96,9 @@ if(BUILD_TESTING)
     add_test(NAME stamp_queue COMMAND test_stamp_queue)
     add_executable(test_fargs tests/test_fargs.c fargs.c parse.c)
     add_test(NAME fargs COMMAND test_fargs)
+    add_executable(test_card_reader tests/test_card_reader.c card_reader.c
+                   reader.c lib/base64.c)
+    add_test(NAME card_reader COMMAND test_card_reader)
 endif()
 
 # Installation

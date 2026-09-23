@@ -44,10 +44,11 @@ static void check_geometry(const char* rate, size_t block, size_t history) {
 }
 
 static void test_geometry_matches_python(void) {
-    check_geometry("2.5M", 16384, 4920);
-    check_geometry("3M", 16384, 4920);
-    check_geometry("6M", 32768, 12278);
-    check_geometry("10M", 65536, 20464);
+    check_geometry("2.4M", 16384, 4920);
+    check_geometry("2.5M", 16384, 5182);
+    check_geometry("3M", 16384, 6206);
+    check_geometry("6M", 32768, 12349);
+    check_geometry("10M", 65536, 20539);
 }
 
 static void test_explicit_geometry_is_kept(void) {
@@ -64,7 +65,7 @@ static void test_history_must_fit_block(void) {
     fargs_t* fa = parsed("6M");
     char b[] = "8192";
     CHECK(fargs_parse_opt(fa, 'b', b) == 0);
-    CHECK(fargs_finalize(fa) == FARGS_INVALID_VALUE);  /* 12278 >= 8192 */
+    CHECK(fargs_finalize(fa) == FARGS_INVALID_VALUE);  /* 12349 >= 8192 */
     free(fa);
 }
 
