@@ -99,3 +99,43 @@ def test_show_detections_falls_back_when_no_qt(monkeypatch):
                        sample_rate=1.0, bit_depth=8)
 
     assert len(pyplot_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fallback robustness: neither fallback may crash the viewer
+# ---------------------------------------------------------------------------
+
+def test_headless_linux_probes_qt_out_of_process(monkeypatch):
+    """Without a display, QApplication() aborts the process (qFatal) before
+    Python can fall back, so the binding must be probed in a subprocess
+    first and skipped when the probe fails."""
+    for name in ("PyQt5", "PyQt5.QtWidgets", "PyQt5.QtCore"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setattr(da.matplotlib, "use", lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "matplotlib.backends.backend_qtagg",
+                        types.ModuleType("backend_qtagg"))
+    monkeypatch.setattr(da.sys, "platform", "linux")
+    monkeypatch.setattr(da, "_has_display", lambda: False)
+    monkeypatch.setattr(da, "_is_wsl", lambda: False)
+    probed = []
+
+    def fake_probe(qt_pkg, platform=None, timeout=10):
+        probed.append(qt_pkg)
+        return False, "could not connect to display"
+
+    monkeypatch.setattr(da, "_probe_qt_runtime", fake_probe)
+    monkeypatch.delitem(sys.modules, "PySide6", raising=False)
+    assert da._try_qt_modules() is None
+    assert probed[0] == "PyQt5"
+
+
+def test_pyplot_fallback_returns_a_backend_that_can_draw(monkeypatch):
+    """matplotlib resolves backends lazily, so a missing tkinter or a
+    missing display used to surface only at plt.figure(), outside the
+    fallback loop.  Whatever backend is returned must actually work."""
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    backend, plt = da._get_pyplot_backend("TkAgg")
+    fig = plt.figure()
+    plt.close(fig)
+    assert backend == "Agg"  # no display: TkAgg must have been rejected
