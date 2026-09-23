@@ -159,8 +159,10 @@ void fastcard_free(fastcard_t* fc) {
 }
 
 int fastcard_start(fastcard_t* fc) {
-    reader_start(fc->reader);
-    return 0;
+    // Live readers begin streaming here, after fastcard_new() has
+    // finished the (possibly slow) FFT planning and the caller has
+    // installed its signal handlers.
+    return reader_start(fc->reader);
 }
 
 static void fastcard_stop(fastcard_t* fc) {

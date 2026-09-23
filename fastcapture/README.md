@@ -15,6 +15,8 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Gain Control | Single tuner_gain | LNA + Mixer + VGA (3-stage) |
 | Bias Tee | Not supported | Supported |
 | Max Sample Rate | ~2.4 MSPS | 3/6 MSPS (Mini), 2.5/10 MSPS (R2) |
+| Sample ring buffer | 32 MiB fixed | max(1 s of samples, 32 MiB); libairspy delivers 256 KiB per USB transfer |
+| Streaming starts | `reader_start` | `reader_start`, after FFT planning and signal-handler setup |
 
 ## Hardware-Independent Components (unchanged)
 
@@ -34,25 +36,24 @@ These components operate on float FFT data and have no hardware dependency:
 ## Building
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-sudo make install
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build --output-on-failure   # ring-buffer unit tests
+sudo cmake --install build
 ```
 
-Expected output (without libairspy):
-```
--- Could NOT find libairspy (missing: AIRSPY_LIBRARIES)
-```
-This confirms that CMakeLists.txt correctly references libairspy.
+Configuration fails if libairspy, FFTW3f or volk are not found by
+pkg-config.
 
 ## .card File Format
 
 fastcapture writes v2 .card format with metadata header:
 ```
-#v2 bit_depth=12 sample_rate=6000000
+#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12278
 <timestamp> <block_idx> <base64-encoded int16 I/Q data>
 ```
+
+`sample_rate=0` means the rate is unknown (file input); readers ignore it.
 
 v1 .card files (uint8 from original Thrifty/fastcard) are still readable
 by the Python thriftyx package for backward compatibility.
