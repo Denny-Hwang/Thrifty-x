@@ -35,8 +35,9 @@ from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
 from thriftyx.hal.profiles import get_profile
 from thriftyx.carrier_detect import detect as carrier_detect_block
-from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
-                                  DeviceCaptureError, ConfigValidationError)
+from thriftyx.exceptions import (EXIT_CONFIG, DeviceNotFoundError,
+                                  DeviceConfigError, DeviceCaptureError,
+                                  ConfigValidationError)
 from thriftyx.signal_utils import compute_fft
 
 
@@ -651,7 +652,7 @@ def capture_cli(args=None):
             logger.warning("Config warning: %s", w)
     except ConfigValidationError as e:
         print("ERROR: Invalid configuration: {}".format(e), file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CONFIG)
 
     device_type = config.device_type
 

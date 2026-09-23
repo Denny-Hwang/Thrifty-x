@@ -8,6 +8,8 @@
 
 """Tests for tdoa_est._resolve_sample_rate."""
 
+import pytest
+
 from thriftyx.tdoa_est import _resolve_sample_rate
 
 
@@ -46,9 +48,23 @@ def test_infer_from_device_type_rtlsdr(tmp_path):
     assert _resolve_sample_rate(cli_value=None, config_path=cfg) == 2.4e6
 
 
-def test_fallback_when_config_missing(tmp_path, caplog):
+def test_explicit_missing_config_is_an_error(tmp_path):
+    """A mistyped ``-c`` must not silently fall back to device defaults.
+
+    Every other command fails on an unreadable explicit config; tdoa used
+    to swallow it and scale every TDOA by the default rate.
+    """
     missing = str(tmp_path / "does_not_exist.cfg")
-    assert _resolve_sample_rate(cli_value=None, config_path=missing) == 6e6
+    with pytest.raises(FileNotFoundError):
+        _resolve_sample_rate(cli_value=None, config_path=missing)
+
+
+def test_fallback_when_default_config_missing(tmp_path, monkeypatch,
+                                              caplog):
+    from thriftyx import settings
+    monkeypatch.setattr(settings, 'DEFAULT_CONFIG_PATH',
+                        str(tmp_path / "detector.cfg"))
+    assert _resolve_sample_rate(cli_value=None, config_path=None) == 6e6
     assert "--sample-rate not specified" in caplog.text
 
 

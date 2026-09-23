@@ -16,6 +16,7 @@ Estimate position from TDOA values.
 import scipy.optimize
 import numpy as np
 
+from thriftyx import exceptions
 from thriftyx import tdoa_est
 
 SPEED_OF_LIGHT = tdoa_est.SPEED_OF_LIGHT
@@ -29,18 +30,16 @@ POSITION_INFO_DTYPE = {
 MAX_DIST = 10e3
 
 
-class EstimationError(Exception):
+class EstimationError(exceptions.EstimationError):
     pass
 
 
 def solve_1d(tdoa_array, rx_pos):
     """Simple 1D position estimator for 2xRX."""
-    rx_keys = list(rx_pos.keys())
-    rx0, rx1 = rx_keys[0], rx_keys[1]
-
     if len(rx_pos) != 2:
         raise EstimationError(
             f"solve_1d requires exactly 2 receivers, got {len(rx_pos)}")
+    rx0, rx1 = rx_pos.keys()
     if len(rx_pos[rx0]) != 1:
         raise EstimationError("solve_1d requires 1D receiver positions")
     if len(tdoa_array) != 1:
@@ -48,8 +47,12 @@ def solve_1d(tdoa_array, rx_pos):
             f"solve_1d requires exactly 1 TDOA, got {len(tdoa_array)}")
 
     tdoa_pos = tdoa_array['tdoa'][0] * SPEED_OF_LIGHT
-    rx_dist = rx_pos[rx0] + rx_pos[rx1]
-    if rx_pos[rx0] > rx_pos[rx1]:
+    # Receiver positions are 1-element sequences; use scalars so the
+    # result is a plain coordinate (an array here cannot be packed into
+    # the structured result array under NumPy 2).
+    pos0, pos1 = float(rx_pos[rx0][0]), float(rx_pos[rx1][0])
+    rx_dist = pos0 + pos1
+    if pos0 > pos1:
         position = (rx_dist - tdoa_pos) / 2
     else:
         position = (rx_dist + tdoa_pos) / 2

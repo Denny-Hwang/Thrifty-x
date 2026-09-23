@@ -11,10 +11,11 @@
 A centralized interface for accessing Thrifty-X modules with CLI interfaces.
 """
 
-import sys
 import importlib
+import os
+import sys
 
-from thriftyx.exceptions import ThriftyXError
+from thriftyx.exceptions import EXIT_CONFIG, ConfigError, ThriftyXError
 
 
 HELP = """usage: thriftyx <command> [<args>]
@@ -114,6 +115,25 @@ def _main():
             print("thriftyx {}: file not found: {}".format(
                 command, exc.filename or exc), file=sys.stderr)
             sys.exit(1)
+        except BrokenPipeError:
+            # `thriftyx detect ... | head`: the reader left early.  Point
+            # stdout at /dev/null so the interpreter's final flush does
+            # not raise again.
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            sys.exit(1)
+        except OSError as exc:
+            # A directory where a file was expected, no permission, ...
+            detail = exc.strerror or str(exc)
+            if exc.filename:
+                detail = "{}: {}".format(exc.filename, detail)
+            print("thriftyx {}: {}".format(command, detail), file=sys.stderr)
+            sys.exit(1)
+        except ConfigError as exc:
+            # Retrying cannot fix a bad configuration; a distinct status
+            # lets systemd stop restarting (RestartPreventExitStatus=).
+            print("thriftyx {}: {}".format(command, exc), file=sys.stderr)
+            sys.exit(EXIT_CONFIG)
         except ThriftyXError as exc:
             # Typed project errors (config syntax, device errors, ...)
             # carry a user-facing message already.

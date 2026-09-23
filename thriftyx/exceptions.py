@@ -8,6 +8,12 @@
 
 """Thrifty-X exception hierarchy."""
 
+# Exit status for configuration errors (sysexits.h EX_CONFIG).  A
+# supervisor can tell "the config is wrong, retrying will not help"
+# apart from transient failures (the capture unit sets
+# RestartPreventExitStatus= to it).
+EXIT_CONFIG = 78
+
 
 class ThriftyXError(Exception):
     """Base exception for all Thrifty-X errors."""
@@ -51,7 +57,7 @@ class SettingKeyError(ConfigError):
         super().__init__(msg)
 
     def __str__(self):
-        return repr(self.msg)
+        return str(self.msg)
 
 
 class ConfigValidationError(ConfigError):
@@ -62,13 +68,13 @@ class DetectionError(ThriftyXError):
     """Signal detection errors."""
 
 
-class TemplateError(DetectionError):
-    """Template generation or loading error."""
+class TemplateError(DetectionError, ValueError):
+    """Template does not fit the detector settings, or cannot be used."""
 
 
 class EstimationError(ThriftyXError):
     """Position or TDOA estimation errors."""
 
 
-class FileFormatError(ThriftyXError):
+class FileFormatError(ThriftyXError, ValueError):
     """Invalid or unrecognized file format."""

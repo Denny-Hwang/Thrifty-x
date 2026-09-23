@@ -22,7 +22,8 @@ import sys
 from collections import namedtuple
 
 from thriftyx import setting_parsers
-from thriftyx.exceptions import ConfigSyntaxError, SettingKeyError
+from thriftyx.exceptions import (ConfigSyntaxError, ConfigValidationError,
+                                 FileFormatError, SettingKeyError)
 from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, PROFILES, get_profile
 
 
@@ -119,7 +120,7 @@ DEFINITIONS = {
 
     'device_type': Definition(
         ['--device-type'],
-        str,
+        setting_parsers.one_of(*PROFILES),
         DEFAULT_DEVICE_TYPE,
         "SDR device type ({}); sets the default sample rate and bit "
         "depth".format(', '.join(repr(k) for k in PROFILES))
@@ -128,7 +129,7 @@ DEFINITIONS = {
     # Default derived from device_type (see DEVICE_DERIVED_KEYS).
     'bit_depth': Definition(
         ['--bit-depth'],
-        int,
+        setting_parsers.bit_depth,
         None,
         "ADC bit depth (8 for RTL-SDR, 12 for Airspy)"
     ),
@@ -192,7 +193,7 @@ DEFINITIONS = {
         ['--packing'],
         setting_parsers.parse_bool,
         'false',
-        "Enable libairspy 12-bit USB packing (saves ~33% bandwidth; "
+        "Enable libairspy 12-bit USB packing (saves 25% bandwidth; "
         "useful at the highest sample rates on USB 2.0 hosts)"
     ),
 
@@ -219,7 +220,7 @@ DEFINITIONS = {
 
     'freq_shift_method': Definition(
         ['--freq-shift-method'],
-        str,
+        setting_parsers.one_of('integer', 'time_domain'),
         'integer',
         "Frequency shift method: 'integer' (fast, ~1.07m RMSE) or "
         "'time_domain' (slow, ~1.04m RMSE)"
@@ -227,7 +228,7 @@ DEFINITIONS = {
 
     'soa_interpolation': Definition(
         ['--soa-interpolation'],
-        str,
+        setting_parsers.one_of('parabolic', 'gaussian', 'none'),
         'parabolic',
         "SOA interpolation method: 'parabolic', 'gaussian', or 'none'"
     ),
@@ -355,7 +356,9 @@ def _auto_adjust_block_params(values, explicit=None):
                 DEFAULT_CODE_LENGTH, rec_history)
         else:
             values['block_history'] = rec_history
-            logging.warning(
+            # Expected whenever the rate needs longer blocks than the
+            # stock defaults (e.g. every Airspy run): INFO, not WARNING.
+            logging.info(
                 "Auto-adjusted default block_history %d -> %d "
                 "(template_len=%d at %.1f Msps). Set block_history "
                 "explicitly to override.",
@@ -380,7 +383,7 @@ def _auto_adjust_block_params(values, explicit=None):
                 new_size = 1
                 while new_size < min_block:
                     new_size *= 2
-                logging.warning(
+                logging.info(
                     "Auto-adjusted default block_size %d -> %d "
                     "(template_len=%d, block_history=%d). This changes "
                     "the FFT length/bin width; set block_size explicitly "
@@ -434,13 +437,20 @@ def apply_card_header(config, header):
             continue
         try:
             recorded = DEFINITIONS[key].parser(header[key])
-        except ValueError:
+        except ValueError as exc:
+            if key == 'bit_depth':
+                # Decoding with a guessed width would turn the whole
+                # file into noise without saying so.
+                raise FileFormatError(
+                    ".card header records bit_depth={!r}: {}".format(
+                        header[key], exc)) from None
             logging.warning("ignoring unparseable .card header value "
                             "%s=%r", key, header[key])
             continue
-        if recorded <= 0:
+        if recorded < 0 or (recorded == 0 and key != 'block_history'):
             # fastcapture writes sample_rate=0 when re-emitting a file
-            # input whose rate it does not know.
+            # input whose rate it does not know.  block_history=0 is a
+            # valid geometry (no overlap).
             continue
         if key in explicit and recorded != values[key]:
             logging.warning(
@@ -521,7 +531,9 @@ def add_argparse_arguments(parser, keys, definitions=None):
             raise SettingKeyError("Unknown key: {}".format(key))
         setting = definitions[key]
         if len(setting.args):
-            help_str = str(setting.description)
+            # argparse %-formats help text; a literal '%' (e.g. "25%")
+            # would crash --help.
+            help_str = str(setting.description).replace('%', '%%')
             if setting.default is not None:
                 help_str += " [default: {}]".format(setting.default)
             elif key in DEVICE_DERIVED_KEYS:
@@ -606,7 +618,14 @@ def load(args=None, config_file=None, definitions=None,
         explicit.update(args)
 
     # Parse
-    values = {k: definitions[k].parser(v) for k, v in strings.items()}
+    values = {}
+    for key, string in strings.items():
+        try:
+            values[key] = definitions[key].parser(string)
+        except (ValueError, TypeError) as exc:
+            raise ConfigValidationError(
+                "invalid value for {}: {!r} ({})".format(key, string, exc)
+            ) from None
 
     # Defaults that depend on the device (sample rate, bit depth).
     _apply_device_defaults(values, definitions)

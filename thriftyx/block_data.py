@@ -19,6 +19,7 @@ import time
 
 import numpy as np
 
+from thriftyx.exceptions import FileFormatError
 from thriftyx.signal_utils import Signal
 
 logger = logging.getLogger(__name__)
@@ -205,9 +206,21 @@ def _parse_v2_header(line):
 
 def _is_non_data_line(line):
     """Whether a .card line carries no block (comment, blank, tool noise)."""
-    return (not line or line[0] == '#' or line[0] == '\n'
+    return (not line.strip() or line[0] == '#'
             or line.startswith('Using Volk machine:')
             or line.startswith('linux;'))
+
+
+def _decode_line(line):
+    """Return a .card line as text; binary input is not a .card file."""
+    if not isinstance(line, bytes):
+        return line
+    try:
+        return line.decode('ascii')
+    except UnicodeDecodeError:
+        raise FileFormatError(
+            "input is not a .card file (binary data); for raw I/Q "
+            "samples use --raw") from None
 
 
 class _ReplayStream:
@@ -247,7 +260,7 @@ def peek_card_header(stream):
         if not line:
             break
         consumed.append(line)
-        text = line.decode() if isinstance(line, bytes) else line
+        text = _decode_line(line)
         parsed = _parse_v2_header(text)
         if parsed is not None:
             header = parsed
@@ -316,8 +329,7 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
         line = stream.readline()
         if len(line) == 0:
             break
-        if isinstance(line, bytes):
-            line = line.decode()
+        line = _decode_line(line)
         header = _parse_v2_header(line)
         if header is not None:
             if 'bit_depth' in header:
@@ -329,6 +341,10 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
                         "bit_depth=%r", header['bit_depth'])
                     header.pop('bit_depth')
                     header_bit_depth = None
+                if header_bit_depth not in (None, 8, 12):
+                    raise FileFormatError(
+                        ".card header records bit_depth={}; only 8 and "
+                        "12 are supported".format(header_bit_depth))
                 if header_bit_depth is None:
                     pass
                 elif data_seen and not header_seen:
@@ -392,11 +408,11 @@ def card_reader(stream, bit_depth=None, expected_sample_rate=None):
         if _is_non_data_line(line):
             continue
         try:
-            timestamp, idx, encoded = line.rstrip('\n').split(' ')
+            timestamp, idx, encoded = line.rstrip('\r\n').split(' ')
         except ValueError:
-            raise ValueError(
+            raise FileFormatError(
                 "Malformed .card line: expected 'timestamp index data', "
-                "got: {!r}".format(line.rstrip('\n'))
+                "got: {!r}".format(line.rstrip('\r\n')[:80])
             ) from None
 
         # Default: if not set from header, use bit_depth arg or fall back to 8

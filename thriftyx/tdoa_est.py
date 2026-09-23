@@ -80,15 +80,24 @@ def make_detection_extractor(detections, matches):
     return extract
 
 
+def _power_snr(corr_info):
+    """Linear power SNR of a correlation peak.
+
+    A noise estimate of zero (a synthetic or clipped block) yields
+    ``inf`` rather than a ZeroDivisionError that would abort the whole
+    TDOA run.
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return float(np.divide(corr_info.energy, corr_info.noise)) ** 2
+
+
 def estimate_model_quality(model, detection_pairs):
     # TODO: estimate model quality from SNR and/or residuals and/or model
     # covariance matrix and/or model residuals.
     # Alternative names to replace "quality": confidence / beacon SNR
-    sqrt_snr0 = np.array([d[0].corr_info.energy / d[0].corr_info.noise
-                          for d in detection_pairs])
-    sqrt_snr1 = np.array([d[1].corr_info.energy / d[1].corr_info.noise
-                          for d in detection_pairs])
-    snr = (np.mean(sqrt_snr0**2) + np.mean(sqrt_snr1**2)) / 2
+    snr0 = np.array([_power_snr(d[0].corr_info) for d in detection_pairs])
+    snr1 = np.array([_power_snr(d[1].corr_info) for d in detection_pairs])
+    snr = (np.mean(snr0) + np.mean(snr1)) / 2
 
     return snr
 
@@ -290,9 +299,8 @@ def estimate_tdoas(detections, matches, window_size,
                 failures.append((det0_id, det1_id))
                 continue
 
-            snr0 = (det0.corr_info.energy / det0.corr_info.noise)**2
-            snr1 = (det1.corr_info.energy / det1.corr_info.noise)**2
-            snr = (snr0 + snr1) / 2
+            snr = (_power_snr(det0.corr_info)
+                   + _power_snr(det1.corr_info)) / 2
 
             tdoas.append(TdoaInfo(rx0=det0.rxid,
                                   rx1=det1.rxid,
@@ -387,6 +395,10 @@ def _resolve_sample_rate(cli_value, config_path):
             values, explicit = settings.load(config_file=cfg_file,
                                              return_explicit=True)
     except OSError:
+        if config_path:
+            # An explicit -c that cannot be read (typo, permissions) must
+            # not silently fall back to defaults.
+            raise
         values, explicit = settings.load(return_explicit=True)
 
     rate = float(values['sample_rate'])

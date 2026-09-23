@@ -313,7 +313,7 @@ defaults come from the `--device-type` profile.
 | Flag | Default | Notes |
 |------|---------|-------|
 | `--ppm F`     | `0`     | LO correction in ppm; positive → crystal runs fast |
-| `--packing`   | `false` | Enable libairspy 12-bit USB packing (~33 % bandwidth saving; matters at 10 MSPS) |
+| `--packing`   | `false` | Enable libairspy 12-bit USB packing (25 % bandwidth saving; matters at 10 MSPS) |
 | `--bias-tee`  | `false` | Feed DC up the antenna lead.  **Verify your chain is DC-isolated.**  A warning is printed when on |
 
 ### Selecting a specific Airspy

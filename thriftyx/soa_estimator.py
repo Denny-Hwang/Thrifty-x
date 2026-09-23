@@ -14,6 +14,7 @@ import logging
 import numpy as np
 
 from thriftyx import toads_data
+from thriftyx.exceptions import TemplateError
 from thriftyx.signal_utils import Signal
 
 
@@ -39,10 +40,18 @@ def calculate_window(block_len, history_len, template_len):
     detection to the range of values within the correlation block that are
     unique to that block to prevent duplicate detections.
     """
+    if template_len > block_len:
+        # Otherwise this fails later with a bare "negative dimensions".
+        raise TemplateError(
+            f"template has {template_len} samples but block_size is "
+            f"{block_len}; the template was probably generated for a "
+            f"higher sample rate than the data")
     if history_len < template_len - 1:
-        raise ValueError(
-            f"history_len ({history_len}) must be >= template_len - 1 "
-            f"({template_len - 1})")
+        raise TemplateError(
+            f"template has {template_len} samples, so block_history must "
+            f"be at least {template_len - 1} (it is {history_len}); the "
+            f"template was probably generated for a different sample "
+            f"rate than the data, or block_history was set too small")
     corr_len = block_len - template_len + 1
     padding = history_len - template_len + 1
     left_pad = padding // 2
@@ -78,6 +87,7 @@ class SoaEstimator:
         self.template_energy = np.sum(self.template.power)
 
         template_len = len(template)
+        self.window = calculate_window(block_len, history_len, template_len)
         self.corr_len = block_len - template_len + 1
         self.template_padded = np.concatenate([self.template,
                                                np.zeros(self.corr_len-1)])
@@ -96,7 +106,6 @@ class SoaEstimator:
             # Default: parabolic (simplest, equivalent accuracy)
             self.interpolate = parabolic_interpolation
 
-        self.window = calculate_window(block_len, history_len, template_len)
         self.thresh_coeffs = thresh_coeffs
 
     def soa_estimate(self, fft):

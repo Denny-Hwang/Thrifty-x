@@ -30,6 +30,7 @@ import numpy as np
 
 from thriftyx import detect
 from thriftyx import settings
+from thriftyx.exceptions import DetectionError
 from thriftyx.setting_parsers import normalize_freq_range
 
 
@@ -48,6 +49,11 @@ def best_detection(detections, max_offset):
                 best_result = result
                 best_fft = fft
 
+    if best_result is None:
+        raise DetectionError(
+            "no block had a correlation detection with |offset| <= {}; "
+            "check the carrier window/thresholds and that the template "
+            "matches the data's sample rate".format(max_offset))
     best_signal = np.fft.ifft(best_fft)
     return best_signal, best_result
 
@@ -88,13 +94,15 @@ def _main():
 
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
-                    'corr_threshold', 'template']
+                    'corr_threshold', 'template', 'bit_depth',
+                    'freq_shift_method', 'soa_interpolation']
     config, args = settings.load_args(parser, setting_keys)
     blocks, config = detect.open_card(args.input, config)
 
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
-    template = np.load(config.template)
+    template = detect.load_template(config.template, config.sample_rate,
+                                    config.get('chip_rate'))
 
     dsettings = detect.DetectorSettings(
         block_len=config.block_size,
@@ -104,6 +112,8 @@ def _main():
         carrier_window=window,
         template=template,
         corr_thresh=config.corr_threshold,
+        freq_shift_method=config.freq_shift_method,
+        soa_interpolation=config.soa_interpolation,
         )
     detections = detect.Detector(dsettings, blocks, yield_data=True)
 
