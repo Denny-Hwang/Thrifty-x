@@ -485,8 +485,10 @@ keep the table below internally consistent.
 | `carrier_window` low  | `ceil(1000 / bin_res)` | 7 | 6 | 7 |
 | `carrier_window` high | `floor(19000 / bin_res)` | 130 | 103 | 124 |
 
-> ⚠️  `template.npy` and `detector.cfg` **must agree on `sample_rate`**.
-> A mismatch silently produces zero detections. When you change the
+> ⚠️  `template.npy` **must be generated at the capture's `sample_rate`**.
+> `detect` takes the sample rate and block geometry from the card's
+> `#v2` header, but it cannot correct a template made for another rate:
+> a mismatch silently produces zero detections. When you change the
 > sample rate, regenerate the template (see [Section 6.5](#65-template-regeneration-when-changing-devices)).
 
 ### 5.4 Frequently Used Airspy CLI Flags
@@ -759,15 +761,22 @@ A `.card` file contains only blocks where a carrier was detected
 (matching the original Thrifty's `fastcard` behaviour). Two on-disk
 formats exist:
 
-- **v1** (RTL-SDR legacy, no header) — lines of
+- **v1** (original Thrifty, RTL-SDR, no header) — lines of
   `<timestamp> <block_idx> <base64 of raw uint8 I/Q>`.
-- **v2** (Airspy) — leading header line
-  `#v2 bit_depth=12 sample_rate=6000000`, then
-  `<timestamp> <block_idx> <base64 of int16 I/Q>` lines.
+- **v2** (Thrifty-X) — a leading header line such as
+  `#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12278`,
+  then the same data lines (int16 I/Q for `bit_depth=12`, uint8 for
+  `bit_depth=8`).  Every Thrifty-X writer emits the header, including
+  the Python RTL-SDR capture path.
 
-Format auto-detection is performed by `thriftyx.block_data.card_reader`,
-so existing v1 RTL-SDR captures from the original Thrifty are usable
-without conversion.
+`detect`, `analyze_detect` and `template_extract` apply the header's
+`sample_rate`, `block_size`, `block_history` and `bit_depth` before
+processing, overriding (with a warning) any explicit setting that
+disagrees.  Headers written before `block_history` was recorded still
+work: the history is re-derived for the recorded rate the same way the
+capture derived it.  Headerless v1 cards from the original Thrifty are
+decoded as 8-bit with the configured block geometry, so they are
+usable without conversion.
 
 ### 9.2 `.toad` File Format
 

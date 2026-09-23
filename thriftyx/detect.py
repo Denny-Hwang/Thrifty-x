@@ -15,10 +15,12 @@ from collections import namedtuple
 
 import numpy as np
 
+from thriftyx import settings as settings_module
 from thriftyx.settings import load_args
 from thriftyx import toads_data
 from thriftyx import util
-from thriftyx.block_data import block_reader, card_reader
+from thriftyx.block_data import block_reader, card_reader, peek_card_header
+from thriftyx.exceptions import FileFormatError
 from thriftyx.carrier_sync import DefaultSynchronizer
 from thriftyx.setting_parsers import normalize_freq_range
 from thriftyx.soa_estimator import SoaEstimator
@@ -68,9 +70,8 @@ class Detector:
     def detect(self, timestamp, block_idx, block):
         """Process the given block of data."""
         if len(block) != self.settings.block_len:
-            raise ValueError(
-                f"Block length {len(block)} does not match expected "
-                f"{self.settings.block_len}")
+            raise FileFormatError(_block_length_message(
+                block_idx, len(block), self.settings.block_len))
         shifted_fft, carrier_info = self.sync(block)
 
         if shifted_fft is not None:  # detected
@@ -100,6 +101,51 @@ class Detector:
 
     def __next__(self):
         return self.next()
+
+
+def _block_length_message(block_idx, actual, expected):
+    """Explain a block whose length does not match the detector's."""
+    msg = (f"block {block_idx} holds {actual} samples but the detector "
+           f"is configured for block_size={expected}.")
+    if actual == 2 * expected:
+        msg += (" Exactly twice the expected length is what a 12-bit "
+                "card looks like when its '#v2' header is missing and it "
+                "is decoded as 8-bit; set --bit-depth 12.")
+    else:
+        msg += (" Headerless (v1) cards do not record their block "
+                "geometry; set --block-size and --history to the values "
+                "used for the capture (and --bit-depth 12 if it is an "
+                "Airspy card that lost its '#v2' header).")
+    return msg
+
+
+def open_card(stream, config):
+    """Open a .card input, adopting the capture settings in its header.
+
+    The ``#v2`` header records the capture's sample rate, block
+    geometry and bit depth; these override *config* (with a warning when
+    they contradict an explicit setting), so a card can be processed
+    without a config file that repeats how it was captured.
+
+    Headerless (v1) cards are the original 8-bit RTL-SDR format; they
+    decode as 8-bit unless ``bit_depth`` was set explicitly.
+
+    Returns
+    -------
+    blocks : iterator
+        As yielded by :func:`thriftyx.block_data.card_reader`.
+    config : Namespace
+        *config* with the header's values applied.
+    """
+    header, stream = peek_card_header(stream)
+    config = settings_module.apply_card_header(config, header)
+    explicit = getattr(config, 'explicit_keys', frozenset())
+    fallback_bit_depth = (config['bit_depth']
+                          if 'bit_depth' in config and 'bit_depth' in explicit
+                          else None)
+    blocks = card_reader(stream, bit_depth=fallback_bit_depth,
+                         expected_sample_rate=config.get('sample_rate'))
+    return blocks, config
 
 
 def _carrier_freq(carrier_info, block_len, sample_rate):
@@ -203,26 +249,17 @@ def detector_cli(detector_class, parser=None, extra_args=None):
 
     output_file = args.output if args.append is None else args.append
     info_out = sys.stderr if output_file == sys.stdout else sys.stdout
-    bin_freq = config.sample_rate / config.block_size
-    window = normalize_freq_range(config.carrier_window, bin_freq)
-
-    bit_depth = int(config.get('bit_depth', 8))
 
     if args.raw:
         blocks = block_reader(args.input, config.block_size,
-                              config.block_history, bit_depth=bit_depth)
+                              config.block_history,
+                              bit_depth=config.bit_depth)
     else:
-        # Pass bit_depth as a fallback hint: card_reader prefers the
-        # ``#v2 bit_depth=…`` header when present and only uses this value
-        # for headerless (v1) files.  The configured sample rate is passed
-        # so a mismatch against the header's recorded rate is warned about.
-        blocks = card_reader(args.input, bit_depth=bit_depth,
-                             expected_sample_rate=config.sample_rate)
+        blocks, config = open_card(args.input, config)
 
+    bin_freq = config.sample_rate / config.block_size
+    window = normalize_freq_range(config.carrier_window, bin_freq)
     template = np.load(config.template)
-
-    freq_shift_method = config.get('freq_shift_method', 'integer')
-    soa_interpolation = config.get('soa_interpolation', 'parabolic')
 
     settings = DetectorSettings(block_len=config.block_size,
                                 history_len=config.block_history,
@@ -231,8 +268,8 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                                 carrier_window=window,
                                 template=template,
                                 corr_thresh=config.corr_threshold,
-                                freq_shift_method=freq_shift_method,
-                                soa_interpolation=soa_interpolation)
+                                freq_shift_method=config.freq_shift_method,
+                                soa_interpolation=config.soa_interpolation)
     detections = detector_class(settings, blocks, rxid=config.rxid, **kwargs)
     summary_liner = SummaryLineFormatter(config.sample_rate,
                                          config.block_size,

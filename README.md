@@ -197,18 +197,29 @@ full argument list of any command.
 ## Typical Workflow
 
 ```bash
-# 1. On each receiver — capture + detect in one step (or split into two):
-thriftyx capture rx0.card --device-type airspy_mini \
-    --sample-rate 6M --freq 433.83M \
-    --lna-gain 5 --mixer-gain 5 --vga-gain 5
+# 1. Once per receiver: shared settings and a template generated at the
+#    capture sample rate (every command reads ./detector.cfg).
+cp example/detector_mini.cfg detector.cfg     # or detector_r2.cfg / detector.cfg (RTL-SDR)
+thriftyx template_generate 10 3 -o template.npy
+
+# 2. On each receiver: capture, then detect.
+thriftyx capture rx0.card --duration 60
 thriftyx detect rx0.card -o rx0.toad
 
-# 2. On the central server, combine .toad files from all receivers:
+# 3. On the central server, combine .toad files from all receivers:
 thriftyx identify rx0.toad rx1.toad rx2.toad
 thriftyx match
 thriftyx tdoa
 thriftyx pos
 ```
+
+`detect`, `analyze_detect` and `template_extract` take the sample rate,
+block geometry and bit depth from the card's `#v2` header, so a card
+is always processed the way it was captured, even on a machine without
+the receiver's `detector.cfg`.  An explicit setting that contradicts
+the header is overridden with a warning.  The template is the one input
+the header cannot supply: it must be generated or extracted at the
+capture's sample rate.
 
 The pipeline is identical to the original Thrifty.  The legacy `thrifty`
 command works as an alias for everything above.
@@ -380,11 +391,13 @@ out-of-bound detections.
 ## Using Existing RTL-SDR Data
 
 Existing `.card` files captured with the **original** Thrifty (v1
-format, 8-bit unsigned interleaved I/Q) are auto-detected by the v1/v2
-header sniffer and processed correctly:
+format, 8-bit unsigned interleaved I/Q, no header) are recognised by
+their missing `#v2` header and decoded as 8-bit.  A v1 card does not
+record how it was captured, so process it with the RTL-SDR settings it
+was captured with:
 
 ```bash
-thriftyx detect old_rtlsdr_data.card -o detections.toad
+thriftyx detect old_rtlsdr_data.card -o detections.toad -c example/detector.cfg
 ```
 
 The `block_data` module promotes 8-bit unsigned to the same complex64
