@@ -659,20 +659,64 @@ def _try_qt_modules():
 
     is_wsl = _is_wsl()
     on_display = _has_display()
-    # Without a display, QApplication() aborts the process with a qFatal
-    # that Python cannot catch, so the viewer never reaches its fallback.
-    # Probe in a subprocess first (it honours a caller-set
-    # QT_QPA_PLATFORM such as offscreen).
-    headless_linux = sys.platform.startswith("linux") and not on_display
+    # On Linux, QApplication() aborts the whole process (a qFatal Python
+    # cannot catch) when the platform plugin cannot start: no display, a
+    # stale DISPLAY over SSH, or a missing xcb library -- the last is
+    # common with pip-installed Qt even on a desktop.  Prove the binding
+    # in a subprocess first, and only then touch process-wide state
+    # (QT_API, the matplotlib backend), so a rejected binding cannot
+    # steer matplotlib toward it.
+    probe_linux = sys.platform.startswith("linux")
+    # Respect a QT_API the user pinned to one of the supported bindings.
+    pinned_api = os.environ.get("QT_API", "").lower()
+    if pinned_api not in {api for _, api in candidates}:
+        pinned_api = ""
 
     for qt_pkg, qt_api in candidates:
+        if pinned_api and qt_api != pinned_api:
+            continue
         try:
             qt_widgets = importlib.import_module(qt_pkg + ".QtWidgets")
             qt_core = importlib.import_module(qt_pkg + ".QtCore")
         except ImportError:
             continue
+
+        chosen_platform = None
+        if probe_linux and on_display and is_wsl \
+                and "QT_QPA_PLATFORM" not in os.environ:
+            # WSLg: try xcb (works through XWayland), then native
+            # wayland, then let Qt auto-pick.  Record the choice in the
+            # environment so the in-process QApplication picks the same
+            # plugin.
+            ok = False
+            last_err = ""
+            for platform in ("xcb", "wayland", None):
+                probed, err = _probe_qt_runtime(qt_pkg, platform)
+                if probed:
+                    chosen_platform = platform
+                    ok = True
+                    break
+                last_err = err
+            if not ok:
+                sys.stderr.write(
+                    "thriftyx: {} cannot initialise Qt on WSL "
+                    "(last error: {}); trying next binding.\n"
+                    .format(qt_pkg, _last_line(last_err)))
+                continue
+        elif probe_linux:
+            # Honours a caller-set QT_QPA_PLATFORM (e.g. offscreen).
+            probed, err = _probe_qt_runtime(qt_pkg)
+            if not probed:
+                where = ("without a display" if not on_display
+                         else "on this display")
+                sys.stderr.write(
+                    "thriftyx: {} cannot open a Qt window {} ({}); "
+                    "trying next binding.\n"
+                    .format(qt_pkg, where, _last_line(err)))
+                continue
+
         try:
-            os.environ.setdefault("QT_API", qt_api)
+            os.environ["QT_API"] = qt_api
             matplotlib.use("QtAgg", force=True)
             backend = importlib.import_module(
                 "matplotlib.backends.backend_qtagg")
@@ -680,50 +724,6 @@ def _try_qt_modules():
                 "matplotlib.backend_bases")
         except (ImportError, ValueError):
             continue
-
-        chosen_platform = None
-        if headless_linux:
-            probed, err = _probe_qt_runtime(qt_pkg)
-            if not probed:
-                sys.stderr.write(
-                    "thriftyx: {} cannot open a Qt window without a "
-                    "display ({}); trying next binding.\n"
-                    .format(qt_pkg, _last_line(err)))
-                continue
-        elif on_display and is_wsl:
-            if "QT_QPA_PLATFORM" in os.environ:
-                # Caller pinned a platform — verify it works once before
-                # we hand off to the real (uncatchable-abort) GUI.
-                probed, err = _probe_qt_runtime(qt_pkg)
-                if not probed:
-                    sys.stderr.write(
-                        "thriftyx: {} cannot initialise Qt with "
-                        "QT_QPA_PLATFORM={} ({}); trying next binding.\n"
-                        .format(qt_pkg,
-                                os.environ.get("QT_QPA_PLATFORM"),
-                                _last_line(err)))
-                    continue
-            else:
-                # WSLg: try xcb (works through XWayland), then native
-                # wayland, then let Qt auto-pick.  Record the choice in
-                # the environment so the in-process QApplication picks
-                # the same plugin.
-                attempts = ("xcb", "wayland", None)
-                ok = False
-                last_err = ""
-                for platform in attempts:
-                    probed, err = _probe_qt_runtime(qt_pkg, platform)
-                    if probed:
-                        chosen_platform = platform
-                        ok = True
-                        break
-                    last_err = err
-                if not ok:
-                    sys.stderr.write(
-                        "thriftyx: {} cannot initialise Qt on WSL "
-                        "(last error: {}); trying next binding.\n"
-                        .format(qt_pkg, _last_line(last_err)))
-                    continue
 
         if chosen_platform is not None:
             os.environ["QT_QPA_PLATFORM"] = chosen_platform
@@ -838,9 +838,9 @@ def _show_detections_qt(qt, detections, cmds, settings, sample_rate, bit_depth):
             self.fig.set_layout_engine('tight')
             self.canvas.draw_idle()
 
-            summary_text = summary_liner(detection.detected, detection.result)
+            # The summary line already starts with "blk=N; ".
             self.summary_line.setText(
-                "blk={}; {}".format(detection.result.block, summary_text))
+                summary_liner(detection.detected, detection.result))
 
         def _on_key_press(self, event):
             key_press_handler(event, self.canvas, self.toolbar)
@@ -952,9 +952,10 @@ def _show_detections_pyplot(detections, cmds, settings, sample_rate, bit_depth,
         fig.set_layout_engine('tight')
 
         summary_text = summary_liner(detection.detected, detection.result)
-        fig.suptitle("blk={} ({}/{}) - {} ({}/{}) - {}".format(
-            detection.result.block, b + 1, len(detections),
-            cmds[c], c + 1, len(cmds), summary_text))
+        # summary_text starts with "blk=N; ".
+        fig.suptitle("block {}/{} - {} ({}/{}) - {}".format(
+            b + 1, len(detections), cmds[c], c + 1, len(cmds),
+            summary_text))
 
         window_title = "Thrifty-X - blk={} - {}".format(
             detection.result.block, cmds[c])
@@ -1146,8 +1147,9 @@ def _main():
                         help="what to plot",
                         default="overview,time,overlays,spectra,corrs")
     parser.add_argument('--export', type=str, nargs='?', const='plot',
-                        help="export plots to .PDF files "
-                             "with the given prefix")
+                        help="export plots as PNG files, "
+                             "PREFIX_block<N>/<plot>.png (PREFIX defaults "
+                             "to 'plot'), instead of opening a viewer")
     parser.add_argument('--save', type=str, nargs='?', const='signals',
                         help="save detection signals to .npz files "
                              "with the given prefix")

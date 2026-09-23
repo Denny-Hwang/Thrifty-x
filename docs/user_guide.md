@@ -943,8 +943,9 @@ What "bad" looks like:
 
 - USB attach / detach is done from **PowerShell**, not WSL.
 - For matplotlib plots inside WSL, set a usable backend:
-  `export MPLBACKEND=TkAgg` (with WSLg) or use `--export plot.pdf` to
-  save to disk instead.
+  `export MPLBACKEND=TkAgg` (with WSLg) or use `--export PREFIX` to
+  save PNG files to disk instead (`analyze_detect` writes
+  `PREFIX_block<N>/<plot>.png`, `analyze_toads` `PREFIX_<n>.png`).
 - `wsl --shutdown` is a clean recovery from any USB-state mess.
 - WSL's clock can drift — use `sudo hwclock -s` if `.toad` timestamps
   look wrong.

@@ -10,6 +10,7 @@
 
 
 import argparse
+import sys
 from collections import OrderedDict
 
 import matplotlib
@@ -113,18 +114,28 @@ def _plot_column(ax, detections, column, **kwargs):
     ax.set_ylabel(column)
 
 
-def _get_plt():
-    """Get matplotlib.pyplot with appropriate backend."""
-    try:
-        matplotlib.use('TkAgg', force=False)
-    except ImportError:
+# matplotlib.pyplot, bound by _main once it knows whether an interactive
+# backend is needed.  Choosing one at import time (TkAgg, as this module
+# used to) made `--export` crash on a headless node the first time a
+# figure was created ("no display name").
+plt = None
+
+
+def _select_pyplot(export):
+    """Return ``(pyplot, interactive)`` for this run.
+
+    ``--export`` never needs a window, so it always uses Agg; otherwise
+    the same interactive-backend search as ``analyze_detect`` runs,
+    falling back to Agg when no display is usable.
+    """
+    if export:
         matplotlib.use('Agg', force=True)
-    import matplotlib.pyplot as plt
-    return plt
-
-
-# Module-level lazy reference; set on first call to _get_plt()
-plt = _get_plt()
+        import matplotlib.pyplot as pyplot
+        pyplot.switch_backend('Agg')
+        return pyplot, True
+    from thriftyx.detect_analysis import _get_pyplot_backend
+    backend, pyplot = _get_pyplot_backend()
+    return pyplot, backend != 'Agg'
 
 
 def _plot_per_rx(splits, func):
@@ -289,8 +300,17 @@ def _main():
                         type=argparse.FileType('r'), default=None,
                         help="exclude unmatched detections")
     parser.add_argument('--export', type=str, default=None,
-                        help="export plots with given prefix (PNG/PDF)")
+                        metavar='PREFIX',
+                        help="save the plots as PREFIX_<n>.png instead of "
+                             "opening windows (works without a display)")
     args = parser.parse_args()
+
+    global plt
+    plt, usable = _select_pyplot(args.export)
+    if not usable:
+        print("No interactive display available; use --export PREFIX to "
+              "save the plots as PNG files.", file=sys.stderr)
+        sys.exit(1)
 
     if args.toad:
         toads = toads_data.load_toad(args.input)
