@@ -354,8 +354,8 @@ the figure in place; no per-block, per-plot pop-up windows.
 | `-m, --max N` | `20` | Process at most N detected blocks |
 | `-i, --blocks RANGE` | _(none)_ | Subset specific block indices (e.g. `0-10`) |
 | `-p, --plot LIST` | all | Comma-separated subset of plot families |
-| _(Qt preference)_ | Qt attempted by default | The Qt viewer is attempted first; matplotlib fallback is automatic if no Qt binding is available.  Use `--no-gui` to skip Qt entirely (`prefer_qt` is exposed on the Python API, not as a CLI flag) |
-| `--no-gui` | _(unset)_ | Force the matplotlib-only fallback (one figure per `(block, plot)`) |
+| `--backend {auto,qt,tk,pyplot}` | `auto` | `auto` tries the Qt viewer, then falls back to a single matplotlib window.  On a machine without a display the Qt probe runs in a subprocess, so a missing display falls back instead of aborting |
+| `--no-gui` | _(unset)_ | Skip Qt and use the single-window matplotlib viewer (Left/Right = block, Up/Down = plot, q = quit).  With no usable interactive backend it prints a hint to use `--export` |
 | `--export PREFIX` | _(unset)_ | Write PNGs to `PREFIX_block<N>/<plot>.png` instead of displaying |
 | `--save [PREFIX]` | _(unset)_ | Save detection signals (unsynced, synced, correlation, template, metadata) as `.npz` files with the given prefix (default `signals`) |
 

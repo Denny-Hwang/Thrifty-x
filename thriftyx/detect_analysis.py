@@ -659,6 +659,11 @@ def _try_qt_modules():
 
     is_wsl = _is_wsl()
     on_display = _has_display()
+    # Without a display, QApplication() aborts the process with a qFatal
+    # that Python cannot catch, so the viewer never reaches its fallback.
+    # Probe in a subprocess first (it honours a caller-set
+    # QT_QPA_PLATFORM such as offscreen).
+    headless_linux = sys.platform.startswith("linux") and not on_display
 
     for qt_pkg, qt_api in candidates:
         try:
@@ -677,7 +682,15 @@ def _try_qt_modules():
             continue
 
         chosen_platform = None
-        if on_display and is_wsl:
+        if headless_linux:
+            probed, err = _probe_qt_runtime(qt_pkg)
+            if not probed:
+                sys.stderr.write(
+                    "thriftyx: {} cannot open a Qt window without a "
+                    "display ({}); trying next binding.\n"
+                    .format(qt_pkg, _last_line(err)))
+                continue
+        elif on_display and is_wsl:
             if "QT_QPA_PLATFORM" in os.environ:
                 # Caller pinned a platform — verify it works once before
                 # we hand off to the real (uncatchable-abort) GUI.
@@ -871,8 +884,15 @@ def _get_pyplot_backend(preferred=None):
         try:
             matplotlib.use(backend, force=True)
             import matplotlib.pyplot as _plt
+            # matplotlib resolves backends lazily: use() and the pyplot
+            # import succeed even when the toolkit (e.g. tkinter) is
+            # missing or there is no display, and the failure would only
+            # surface at plt.figure(), outside this fallback loop.
+            # switch_backend() loads the backend now and raises
+            # ImportError for both cases.
+            _plt.switch_backend(backend)
             return backend, _plt
-        except (ImportError, ValueError):
+        except (ImportError, ValueError, RuntimeError):
             continue
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as _plt

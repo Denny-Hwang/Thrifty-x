@@ -15,6 +15,7 @@ Example:
 """
 
 
+import argparse
 import contextlib
 import logging
 import sys
@@ -494,6 +495,23 @@ class Namespace(dict):
         self.__dict__.update(dict_)
 
 
+def _bool_flag_value(string):
+    """argparse type for boolean settings: keep the word, reject non-bools.
+
+    Returns the string unchanged (load() parses it like a config-file
+    value).  A bare boolean flag followed by a positional argument would
+    otherwise swallow it as its value; the error says how to avoid that.
+    """
+    try:
+        setting_parsers.parse_bool(string)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "expected true/false, got {!r}; a bare flag must come after "
+            "the positional arguments, or write it as --flag=true"
+            .format(string)) from None
+    return string
+
+
 def add_argparse_arguments(parser, keys, definitions=None):
     """Generate argparse arguments for the settings with the given keys."""
     if definitions is None:
@@ -508,9 +526,17 @@ def add_argparse_arguments(parser, keys, definitions=None):
                 help_str += " [default: {}]".format(setting.default)
             elif key in DEVICE_DERIVED_KEYS:
                 help_str += _device_default_help(key)
-            parser.add_argument(*setting.args, dest=key,
-                                type=str,
-                                help=help_str)
+            if setting.parser is setting_parsers.parse_bool:
+                # `--packing` alone means true; `--packing false` and
+                # `--packing=true` also work.
+                parser.add_argument(*setting.args, dest=key, nargs='?',
+                                    const='true', type=_bool_flag_value,
+                                    help=help_str + " (a bare flag means "
+                                    "true)")
+            else:
+                parser.add_argument(*setting.args, dest=key,
+                                    type=str,
+                                    help=help_str)
 
 
 def load(args=None, config_file=None, definitions=None,

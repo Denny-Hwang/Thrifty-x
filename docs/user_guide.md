@@ -862,7 +862,9 @@ viewer** with two tab bars — one for the block index, one for the plot
 type — so every detection × every plot lives in one window (the same
 layout as the original thrifty).  Install the `gui` extra
 (`pip install -e ".[gui]"`) to enable it; without it, or with
-`--no-gui`, each (block, plot) opens its own matplotlib figure.
+`--no-gui`, a single matplotlib window opens instead (Left/Right switch
+block, Up/Down switch plot, q quits).  On a machine without a display
+neither viewer can open; use `--export` to write PNGs.
 Use `-p overview` first.
 
 1. **overview** — 4-panel: sample histogram + frequency-compensated
