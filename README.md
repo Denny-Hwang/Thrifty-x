@@ -7,8 +7,8 @@ by Schalk Willem Krüger (North-West University, 2016) — the original work
 targets RTL-SDR.  Thrifty-X keeps the signal-processing pipeline intact and
 extends the hardware support to [Airspy Mini](https://airspy.com/airspy-mini/)
 and [Airspy R2](https://airspy.com/airspy-r2/), modernises the codebase for
-Python 3.10+, and adds a unified Qt-based detection viewer plus a
-Raspberry Pi 5 deployment story.
+Python 3.10+, ports the Qt detection viewer to current Qt bindings, and
+adds a Raspberry Pi 5 deployment story.
 
 **Forked from** [swkrueger/Thrifty](https://github.com/swkrueger/Thrifty)
 at commit
@@ -70,7 +70,7 @@ guide.
 | AGC | n/a | Optional `--lna-agc` / `--mixer-agc` for R820T2 |
 | LO correction | n/a | Software `--ppm` |
 | C capture binary | `fastcard` (librtlsdr) | `fastcapture` (libairspy) |
-| Detection viewer | One matplotlib window per (block × plot) | Unified Qt window with block-tab + plot-tab |
+| Detection viewer | PyQt4 window with block and plot tab bars | Same layout ported to PyQt5/PySide6, with lazy plotting, a single-window matplotlib fallback, and headless PNG export |
 | Visualization | GnuRadio / osmosdr | matplotlib (+ PyQt5/PySide6 for the unified viewer) |
 | Packaging | `setup.py` only | `pyproject.toml` (PEP 621); dynamic version |
 | Tests | Minimal | Unit tests per module plus an end-to-end 6 MSPS capture → pos test; ruff, mypy, pytest (3.10 & 3.13), C builds, C unit tests and the int16 card round trip gated in CI |
