@@ -873,9 +873,11 @@ def capture_cli(args=None):
                     'airspy_serial', 'gain_mode', 'combined_gain',
                     'lna_agc', 'mixer_agc', 'ppm', 'packing']
     # sample_rate and bit_depth default from the device profile of
-    # device_type (settings.DEVICE_DERIVED_KEYS).
-    config, extra_args = settings_module.load_args(parser, setting_keys,
-                                                    argv=args)
+    # device_type (settings.DEVICE_DERIVED_KEYS).  No card header can
+    # replace the sample rate: chip_rate is checked against it even when
+    # it is that default.
+    config, extra_args = settings_module.load_args(
+        parser, setting_keys, argv=args, sample_rate_final=True)
 
     # Validate configuration
     try:

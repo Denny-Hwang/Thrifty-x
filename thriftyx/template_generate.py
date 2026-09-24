@@ -75,7 +75,9 @@ def _main():
                         help="Output file (.npy).")
 
     setting_keys = ['device_type', 'sample_rate', 'chip_rate']
-    config, args = settings.load_args(parser, setting_keys)
+    # The template is for this sample rate, even a device default.
+    config, args = settings.load_args(parser, setting_keys,
+                                      sample_rate_final=True)
 
     sps = config.sample_rate / config.chip_rate
     try:

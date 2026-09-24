@@ -759,7 +759,7 @@ def add_argparse_arguments(parser, keys, definitions=None):
 
 
 def load(args=None, config_file=None, definitions=None,
-         return_explicit=False):
+         return_explicit=False, sample_rate_final=False):
     """Load settings from config file and/or command-line arguments.
 
     Returns the default values if neither config_file nor args are specified.
@@ -779,6 +779,12 @@ def load(args=None, config_file=None, definitions=None,
     return_explicit : bool
         When True, also return the set of keys that were set explicitly
         (via config file or args) rather than filled from defaults.
+    sample_rate_final : bool
+        True for a command that reads no .card (capture,
+        template_generate): the sample rate is then the one it uses even
+        when it is the device default, so chip_rate is checked against
+        it.  Otherwise a device default is checked leniently, as a card
+        header may still replace it.
 
     Returns
     -------
@@ -837,7 +843,8 @@ def load(args=None, config_file=None, definitions=None,
 
     # Defaults that depend on the device (sample rate, bit depth).
     _apply_device_defaults(values, definitions)
-    _check_chip_rate(values, rate_is_final='sample_rate' in explicit)
+    _check_chip_rate(values, rate_is_final=(sample_rate_final
+                                            or 'sample_rate' in explicit))
 
     # Auto-adjust block parameters for higher sample rates (defaults
     # only — explicitly-set values are respected, with a warning).
@@ -848,7 +855,8 @@ def load(args=None, config_file=None, definitions=None,
     return values
 
 
-def load_args(parser, keys, argv=None, definitions=None):
+def load_args(parser, keys, argv=None, definitions=None,
+              sample_rate_final=False):
     """Convenience function for loading a subset of settings.
 
     Generate argparse arguments for the settings with the given keys, parse the
@@ -863,6 +871,8 @@ def load_args(parser, keys, argv=None, definitions=None):
         The command-line args (defaults to sys.argv).
     definitions : dict
         Setting definitions (defaults to DEFINITIONS).
+    sample_rate_final : bool
+        True for a command that reads no .card; see :func:`load`.
 
     Returns
     -------
@@ -916,7 +926,8 @@ def load_args(parser, keys, argv=None, definitions=None):
         extra_args = {k: v for k, v in args.items() if k not in keys}
 
         settings, explicit = load(key_args, config_file, definitions,
-                                  return_explicit=True)
+                                  return_explicit=True,
+                                  sample_rate_final=sample_rate_final)
         subset = {k: v for k, v in settings.items() if k in keys}
 
     settings_obj = Namespace(subset)

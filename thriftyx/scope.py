@@ -53,7 +53,8 @@ def scope_cli(args=None):
                     'bias_tee', 'bit_depth',
                     'airspy_serial', 'gain_mode', 'combined_gain',
                     'lna_agc', 'mixer_agc', 'ppm', 'packing']
-    config, extra = settings_module.load_args(parser, setting_keys, argv=args)
+    config, extra = settings_module.load_args(parser, setting_keys, argv=args,
+                                              sample_rate_final=True)
     trigger_level = extra.get('trigger_level')
 
     device_type = config.device_type

@@ -241,3 +241,19 @@ def test_a_commands_short_option_wins():
     settings.add_argparse_arguments(parser, ['chip_rate', 'sample_rate'])
     args = parser.parse_args(['-p', '--chip-rate', '1M', '-s', '6M'])
     assert (args.plot, args.chip_rate, args.sample_rate) == (True, '1M', '6M')
+
+
+def test_device_default_rate_is_final_without_a_card():
+    """The device default is only lenient for commands that read a card
+    (its header may record another rate); capture and template_generate
+    use that default, so 9.99707M -- 0.6 samples per chip at 6M, 1.0 at
+    the fastest SDR rate -- passed and gave them unusable geometry."""
+    typo = "chip_rate: 9.99707M\n"
+    assert settings.load(None, io.StringIO(typo))['sample_rate'] == 6e6
+    with pytest.raises(ConfigValidationError, match='samples per chip'):
+        settings.load(None, io.StringIO(typo), sample_rate_final=True)
+    parser = argparse.ArgumentParser()
+    with pytest.raises(ConfigValidationError, match='samples per chip'):
+        settings.load_args(parser, ['sample_rate', 'chip_rate'],
+                           argv=['--chip-rate', '9.99707M'],
+                           sample_rate_final=True)
