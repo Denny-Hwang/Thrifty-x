@@ -3,8 +3,10 @@
 
 """rpi/soak_test.sh with a fake `thriftyx capture` and vcgencmd.
 
-The fake capture writes a #v2 header and FAKE_BLOCKS data lines, then
-runs until its --duration (or FAKE_EXIT_AFTER seconds) passes or it is
+The fake capture spends FAKE_STARTUP_S with the signal dispositions it
+inherited (as the real one does while importing and opening the
+device), writes a #v2 header and FAKE_BLOCKS data lines, then runs
+until its --duration (or FAKE_EXIT_AFTER seconds) passes or it is
 stopped by SIGINT/SIGTERM, and exits 0 either way -- as the real one
 does, which is why the exit status alone cannot show a cut-short soak.
 """
@@ -25,6 +27,8 @@ pytestmark = pytest.mark.skipif(sys.platform != 'linux',
 
 FAKE_CAPTURE = '''#!{python}
 import os, signal, sys, time
+# Imports and device open: no signal handler installed yet.
+time.sleep(float(os.environ.get('FAKE_STARTUP_S', '0')))
 card = sys.argv[2]
 duration = float(sys.argv[sys.argv.index('--duration') + 1])
 run_for = min(duration, float(os.environ.get('FAKE_EXIT_AFTER', duration)))
@@ -69,7 +73,8 @@ def soak(tmp_path):
                PATH='{}:{}'.format(fakebin, os.environ['PATH']),
                SAMPLE_INTERVAL_S='1', MIN_DISK_FREE_PCT='0')
     for key in ('THRIFTYX_CONFIG', 'SOAK_DURATION_S', 'SOAK_TOLERANCE_S',
-                'MIN_CARD_BLOCKS', 'FAKE_EXIT_AFTER', 'FAKE_BLOCKS'):
+                'MIN_CARD_BLOCKS', 'FAKE_EXIT_AFTER', 'FAKE_BLOCKS',
+                'FAKE_STARTUP_S'):
         env.pop(key, None)
 
     def start(**overrides):
@@ -91,6 +96,13 @@ def _finish(process):
     return process.returncode, out
 
 
+def _wait_for(soak, process, pattern):
+    deadline = time.monotonic() + 30
+    while not list(soak['out'].glob(pattern)):
+        assert time.monotonic() < deadline and process.poll() is None
+        time.sleep(0.05)
+
+
 def test_full_soak_passes(soak):
     code, out = _finish(soak['start'](SOAK_DURATION_S='2',
                                       SOAK_TOLERANCE_S='0'))
@@ -110,10 +122,7 @@ def test_interrupted_soak_fails(soak, sig, name):
     stopped, Ctrl-C) was judged "RESULT: PASS": capture exits 0 on
     SIGINT/SIGTERM and nothing compared the run time with the soak's."""
     process = soak['start']()
-    deadline = time.monotonic() + 30
-    while not list(soak['out'].glob('soak/*/samples.csv')):
-        assert time.monotonic() < deadline and process.poll() is None
-        time.sleep(0.05)
+    _wait_for(soak, process, 'soak/*/samples.csv')
     time.sleep(1.5)     # a couple of samples into the 24 h
     os.killpg(process.pid, sig)
     code, out = _finish(process)
@@ -148,3 +157,29 @@ def test_card_without_detections(soak, min_blocks, passes):
     summary = soak['summary']()
     assert (code == 0) == passes, out
     assert ('card holds 0 detected block(s)' in summary) != passes
+
+
+def test_signal_during_capture_startup_stops_capture(soak):
+    """Regression: the script stopped capture with SIGINT, which a
+    background job of a non-interactive shell starts out ignoring; a
+    signal before capture had installed its handler left it running
+    the whole --duration.  SIGTERM stops it at any point."""
+    started = time.monotonic()
+    process = soak['start'](SOAK_DURATION_S='20', FAKE_STARTUP_S='3')
+    _wait_for(soak, process, 'soak/*/pid')
+    os.kill(process.pid, signal.SIGTERM)       # the script only
+    code, out = _finish(process)
+    assert time.monotonic() - started < 10, out
+    assert code == 1, out
+    assert 'soak interrupted by SIGTERM' in soak['summary']()
+
+
+def test_lost_output_still_writes_the_summary(soak):
+    """Regression: with stdout a pipe whose reader was gone (`ssh`
+    without -t losing the connection) the next echo killed the script
+    with SIGPIPE before summary.txt was written."""
+    process = soak['start'](SOAK_DURATION_S='3', SOAK_TOLERANCE_S='0')
+    _wait_for(soak, process, 'soak/*/samples.csv')
+    process.stdout.close()
+    assert process.wait(timeout=60) == 0
+    assert 'RESULT: PASS' in soak['summary']()

@@ -21,6 +21,11 @@
 
 set -uo pipefail
 
+# Output to a pipe whose reader is gone (`ssh` without -t losing the
+# connection, a dead `| tee`) must not kill the run before it writes
+# summary.txt: a failed echo is harmless.
+trap '' PIPE
+
 # ---------- Tunables ----------
 SOAK_DURATION_S="${SOAK_DURATION_S:-86400}"           # 24 h
 SAMPLE_INTERVAL_S="${SAMPLE_INTERVAL_S:-60}"
@@ -70,12 +75,16 @@ _now() { awk '{print int($1)}' /proc/uptime 2>/dev/null || date +%s; }
 
 # If the script is interrupted, stop capture and judge the run a FAIL
 # (capture exits 0 on SIGINT/SIGTERM, so its status does not show it).
+# SIGTERM, not SIGINT: a background job of a non-interactive shell
+# starts with SIGINT ignored, so until capture installs its handler
+# (imports, device open) a SIGINT would leave it running the whole
+# --duration.  SIGTERM stops it at any point.
 INTERRUPTED=""
 CAP_PID=""
 # shellcheck disable=SC2329  # invoked by the traps below
 on_signal() {
     INTERRUPTED="$1"
-    kill -INT "${CAP_PID}" 2>/dev/null || true
+    kill -TERM "${CAP_PID}" 2>/dev/null || true
 }
 trap 'on_signal SIGINT' INT
 trap 'on_signal SIGTERM' TERM
@@ -88,6 +97,8 @@ START_TS=$(_now)
     --duration "${SOAK_DURATION_S}" \
     >"${STDOUT_LOG}" 2>"${STDERR_LOG}" &
 CAP_PID=$!
+# A signal that came before CAP_PID was known stopped nothing yet.
+[ -z "${INTERRUPTED}" ] || kill -TERM "${CAP_PID}" 2>/dev/null
 echo "${CAP_PID}" > "${RUN_DIR}/pid"
 echo "soak: capture pid = ${CAP_PID}"
 
@@ -212,9 +223,12 @@ fi
 if [ ! -s "${CARD_FILE}" ]; then
     fail=1; reasons+=("card file empty or missing: ${CARD_FILE}")
 else
-    HEAD=$(head -c 3 "${CARD_FILE}")
-    if [ "${HEAD}" != "#v2" ] \
-            && ! head -1 "${CARD_FILE}" | grep -qE '^[0-9.]+ [0-9]+ '; then
+    # No pipeline: with pipefail, `head | grep -q` could fail on head's
+    # EPIPE (SIGPIPE is ignored) and call a good card corrupt.
+    FIRST=""
+    IFS= read -r FIRST < "${CARD_FILE}" || true
+    if [ "${FIRST:0:3}" != "#v2" ] \
+            && ! [[ "${FIRST}" =~ ^[0-9.]+\ [0-9]+\  ]]; then
         fail=1; reasons+=("card file header looks corrupt")
     fi
 fi
