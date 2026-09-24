@@ -30,38 +30,51 @@ def detector_settings(template):
         block_len=block_len,
         history_len=history_len,
         carrier_len=len(template),
-        carrier_thresh=(20, 0, 0),
+        carrier_thresh=(0, 15, 0),        # 15*snr, the default
         carrier_window=(0, block_len // 2),
         template=template,
-        corr_thresh=(20, 0, 0),
+        corr_thresh=(0, 15, 0),
     )
 
 
-def test_detector_callable_returns_result(detector_settings):
-    """Test that __call__ returns the same as detect()."""
-    detector = Detector(detector_settings, rxid=0)
-    block = Signal(np.zeros(detector_settings.block_len, dtype=np.complex64))
-    result_call = detector(0.0, 0, block)
-    assert result_call is not None
-    assert len(result_call) == 2  # (detected, result)
-    detected, result = result_call
-    assert isinstance(bool(detected), bool)
-    assert result is not None
-    assert hasattr(result, 'carrier_info')
+def _noise(settings, rng, sigma=1.0):
+    n = settings.block_len
+    return sigma * (rng.normal(size=n) + 1j * rng.normal(size=n))
+
+
+def test_detector_callable_is_detect(detector_settings, template):
+    """__call__ gives what detect() gives, on a block with a burst: an
+    on-off keyed carrier holding the template's chips at sample START."""
+    start = 2000
+    rng = np.random.default_rng(seed=789)
+    data = _noise(detector_settings, rng, sigma=0.05)
+    n = np.arange(start, start + len(template))
+    data[n] += (template > 0) * np.exp(2j * np.pi * 300 / 4096 * n)
+    block = Signal(data.astype(np.complex64))
+    detector = Detector(detector_settings, rxid=4)
+
+    called = detector(1.5, 3, block)
+    direct = detector.detect(1.5, 3, block)
+
+    assert called[0] and direct[0]
+    assert vars(called[1]) == vars(direct[1])
+    result = called[1]
+    assert (result.timestamp, result.block, result.rxid) == (1.5, 3, 4)
+    new_len = detector_settings.block_len - detector_settings.history_len
+    assert result.soa == pytest.approx(3 * new_len + start, abs=0.5)
 
 
 def test_detector_no_signal(detector_settings):
-    """Test that detector returns not-detected for noise-only input."""
+    """Noise only: nothing detected with the default 15*snr thresholds
+    (the constant threshold 20 the test used to set detects this very
+    noise, and the test accepted either outcome)."""
     detector = Detector(detector_settings, rxid=0)
     rng = np.random.default_rng(seed=456)
-    data = (rng.normal(size=detector_settings.block_len) +
-            1j * rng.normal(size=detector_settings.block_len)).astype(np.complex64)
-    block = Signal(data)
+    block = Signal(_noise(detector_settings, rng).astype(np.complex64))
     detected, result = detector(0.0, 0, block)
-    # detected may be True or False depending on random noise;
-    # just verify the return structure is correct
-    assert isinstance(bool(detected), bool)
-    assert result is not None
+    assert not detected
+    assert result.carrier_info is not None
+    assert result.corr_info is None and result.soa is None
 
 
 # --- output file --------------------------------------------------------------

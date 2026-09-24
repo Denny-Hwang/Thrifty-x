@@ -1,0 +1,10 @@
+# The sdist carries the whole test suite and the repository files the
+# tests read (Pi scripts and configs, example configs and templates,
+# helper scripts, the CI workflow), so pytest runs from an unpacked
+# sdist.  None of it goes into the wheel, which holds only thriftyx.
+graft tests
+graft rpi
+graft example
+graft scripts
+include .github/workflows/ci.yml
+global-exclude *.py[cod]
