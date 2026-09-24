@@ -236,12 +236,13 @@ R820T2 driver distributes it across LNA and Mixer. Typical values:
   nearest supported step)
 
 Set this in `detector.cfg` as `tuner_gain: 0.0`. It takes effect only
-when the upstream `fastcard` C binary is on `PATH`: capture then runs
-it with `-g <value>`.  Without `fastcard`, capture's Python fallback
-does not open the dongle at all -- it reads samples from `rtl_sdr`
-(`rtl_sdr -f 433.83M -s 2.4M -g 40 - | thriftyx capture rx0.card
---device-type rtlsdr`), so set the gain with `rtl_sdr -g`; the
-`gain = ... dB` in capture's banner then only echoes `tuner_gain`.
+when the upstream `fastcard` C binary is on `PATH` and no `--input` is
+given: capture then runs it with `-g <value>`.  Otherwise capture's
+Python fallback does not open the dongle at all -- it reads samples
+from `rtl_sdr` (`rtl_sdr -f 433.83M -s 2.4M -g 40 - | thriftyx capture
+rx0.card --device-type rtlsdr --input -`), so set the gain with
+`rtl_sdr -g`; the `gain = ... dB` in capture's banner then only echoes
+`tuner_gain`.
 
 ### 4.3 Airspy 3-Stage Gain (LNA → Mixer → VGA)
 
@@ -392,7 +393,15 @@ introducing a comment. The same parser is used by every Thrifty-X
 command, so a single `detector.cfg` covers `capture`, `detect`,
 `scope`, `template_*`, etc.
 
-Numeric suffixes accepted: `K`, `M`, `G` (e.g. `2.4M = 2_400_000`).
+`sample_rate`, `chip_rate` and `tuner_freq` accept a metric suffix:
+`k` or `K`, `M`, `G` (e.g. `2.4M = 2_400_000`).  A lowercase `m` means
+milli, not mega: `chip_rate: 0.999707m` is rejected, since no template
+fits that many samples per chip.  `carrier_window` is in FFT bins
+unless it ends in `Hz`: `50-60kHz` is 50 to 60 kHz, but `50-60k` is
+bins 50 000 to 60 000.  That lies beyond the 32768-bin FFT at 6 Msps,
+where capture refuses it, but inside the 65536-bin FFT at 10 Msps,
+where it is only warned about (past Nyquist) and capture searches the
+wrong frequencies; `20-30k` there draws no warning at all.
 `carrier_window` and threshold expressions are parsed by
 `thriftyx.setting_parsers`.
 
@@ -654,6 +663,18 @@ The extracted template has continuous (not just `±1`) values that
 encode the analog frontend's pulse shaping, filter ripple, and group
 delay — i.e. a true matched filter for *this* receiver chain.
 
+`template_extract` cuts the template from a complete burst whose
+correlation peak lies within 0.2 samples of a whole sample.  It never
+uses the partial detection a burst also leaves in the neighbouring
+block, recognised (as `identify` drops it) by a stronger detection in
+the block before or after; that would give a template starting
+part-way into the code.  If no complete burst qualifies it fails and
+asks for a longer capture.  A weaker transmitter's bursts still count
+as complete.  The output is replaced only once extraction succeeds, so
+`-o` may name the template it reads (`--template template.npy -o
+template.npy`); a symlink is written through and an existing file
+keeps its permissions.
+
 Indicative correlation SNR improvement on real captures:
 
 | Template | RTL-SDR | Airspy Mini | Airspy R2 |
@@ -817,11 +838,16 @@ The dispatch table lives in `thriftyx/cli.py`.
   with `-o FILE` or `-a FILE`; without either it prints only its
   per-block summary lines, which are not a `.toad` file.  `identify`,
   `match`, `tdoa` and `pos` write `data.toads`, `data.match`,
-  `data.tdoa` and `data.pos` by default, replacing an existing file
-  once the run succeeds (a failed run leaves it untouched).  For these
-  five commands `-o -` writes to stdout, and progress lines go to
-  stderr instead.  `template_generate` and `template_extract` default
-  to `template.npy` and `capture.npy`.
+  `data.tdoa` and `data.pos` by default.  These four and
+  `template_extract` write the file only once their results are
+  complete (`template_extract` reports a missing directory first), so a
+  failed run leaves an existing file untouched.  `detect` opens it once
+  the input, template and settings have loaded -- a run that fails to
+  start keeps the old file -- and then streams detections into it, so
+  an error part-way through a card leaves a partial file.  For these
+  six commands `-o -` writes to stdout, and progress lines go to stderr
+  instead.  `template_generate` and `template_extract` default to
+  `template.npy` and `capture.npy`.
 - `-a / --append` — append to an existing output file (`detect` only).
 - `--quiet` — suppress per-block status output (`detect`).
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,
@@ -834,17 +860,22 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 - `--device-type {rtlsdr, airspy_mini, airspy_r2}` — overrides config.
 - `--duration <sec>` — stop after N seconds (default: until Ctrl+C).
-- `--input <path>` — RTL-SDR Python path only: read raw samples from a
-  file or `-` (stdin, the default) instead of the `fastcard` binary.
-  Useful with `rtl_sdr -f … -s … - | thriftyx capture … --device-type
-  rtlsdr`.
+- `--input <path>` — RTL-SDR only: read raw samples from a file or `-`
+  (stdin) with the Python capture, instead of letting the `fastcard`
+  binary open the dongle.  Without `fastcard` the Python capture reads
+  stdin by default.  Useful with `rtl_sdr -f … -s … - | thriftyx
+  capture … --device-type rtlsdr --input -`.
 - `--fastcard <path>` — alternate path to the `fastcard` binary
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
-  to its Python carrier detector.
+  to its Python carrier detector.  Card data goes to the same place
+  either way: the output file, or stdout for `-` or when stdout is a
+  pipe.
 - `--rotate <sec>` — start a new output file every N seconds, on
   wall-clock boundaries (`--rotate 3600` switches files on the hour on
   every receiver).  The output path is then a `strftime` pattern, e.g.
-  `rx0_%Y%m%dT%H%M%S.card`; each file gets its own `#v2` header, and
+  `rx0_%Y%m%dT%H%M%S.card` (directories may use fields too, e.g.
+  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed); each file gets
+  its own `#v2` header, and
   block indices continue across files, so sample-of-arrival stays
   continuous for the whole run.  Finished files can be processed or
   deleted while capture keeps running.  Not available with the
@@ -861,7 +892,9 @@ overlap the gap are affected.
 The output file is opened only once the SDR has been opened and
 configured, so a capture that fails to start leaves an existing file
 with the same name untouched.  A bad setting (unknown device type,
-unparseable value, invalid `--rotate`) exits with status 78
+unparseable value or `airspy_serial`, a `carrier_window` outside the
+FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`)
+exits with status 78
 (`EX_CONFIG`); systemd units use it to stop restarting a node whose
 configuration needs fixing.
 

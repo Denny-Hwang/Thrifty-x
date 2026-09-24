@@ -3,12 +3,19 @@
 #   binary data -> carrier_detect -> .card -> detect -> .toad
 #   -> identify -> .toads -> match -> .match -> tdoa -> .tdoa -> pos -> .pos
 #
-# For RTL-SDR capture:
-#   rtl_sdr -f 162M -s 2.4M - | thriftyx capture rx0.card --device-type rtlsdr
+# For RTL-SDR capture (--input - reads the pipe; without it capture runs
+# fastcard, when installed, which opens the dongle itself):
+#   rtl_sdr -f 162M -s 2.4M - | \
+#       thriftyx capture rx0.card --device-type rtlsdr --input -
 # For Airspy capture (the default device type):
 #   thriftyx capture rx0.card --device-type airspy_mini
 
 all: rx.toads_analysis
+
+# A recipe that fails part-way must not leave a target that looks up to
+# date (e.g. a half-written .toad would drop that receiver's detections
+# from every later step until its .card changes).
+.DELETE_ON_ERROR:
 
 TOAD_FILES 		:= $(patsubst cards/%.card, toad/%.toad, $(wildcard cards/*.card))
 

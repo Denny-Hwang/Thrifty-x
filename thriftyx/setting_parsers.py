@@ -39,6 +39,7 @@ _SI_PREFIXES = {
     'c': 1e-2,   # centi
     'd': 1e-1,   # deci
     'k': 1e3,    # kilo
+    'K': 1e3,    # kilo (not SI, but no prefix clashes with it)
     'M': 1e6,    # mega
     'G': 1e9,    # giga
     'T': 1e12,   # tera
@@ -58,6 +59,8 @@ def metric_float(string: str) -> float:
     123.4
     >>> metric_float('1.2M')
     1200000.0
+    >>> metric_float('2400K')
+    2400000.0
     >>> metric_float('3.4m')
     0.0034
     """
@@ -215,6 +218,58 @@ def bit_depth(string: str) -> int:
     if value not in (8, 12):
         raise ValueError("expected 8 or 12")
     return value
+
+
+def parse_airspy_serial(value: 'int | str') -> int:
+    """Convert a CLI serial argument to ``uint64`` for ``airspy_open_sn``.
+
+    Accepts:
+      - int           (returned as-is)
+      - hex string    e.g. ``"0x1234ABCD..."`` or ``"1234ABCDDEADBEEF"``
+      - decimal str   e.g. ``"123456789"``
+    """
+    if isinstance(value, int):
+        return int(value) & 0xFFFFFFFFFFFFFFFF
+    if value is None:
+        raise ValueError("Airspy serial value is None")
+    text = str(value).strip().lower().replace('_', '')
+    # An explicit 0x prefix always means hex, even when the remaining
+    # digits happen to be all-decimal (e.g. "0x12345678").
+    is_hex = text.startswith('0x')
+    if is_hex:
+        text = text[2:]
+    def _checked(value_int: int) -> int:
+        # Airspy serials are unsigned 64-bit; silently masking a typo'd
+        # negative or over-long value would select the wrong device.
+        if not 0 <= value_int <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError(
+                f"Airspy serial {text!r} out of the unsigned 64-bit range")
+        return value_int
+
+    # Heuristic: if string contains any non-decimal digit, treat as hex.
+    if is_hex or any(c in 'abcdef' for c in text):
+        return _checked(int(text, 16))
+    # If purely numeric and exactly 16 chars, treat as hex (e.g. board ID
+    # printed by `airspy_info`).
+    if len(text) == 16 and all(c in '0123456789abcdef' for c in text):
+        return _checked(int(text, 16))
+    return _checked(int(text))
+
+
+def airspy_serial(string: str) -> str:
+    """Check an ``airspy_serial`` setting; return it as given (stripped).
+
+    The device parses it only when it opens, which is too late for a
+    typo to count as a configuration error (exit 78), so it is checked
+    here.  An empty value means "not set".
+
+    >>> airspy_serial('0xABCDEF0123456789')
+    '0xABCDEF0123456789'
+    """
+    string = string.strip()
+    if string:
+        parse_airspy_serial(string)
+    return string
 
 
 def parse_bool(string: str) -> bool:

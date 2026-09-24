@@ -8,6 +8,7 @@ import io
 import pytest
 
 from thriftyx import settings
+from thriftyx.exceptions import ConfigValidationError
 
 DEFAULT_FOO = '2e6'
 DEFAULT_BAZ = '1e6'
@@ -197,3 +198,35 @@ class TestAutoAdjustBlockParams:
         values = settings.load(None, config)
         assert values['block_history'] == 4920
         assert values['block_size'] == 16384
+
+
+@pytest.mark.parametrize('chip_rate', ['0', '-1M', '0.999707m', '999.707',
+                                       '7M'])
+def test_impossible_chip_rate_is_a_config_error(chip_rate):
+    """0 used to raise ZeroDivisionError in every command; a lowercase
+    'm' (milli) sized blocks at 2**45 samples, which passed validation
+    and failed allocating 44.7 TiB."""
+    config = io.StringIO("sample_rate: 6M\nchip_rate: {}\n".format(chip_rate))
+    with pytest.raises(ConfigValidationError, match='chip_rate'):
+        settings.load(None, config)
+
+
+def test_chip_rate_is_checked_against_the_card_sample_rate():
+    """A device-default rate is not final: a card replaces it, so the
+    samples-per-chip range is checked against the recorded rate."""
+    config = settings.Namespace(settings.load({'chip_rate': '30k'}, None))
+    config.explicit_keys = frozenset({'chip_rate'})
+    assert config.sample_rate == 6e6            # 200 samples/chip
+    card = settings.apply_card_header(config, {'sample_rate': '2400000'})
+    assert card.sample_rate == 2.4e6            # 80 samples/chip
+    with pytest.raises(ConfigValidationError, match='samples per chip'):
+        settings.apply_card_header(config, {'sample_rate': '10000000'})
+
+
+def test_chip_rate_is_checked_against_the_device_sample_rate():
+    config = io.StringIO("device_type: airspy_r2\nchip_rate: 0.999707M\n")
+    values = settings.load(None, config)
+    assert values['sample_rate'] == 10e6
+    config = io.StringIO("device_type: airspy_r2\nchip_rate: 11M\n")
+    with pytest.raises(ConfigValidationError, match='chip_rate'):
+        settings.load(None, config)
