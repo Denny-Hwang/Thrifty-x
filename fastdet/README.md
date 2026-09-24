@@ -22,10 +22,16 @@ original C pipeline.
     sudo cmake --install build
     sudo ldconfig
 
+CI also runs the same tests on an ASan/UBSan build: some out-of-bounds
+reads in the correlator only fail a test there.  To do the same, configure
+a second build directory with `-DCMAKE_BUILD_TYPE=Debug` and
+`-fsanitize=address,undefined` in `CMAKE_CXX_FLAGS`,
+`CMAKE_EXE_LINKER_FLAGS` and `CMAKE_SHARED_LINKER_FLAGS`.
+
 The installed `fastdet` finds `libfastdet.so` in `<prefix>/lib` by
 itself (its RPATH is `$ORIGIN/../lib`), for any `--prefix`.  `ldconfig`
 refreshes the loader cache for other programs that link `libfastdet`;
-they can also use `pkg-config fastdet`.
+they can build with `pkg-config --cflags --libs fastdet`.
 
 
 ### Usage

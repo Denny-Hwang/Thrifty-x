@@ -140,5 +140,6 @@ if(BUILD_TESTING)
                      -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-install
                      -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
                      -DFASTCAPTURE_PC_DIR=${FASTCAPTURE_PC_DIR}
+                     -DCXX=${CMAKE_CXX_COMPILER}
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 endif()

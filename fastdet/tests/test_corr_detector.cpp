@@ -70,6 +70,11 @@ static CorrDetection detect_template_at(size_t start, size_t history) {
     return det.detect((const std::complex<float>*)fft.output(), energy);
 }
 
+// detect() itself at the window edges.  A stray neighbour read here is
+// heap metadata or volk padding, which has so far left the offset at 0:
+// in a normal build these checks pass even with the edge guard gone,
+// and only a sanitizer build (the ASan/UBSan ctest in CI) fails.  The
+// guard itself is checked deterministically above.
 static void test_peak_at_window_edges() {
     // history == template_len: the window starts at correlation index 0.
     CorrDetection first = detect_template_at(0, 31);

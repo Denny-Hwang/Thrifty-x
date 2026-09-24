@@ -127,9 +127,17 @@ int main(int argc, char** argv) {
               + " -o - >card_stdout.toad") == 0);
     CHECK((int)read_lines("card_stdout.toad").size() == BLOCKS);
 
-    // The .toad and the card cannot share stdout.
+    // The .toad and the card cannot share stdout, and --help says so.
     CHECK(run(fastdet + " -q -i card_stdout.raw" + geometry
               + " -o - -x - >/dev/null 2>&1") == 64);
+    CHECK(run(fastdet + " --help >card_stdout.help") == 0);
+    std::string help;
+    for (const std::string& line : read_lines("card_stdout.help")) {
+        help += line + "\n";
+    }
+    CHECK(help.find("Output .toad file") != std::string::npos);
+    CHECK(help.find("not with -x -") != std::string::npos);
+    CHECK(help.find("not with -o -") != std::string::npos);
 
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);

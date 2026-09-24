@@ -94,6 +94,18 @@ jobs:
         # fastdet: correlator edges, `-x -` card output, and an install
         # into a scratch prefix (binary RPATH, fastdet.pc).
         run: ctest --test-dir build/${{ matrix.target }} --output-on-failure
+      - name: fastdet unit tests under ASan/UBSan
+        # A read just outside corr_power_ (the peak-window edges) finds
+        # heap bytes that leave a normal build's result unchanged; only
+        # a sanitizer turns that regression into a failed test.
+        if: matrix.target == 'fastdet'
+        run: |
+          SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+          cmake -S fastdet -B build/fastdet-asan -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_FLAGS="$SAN" -DCMAKE_EXE_LINKER_FLAGS="$SAN" \
+                -DCMAKE_SHARED_LINKER_FLAGS="$SAN"
+          cmake --build build/fastdet-asan -j
+          ctest --test-dir build/fastdet-asan --output-on-failure
       - name: Smoke-check binary output
         # Both CLIs use argp, so --help exits 0.  This step must FAIL
         # when the binary is missing or --help crashes — no `|| true`.

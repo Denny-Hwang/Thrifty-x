@@ -2,11 +2,11 @@
 # was configured with, and check what is installed there:
 #  - the binary starts without LD_LIBRARY_PATH or an ldconfig run, and
 #    loads the libfastdet.so installed next to it;
-#  - `pkg-config --cflags --libs fastdet` resolves, and points at
-#    STAGE_DIR.
+#  - `pkg-config --cflags --libs fastdet` resolves, points at STAGE_DIR,
+#    and is enough to build a program on the installed headers.
 #
 # Run by ctest: cmake -DBUILD_DIR=... -DSTAGE_DIR=... [-DPKG_CONFIG=...
-#   -DFASTCAPTURE_PC_DIR=...] -P install_check.cmake
+#   -DFASTCAPTURE_PC_DIR=... -DCXX=...] -P install_check.cmake
 
 file(REMOVE_RECURSE "${STAGE_DIR}")
 # Every install rule is in the default "Unspecified" component, so this
@@ -64,6 +64,29 @@ if(PKG_CONFIG AND FASTCAPTURE_PC_DIR)
     get_filename_component(want "${STAGE_DIR}/lib" REALPATH)
     if(NOT libdir STREQUAL want)
         message(FATAL_ERROR "fastdet.pc points at ${libdir}, not ${want}")
+    endif()
+
+    # A program on the installed headers links with those flags alone:
+    # AlignedArray calls volk inline, and a dynamic link does not pull
+    # in the Requires.private libraries.
+    if(CXX)
+        file(WRITE "${STAGE_DIR}/consumer.cpp"
+             "#include <fastdet/corr_detector.h>\n"
+             "int main() {\n"
+             "    CorrDetector det(std::vector<float>(31, 1.0f),"
+             " 256, 31, 0, 15);\n"
+             "    return 0;\n"
+             "}\n")
+        separate_arguments(flags UNIX_COMMAND "${flags}")
+        execute_process(
+            COMMAND "${CXX}" -std=gnu++17 -o "${STAGE_DIR}/consumer"
+                    "${STAGE_DIR}/consumer.cpp" ${flags}
+            RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "a program on the fastdet headers does "
+                                "not build with `pkg-config --cflags "
+                                "--libs fastdet`:\n${out}")
+        endif()
     endif()
 else()
     message(STATUS "pkg-config or fastcapture.pc not found: "
