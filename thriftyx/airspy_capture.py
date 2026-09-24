@@ -47,6 +47,13 @@ from thriftyx.signal_utils import compute_fft
 FLUSH_INTERVAL_S = 1.0
 FLUSH_BLOCKS = 32
 
+# A stop signal usually reaches fastcard directly too (Ctrl-C signals
+# the terminal's process group, systemd the service's control group);
+# capture passes it on only if fastcard is still running this long
+# after, and checks on fastcard every FASTCARD_POLL_S seconds.
+FASTCARD_STOP_GRACE_S = 1.0
+FASTCARD_POLL_S = 0.1
+
 logger = logging.getLogger(__name__)
 
 
@@ -352,9 +359,11 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     fastcard performs carrier detection in C and writes only detected blocks
     to the .card file.
 
-    SIGINT and SIGTERM are passed on to fastcard, which stops cleanly on
-    either; ``duration`` in *extra_args* stops it the same way.  Exits
-    with fastcard's status when that is not 0.
+    fastcard stops cleanly on SIGINT or SIGTERM.  Capture passes such a
+    signal on only if fastcard is still running
+    :data:`FASTCARD_STOP_GRACE_S` later, and ``duration`` in
+    *extra_args* stops it with SIGINT; a second stop signal kills it.
+    Exits with fastcard's status when that is not 0.
     """
     window = config_validator.carrier_bins(
         config.carrier_window, config.sample_rate, int(config.block_size))
@@ -398,42 +407,62 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     if os.getsid(0) != os.getpid():
         os.setpgrp()
 
-    # The handler only passes the signal on; the wait() below reaps
-    # fastcard.  Waiting in the handler hung for good: it runs inside
-    # that wait(), and Popen's wait lock is not reentrant.  A signal
-    # that arrives while fastcard starts is passed on once it has.
-    process = None
-    pending = []
+    # The handler only records the request; the loop below acts on it.
+    # (Waiting for fastcard in the handler hung for good: it runs inside
+    # the main thread's wait, and Popen's wait lock is not reentrant.)
+    # Handlers go in first, so a signal that arrives while fastcard
+    # starts is not lost.
+    requests = []  # (signal, time) of each stop request
 
-    def _forward(signum, _frame):
-        if process is None:
-            pending.append(signum)
-        elif process.returncode is None:
-            try:
-                os.kill(process.pid, signum)
-            except ProcessLookupError:
-                pass
+    def _on_stop(signum, _frame):
+        requests.append((signum, time.monotonic()))
 
     stop_signals = (signal.SIGINT, signal.SIGTERM)
-    previous = {sig: signal.signal(sig, _forward) for sig in stop_signals}
+    previous = {sig: signal.signal(sig, _on_stop) for sig in stop_signals}
+    duration = extra_args.get('duration')
+    for_duration = forwarded = killed = False
     try:
         process = subprocess.Popen(call)
-        for signum in pending:
-            _forward(signum, None)
-        try:
-            returncode = process.wait(timeout=extra_args.get('duration'))
-        except subprocess.TimeoutExpired:
-            # --duration: fastcard has no such option; stop it as
-            # Ctrl-C would.
-            _forward(signal.SIGINT, None)
-            returncode = process.wait()
+        started = time.monotonic()
+        while process.poll() is None:
+            now = time.monotonic()
+            if len(requests) > 1 and not killed:
+                # Asked again: the clean stop is stuck, or the user does
+                # not want to wait for it.
+                _signal_process(process, signal.SIGKILL)
+                killed = True
+            elif (requests and not forwarded
+                  and now - requests[0][1] >= FASTCARD_STOP_GRACE_S):
+                # Ctrl-C at a terminal and a systemd stop signal fastcard
+                # too, and it takes a second signal as "exit now" (128+N,
+                # losing buffered card lines): pass the signal on only if
+                # it went to capture alone.
+                _signal_process(process, requests[0][0])
+                forwarded = True
+            elif (not requests and duration is not None
+                  and now - started >= duration):
+                # fastcard has no --duration: stop it as Ctrl-C would.
+                requests.append((signal.SIGINT, now))
+                _signal_process(process, signal.SIGINT)
+                for_duration = forwarded = True
+            time.sleep(FASTCARD_POLL_S)
+        returncode = process.returncode
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+    if for_duration and returncode == -signal.SIGINT:
+        returncode = 0  # stopped before it set up its handler
     if returncode < 0:
         returncode = 128 - returncode  # killed by a signal, as a shell says
     if returncode != 0:
         sys.exit(returncode)
+
+
+def _signal_process(process, signum):
+    try:
+        os.kill(process.pid, signum)
+    except ProcessLookupError:
+        pass
 
 
 # ---------------------------------------------------------------------------

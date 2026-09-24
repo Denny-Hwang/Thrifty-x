@@ -873,7 +873,9 @@ The dispatch table lives in `thriftyx/cli.py`.
   to its Python carrier detector.  Card data goes to the same place
   either way: the output file, or stdout for `-` or when stdout is a
   pipe.  `--duration`, Ctrl+C and SIGTERM (`systemctl stop`) stop
-  `fastcard` cleanly, and capture exits with its status.
+  `fastcard` cleanly -- a signal that reached capture alone is passed on
+  after a second -- and a second Ctrl+C kills a `fastcard` that does not
+  stop.  Capture exits with `fastcard`'s status.
 - `--rotate <sec>` — start a new output file every N seconds, on
   wall-clock boundaries (`--rotate 3600` switches files on the hour on
   every receiver).  The output path is then a `strftime` pattern, e.g.
