@@ -35,9 +35,9 @@ static const char doc[] = "FastDet: Fast Detector\n\n"
 #define NUM_EXTRA_OPTIONS 6
 static struct argp_option extra_options[] = {
     {"output", 'o', "<FILE>", 0,
-        "Output card file\n('-' for stdout)\n[default: no output]", 1},
+        "Output .toad file\n('-' for stdout, not with -x -)\n[default: no output]", 1},
     {"card-output", 'x', "<FILE>", 0,
-     "Write block to card file on detect\n('-' for stdout)\n[default: no output]", 1},
+     "Write block to card file on detect\n('-' for stdout, not with -o -)\n[default: no output]", 1},
 
     // Correlator
     {0, 0, 0, 0, "Correlator settings:", 5},
@@ -152,6 +152,12 @@ int main(int argc, char **argv) {
     if (fargs_finalize(args.get()) != 0) {
         return 64;  // EX_USAGE, as argp exits for a bad option
     }
+    if (output_file == "-" && card_output_file == "-") {
+        // Interleaved .toad and card lines: neither reader can use them.
+        cerr << "fastdet: -o and -x cannot both write to stdout ('-')"
+             << endl;
+        return 64;
+    }
 
     // Before any library creates a thread, so all of them inherit the
     // blocked signal mask.
@@ -166,7 +172,11 @@ int main(int argc, char **argv) {
         CFile card(card_output_file);
         CFile info;
         if (!args->silent) {
-            info.open((out.file() == stdout) ? stderr : stdout);
+            // Status lines mixed into a .toad ('-o -') or a card
+            // ('-x -') on stdout make it unreadable, as fastcapture
+            // knows (fastcard_cli.c).
+            info.open((out.file() == stdout || card.file() == stdout)
+                      ? stderr : stdout);
         }
 
         vector<float> template_samples = load_template(template_file);
@@ -226,8 +236,7 @@ int main(int argc, char **argv) {
 
         // Also on stdout ('-x -'): a piped card without the '#v2'
         // header would be silently decoded as 8-bit by the Python
-        // card_reader.  Header lines are '#' comments, so they are
-        // safe to interleave on a pipe.
+        // card_reader.
         if (card.file() != NULL) {
             fargs_print_card_header(args.get(), card.file(),
                                     input_from_sdr, argp_program_version);

@@ -645,10 +645,11 @@ The suite covers, among other things:
   (`tests/integration/test_pipeline_6msps.py`)
 
 CI runs `ruff check .` over the whole tree, `mypy`, the full `pytest`
-suite, the `fastcapture` ring-buffer unit tests, and the `fastcapture`
-and `fastdet` CMake builds on every push and pull request. fastdet links the fastcapture static archive, so the workflow
+suite, the `fastcapture` and `fastdet` CMake builds and their `ctest`
+unit tests on every push and pull request. fastdet links the fastcapture static archive, so the workflow
 builds and installs fastcapture to `/usr/local` before configuring
-fastdet.
+fastdet; it then installs fastdet there too and runs the installed
+binary, which must find `libfastdet.so` without an `ldconfig`.
 
 ## Known Limitations
 

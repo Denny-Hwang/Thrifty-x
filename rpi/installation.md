@@ -144,6 +144,7 @@ make && sudo make install
 mkdir -p ~/build/fastdet && cd ~/build/fastdet
 cmake ~/thrifty/fastdet -DCMAKE_C_FLAGS="-mcpu=cortex-a53 -mfpu=neon-vfpv4"
 make && sudo make install
+sudo ldconfig
 ```
 
 ### Install thrifty
