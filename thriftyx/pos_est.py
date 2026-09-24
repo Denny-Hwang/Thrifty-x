@@ -93,13 +93,16 @@ def solve_numerically(tdoa_array, rx_pos):
     rx1 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx1']])
 
     # The solver stops in the local minimum nearest its start, so solve
-    # from two starts and keep the better fit: near the origin, which some
-    # tags just outside the array need (from the centroid, the path to a
-    # tag behind a corner receiver ends in that receiver's cusp), and the
-    # receivers' centroid, which is inside the bounds even for receivers
-    # more than MAX_DIST from the origin (e.g. UTM coordinates).  The 0.1
-    # offsets keep a start off a receiver, where the Jacobian is undefined.
-    starts = [np.full(dims, 0.1), np.mean(rx_coords, axis=0) + 0.1]
+    # from several starts and keep the best fit: near the origin, the
+    # receivers' centroid (inside the bounds even for receivers more than
+    # MAX_DIST from the origin, e.g. UTM coordinates), and just beyond each
+    # receiver, away from the centroid.  A tag behind a corner receiver
+    # needs the last: from inside the array the path to it ends in that
+    # receiver's cusp, up to hundreds of metres off.  The 0.1 offsets keep
+    # a start off a receiver, where the Jacobian is undefined.
+    centroid = np.mean(rx_coords, axis=0)
+    starts = [np.full(dims, 0.1), centroid + 0.1]
+    starts += [rx + 0.5 * (rx - centroid) + 0.1 for rx in rx_coords]
     starts = [x0 for x0 in starts
               if np.all(x0 >= min_bounds) and np.all(x0 <= max_bounds)]
 

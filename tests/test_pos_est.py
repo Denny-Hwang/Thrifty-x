@@ -110,6 +110,27 @@ def test_solve_numerically_just_outside_the_array(tx_pos):
     np.testing.assert_allclose(position, tx_pos, atol=0.01)
 
 
+@pytest.mark.parametrize('origin', [(0, 0), (300, 200)])
+@pytest.mark.parametrize('corner', [(0, 0), (1, 0), (0, 1), (1, 1)])
+def test_solve_numerically_behind_every_corner(corner, origin):
+    """Regression: from the origin and centroid starts alone, a tag
+    diagonally behind a corner receiver solved into that receiver's cusp
+    -- (-100, -100) came out at (5.3, 9.5), 152 m off, even with exact
+    TDOAs -- behind whichever corners neither start happened to reach."""
+    width, height = 1200, 1000
+    rx_pos = {0: [0, 0], 1: [width, 0], 2: [0, height], 3: [width, height]}
+    rx_pos = {k: list(np.add(v, origin)) for k, v in rx_pos.items()}
+    rx = np.add(origin, np.multiply(corner, (width, height)))
+    away = np.where(corner, 1, -1)
+    for dist in (20, 100, 400, 800):
+        for angle in np.radians([15, 45, 75]):
+            tx_pos = rx + away * dist * np.array([np.cos(angle),
+                                                  np.sin(angle)])
+            tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+            position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+            np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
 def test_solve_skips_a_receiver_without_coordinates(capsys):
     """Regression: a .tdoa row naming a receiver missing from pos-rx.cfg
     crashed pos with a bare KeyError."""
