@@ -11,8 +11,11 @@ bool cardet_detect(cardet_settings_t *settings,
     float sum = 0;
     volk_32f_accumulator_s32f(&sum, fft_power, settings->fft_len);
 
-    uint16_t argmax; // todo: volk_malloc
-    volk_32f_index_max_16u(
+    // A 32-bit index: volk_32f_index_max_16u clamps its search to 65535
+    // points, so with a 65536-bin window (the whole spectrum of the 10M
+    // default block) the last bin was never examined.
+    uint32_t argmax;
+    volk_32f_index_max_32u(
             &argmax,
             fft_power + settings->carrier_freq_min,
             settings->carrier_freq_max - settings->carrier_freq_min + 1);

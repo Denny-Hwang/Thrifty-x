@@ -18,7 +18,20 @@ original C pipeline.
 
     cmake -S . -B build
     cmake --build build -j
+    ctest --test-dir build --output-on-failure   # correlator, card output and install checks
     sudo cmake --install build
+    sudo ldconfig
+
+CI also runs the same tests on an ASan/UBSan build: some out-of-bounds
+reads in the correlator only fail a test there.  To do the same, configure
+a second build directory with `-DCMAKE_BUILD_TYPE=Debug` and
+`-fsanitize=address,undefined` in `CMAKE_CXX_FLAGS`,
+`CMAKE_EXE_LINKER_FLAGS` and `CMAKE_SHARED_LINKER_FLAGS`.
+
+The installed `fastdet` finds `libfastdet.so` in `<prefix>/lib` by
+itself (its RPATH is `$ORIGIN/../lib`), for any `--prefix`.  `ldconfig`
+refreshes the loader cache for other programs that link `libfastdet`;
+they can build with `pkg-config --cflags --libs fastdet`.
 
 
 ### Usage
@@ -33,6 +46,12 @@ Examples:
  - Also write the detected blocks to a `.card` file (e.g. for `thriftyx analyze_detect`):
 
     fastdet -i airspy -z template.tpl -o rx.toad -x rx.card
+
+ - Status lines go to stdout, or to stderr when `-o -` or `-x -` puts
+   the `.toad` or the card there, so a piped card stays readable (only
+   one of `-o` and `-x` may be `-`):
+
+    fastdet -i airspy -z template.tpl -o rx.toad -x - | thriftyx detect - -z template.npy
 
  - Read raw interleaved int16 I/Q from a file and print detections without writing a `.toad` file:
 

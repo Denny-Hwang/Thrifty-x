@@ -35,6 +35,10 @@ class CorrDetector {
     // Utility functions
     static double interpolate_parabolic(float* peak_power);
     static double interpolate_gaussian(float* peak_power);
+    // interpolate_gaussian() of power[peak_idx], or 0 when the peak is
+    // the first or last of the len values and so lacks a neighbour.
+    static double interpolate_gaussian(float* power, size_t len,
+                                       size_t peak_idx);
 
   protected:
     void set_template(const std::vector<float> &template_samples);

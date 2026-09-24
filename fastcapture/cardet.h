@@ -21,7 +21,7 @@ typedef struct {
 } cardet_settings_t;
 
 typedef struct {
-    uint16_t argmax;
+    uint32_t argmax;
     float max;
     float threshold;
     float noise;

@@ -98,8 +98,12 @@ target_link_libraries (fastdet
 add_executable(fastdet_bin fastdet.cpp)
 target_link_libraries (fastdet_bin fastdet)
 
+# INSTALL_RPATH: the installed binary finds libfastdet.so next to it
+# (<prefix>/lib), for any --prefix.  Without it, a fresh install to
+# /usr/local exits 127 until someone runs ldconfig.
 set_target_properties(fastdet_bin
-  PROPERTIES OUTPUT_NAME fastdet)
+  PROPERTIES OUTPUT_NAME fastdet
+             INSTALL_RPATH "$ORIGIN/../lib")
 
 # add install targets
 install (TARGETS fastdet_bin DESTINATION bin)
@@ -112,3 +116,30 @@ install (FILES corr_detector.h
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fastdet.pc
          DESTINATION lib/pkgconfig)
+
+# Tests (run with `ctest --test-dir <build-dir>`).  include(CTest)
+# defines BUILD_TESTING, ON by default; configure with
+# -DBUILD_TESTING=OFF to skip them.
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_corr_detector tests/test_corr_detector.cpp)
+    target_include_directories(test_corr_detector
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_corr_detector fastdet)
+    add_test(NAME corr_detector COMMAND test_corr_detector)
+
+    add_executable(test_card_stdout tests/test_card_stdout.cpp)
+    add_test(NAME card_stdout
+             COMMAND test_card_stdout $<TARGET_FILE:fastdet_bin>)
+
+    # Installs into a scratch prefix under the build tree (no root).
+    pkg_get_variable(FASTCAPTURE_PC_DIR fastcapture pcfiledir)
+    add_test(NAME install
+             COMMAND ${CMAKE_COMMAND}
+                     -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                     -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-install
+                     -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
+                     -DFASTCAPTURE_PC_DIR=${FASTCAPTURE_PC_DIR}
+                     -DCXX=${CMAKE_CXX_COMPILER}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
+endif()

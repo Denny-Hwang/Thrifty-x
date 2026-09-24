@@ -1,4 +1,6 @@
-prefix=@CMAKE_INSTALL_PREFIX@
+# Relative to this file: `cmake --install --prefix X` must point at X,
+# not at the CMAKE_INSTALL_PREFIX the build was configured with.
+prefix=${pcfiledir}/../..
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
