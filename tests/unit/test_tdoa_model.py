@@ -29,17 +29,18 @@ def _dist(a, b):
     return float(np.hypot(a[0] - b[0], a[1] - b[1]))
 
 
-def _sample_index(rxid, t, uptime=0.0):
+def _sample_index(rxid, t, uptime=0.0, cubic=0.0):
     """Receiver *rxid*'s sample counter at true time *t*, in a capture
     that has been running for *uptime* seconds at t = 0."""
     if rxid == 0:
         return FS * (uptime + t)
-    # Offset, +20 ppm frequency error and a drifting rate.
+    # Offset, +20 ppm frequency error and a drifting rate (and optionally
+    # a term the quadratic model cannot follow).
     return (1_234_567.25 + FS * (1 + 20e-6) * (uptime + t)
-            + 0.5 * FS * 3e-6 * t ** 2)
+            + 0.5 * FS * 3e-6 * t ** 2 + FS * cubic * t ** 3)
 
 
-def _detections(uptime=0.0):
+def _detections(uptime=0.0, cubic=0.0):
     detections, matches = [], []
     emissions = ([(BEACON, BEACON_POS[BEACON], 0.05 * i) for i in range(20)]
                  + [(MOBILE, MOBILE_POS, 0.025 + 0.05 * i)
@@ -50,8 +51,8 @@ def _detections(uptime=0.0):
             arrival = t_emit + _dist(pos, rx) / C
             info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
             detections.append(DetectionResult(
-                arrival, 0, _sample_index(rxid, arrival, uptime), None, info,
-                rxid=rxid, txid=txid))
+                arrival, 0, _sample_index(rxid, arrival, uptime, cubic),
+                None, info, rxid=rxid, txid=txid))
             group.append(len(detections) - 1)
         matches.append(group)
     return detections, matches
@@ -90,6 +91,33 @@ def test_precision_does_not_decay_with_uptime(days, model):
     got = np.array([g.tdoas['tdoa'][0] for g in groups])
     soa_step = np.spacing(max(d.soa for d in detections)) / FS
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10 + 4 * soa_step)
+
+
+def _tdoas(model, **clock):
+    detections, matches = _detections(**clock)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS,
+        model_builder=model)
+    assert failures == []
+    soa_step = np.spacing(max(d.soa for d in detections)) / FS
+    return np.array([g.tdoas['tdoa'][0] for g in groups]), soa_step
+
+
+@pytest.mark.parametrize('days', [7, 30])
+def test_weighted_model_weights_do_not_depend_on_uptime(days):
+    """The weighted model weights each beacon by its distance in samples
+    from the mobile detection.  With a clock term the quadratic cannot
+    follow, the weights move the TDOAs by 2e-8 s; computed from the raw
+    mobile SoA against centred beacon SoAs they would be uniform after
+    any uptime, and the TDOAs would depend on it."""
+    cubic = 1e-4
+    weighted, _ = _tdoas(tdoa_est.build_model_weighted_poly, cubic=cubic)
+    unweighted, _ = _tdoas(tdoa_est.build_model_poly, cubic=cubic)
+    got, soa_step = _tdoas(tdoa_est.build_model_weighted_poly,
+                           uptime=days * 86400.0, cubic=cubic)
+    atol = 1e-10 + 4 * soa_step
+    assert np.max(np.abs(weighted - unweighted)) > 10 * atol
+    np.testing.assert_allclose(got, weighted, atol=atol)
 
 
 def test_beacon_geometry_is_applied():
