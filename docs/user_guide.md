@@ -869,12 +869,15 @@ The dispatch table lives in `thriftyx/cli.py`.
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
   to its Python carrier detector.  Card data goes to the same place
   either way: the output file, or stdout for `-` or when stdout is a
-  pipe.
+  pipe.  `--duration`, Ctrl+C and SIGTERM (`systemctl stop`) stop
+  `fastcard` cleanly, and capture exits with its status.
 - `--rotate <sec>` — start a new output file every N seconds, on
   wall-clock boundaries (`--rotate 3600` switches files on the hour on
   every receiver).  The output path is then a `strftime` pattern, e.g.
   `rx0_%Y%m%dT%H%M%S.card` (directories may use fields too, e.g.
-  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed); each file gets
+  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed), fine enough to
+  name every file differently (`rx0_%Y%m%d.card` with `--rotate 60` is
+  rejected); each file gets
   its own `#v2` header, and
   block indices continue across files, so sample-of-arrival stays
   continuous for the whole run.  Finished files can be processed or
@@ -890,11 +893,15 @@ indices keep their meaning after a drop, and only detections that
 overlap the gap are affected.
 
 The output file is opened only once the SDR has been opened and
-configured, so a capture that fails to start leaves an existing file
-with the same name untouched.  A bad setting (unknown device type,
+configured -- with `--input`, once the first block of samples has
+arrived -- so a capture that fails to start leaves an existing file
+with the same name untouched.  An `--input` that ends before a whole
+block (an `rtl_sdr` that found no dongle, in the pipe above) exits
+with status 1.  A bad setting (unknown device type,
 unparseable value or `airspy_serial`, a `carrier_window` outside the
-FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`)
-exits with status 78
+FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`,
+including a file-name pattern that would give two files the same
+name) exits with status 78
 (`EX_CONFIG`); systemd units use it to stop restarting a node whose
 configuration needs fixing.
 

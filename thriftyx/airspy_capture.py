@@ -19,6 +19,7 @@ matching the behaviour of the original Thrifty ``fastcard`` tool.
 
 import argparse
 import base64
+import errno
 import logging
 import os
 import shutil
@@ -201,13 +202,34 @@ def _open_new(path):
     if directory:  # os.makedirs('') raises
         os.makedirs(directory, exist_ok=True)
     base, ext = os.path.splitext(path)
-    candidate = path
-    for n in range(1, 1000):
+    for n in range(1000):
+        candidate = "{}.{}{}".format(base, n, ext) if n else path
         try:
             return open(candidate, 'x')
         except FileExistsError:
-            candidate = "{}.{}{}".format(base, n, ext)
-    raise FileExistsError(path)
+            pass
+    raise FileExistsError(
+        errno.EEXIST, "this name and its .1 to .999 variants are all "
+        "taken; move old files away, or give the --rotate pattern finer "
+        "time fields", path)
+
+
+def _pattern_repeats(pattern, rotate, now=None, rotations=1000):
+    """Whether the strftime *pattern* names two files alike when
+    rotating every *rotate* seconds -- e.g. ``rx0_%Y%m%d.card`` hourly.
+
+    Checked over the next *rotations* boundaries in UTC: local time
+    repeats an hour when daylight saving time ends, which
+    :func:`_open_new`'s suffix is for.
+    """
+    now = time.time() if now is None else now
+    first = now // rotate
+    try:
+        names = [time.strftime(pattern, time.gmtime((first + k) * rotate))
+                 for k in range(rotations + 1)]
+    except (OverflowError, ValueError, OSError):
+        return False  # rotations beyond any calendar never happen
+    return any(a == b for a, b in zip(names[:-1], names[1:], strict=True))
 
 
 def _card_sink_for(output_path, rotate=None):
@@ -349,6 +371,10 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     This replicates the original Thrifty fastcard-based capture behaviour:
     fastcard performs carrier detection in C and writes only detected blocks
     to the .card file.
+
+    SIGINT and SIGTERM are passed on to fastcard, which stops cleanly on
+    either; ``duration`` in *extra_args* stops it the same way.  Exits
+    with fastcard's status when that is not 0.
     """
     window = _carrier_bins(config.carrier_window, config.sample_rate,
                            int(config.block_size))
@@ -393,23 +419,33 @@ def _capture_rtlsdr_fastcard(config, extra_args):
         os.setpgrp()
     process = subprocess.Popen(call)
 
-    def _signal_handler(signal_, _frame):
-        try:
-            if process.poll() is None:
-                process.send_signal(signal_)
-                returncode = process.wait()
-                sys.exit(returncode)
-        except OSError:
-            pass
+    # The handler only passes the signal on; the wait() below reaps
+    # fastcard.  Waiting in the handler hung for good: it runs inside
+    # that wait(), and Popen's wait lock is not reentrant.
+    def _forward(signum, _frame):
+        if process.returncode is None:
+            try:
+                os.kill(process.pid, signum)
+            except ProcessLookupError:
+                pass
 
-    signal.signal(signal.SIGTERM, _signal_handler)
-
+    stop_signals = (signal.SIGINT, signal.SIGTERM)
+    previous = {sig: signal.signal(sig, _forward) for sig in stop_signals}
     try:
-        returncode = process.wait()
-        if returncode != 0:
-            sys.exit(returncode)
-    except KeyboardInterrupt:
-        pass
+        try:
+            returncode = process.wait(timeout=extra_args.get('duration'))
+        except subprocess.TimeoutExpired:
+            # --duration: fastcard has no such option; stop it as
+            # Ctrl-C would.
+            _forward(signal.SIGINT, None)
+            returncode = process.wait()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if returncode < 0:
+        returncode = 128 - returncode  # killed by a signal, as a shell says
+    if returncode != 0:
+        sys.exit(returncode)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +462,9 @@ def _capture_rtlsdr(config, extra_args, output):
     geometry (readers that predate the header skip it as a comment).
 
     *output* is a :class:`CardSink`, an open text stream, or ``None``
-    (display only).
+    (display only).  A file sink is opened only once the first block
+    has been read, and an input that ends before that (``rtl_sdr``
+    finding no dongle, in a pipe) exits with status 1.
     """
     sink = _as_sink(output)
     sample_rate = int(config.sample_rate)
@@ -446,10 +484,6 @@ def _capture_rtlsdr(config, extra_args, output):
     else:
         input_stream = sys.stdin.buffer
 
-    if sink is not None:
-        sink.start(bit_depth=bit_depth, sample_rate=sample_rate,
-                   block_size=block_size, block_history=block_history)
-
     # Print fastcard-compatible header to stderr
     _print_capture_header(config, window)
 
@@ -467,6 +501,7 @@ def _capture_rtlsdr(config, extra_args, output):
     # last skipped block or, without a skip, the first samples read.
     history_bytes = block_history * 2
     history = b''
+    ended = False  # the input ran out
 
     try:
         with _StopOnSignal() as stop:
@@ -478,16 +513,17 @@ def _capture_rtlsdr(config, extra_args, output):
                 while skipped < capture_skip and stop.running:
                     chunk = input_stream.read(bytes_per_block)
                     if len(chunk) < bytes_per_block:
+                        ended = True
                         break
                     history = chunk[len(chunk) - history_bytes:]
                     skipped += 1
                 print(" done\n", file=sys.stderr)
             else:
                 history = input_stream.read(history_bytes)
+                ended = len(history) < history_bytes
 
             # History buffer for block overlap
             history_raw = np.frombuffer(history, dtype=np.uint8)
-            ended = len(history) < history_bytes  # the input ran out
 
             while stop.running and not ended:
                 if (duration is not None
@@ -496,9 +532,18 @@ def _capture_rtlsdr(config, extra_args, output):
 
                 raw_bytes = input_stream.read(bytes_per_block)
                 if len(raw_bytes) < bytes_per_block:
+                    ended = True
                     break
                 now = time.time()
                 if sink is not None:
+                    if block_idx == 0:
+                        # Only now: an input that delivers nothing (a
+                        # failed rtl_sdr) must not replace an existing
+                        # file with a header.
+                        sink.start(bit_depth=bit_depth,
+                                   sample_rate=sample_rate,
+                                   block_size=block_size,
+                                   block_history=block_history)
                     sink.tick(now)
 
                 new_raw = np.frombuffer(raw_bytes, dtype=np.uint8)
@@ -540,6 +585,11 @@ def _capture_rtlsdr(config, extra_args, output):
 
     print("\nRead {} blocks.".format(block_idx), file=sys.stderr)
     logger.info("Detected %d blocks out of %d", detected_count, block_idx)
+    if ended and block_idx == 0:
+        print("ERROR: the input ended before a whole block of samples "
+              "arrived.  Is the dongle connected, and did rtl_sdr start?",
+              file=sys.stderr)
+        sys.exit(1)
     return block_idx
 
 
@@ -873,6 +923,11 @@ def capture_cli(args=None):
             problem = ("--rotate needs a strftime pattern in the output "
                        "path (e.g. rx0_%Y%m%dT%H%M%S.card), or every "
                        "file would get the same name")
+        elif _pattern_repeats(output_path, rotate):
+            problem = ("--rotate {:g}: the output pattern {} gives files "
+                       "{:g} s apart the same name; add finer time "
+                       "fields (e.g. %H%M%S)".format(rotate, output_path,
+                                                    rotate))
         elif use_fastcard:
             problem = ("--rotate is not supported with the fastcard "
                        "binary; pass --fastcard '' to use the Python "
