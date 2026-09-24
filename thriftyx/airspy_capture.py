@@ -397,13 +397,18 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     # with EPERM.
     if os.getsid(0) != os.getpid():
         os.setpgrp()
-    process = subprocess.Popen(call)
 
     # The handler only passes the signal on; the wait() below reaps
     # fastcard.  Waiting in the handler hung for good: it runs inside
-    # that wait(), and Popen's wait lock is not reentrant.
+    # that wait(), and Popen's wait lock is not reentrant.  A signal
+    # that arrives while fastcard starts is passed on once it has.
+    process = None
+    pending = []
+
     def _forward(signum, _frame):
-        if process.returncode is None:
+        if process is None:
+            pending.append(signum)
+        elif process.returncode is None:
             try:
                 os.kill(process.pid, signum)
             except ProcessLookupError:
@@ -412,6 +417,9 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     stop_signals = (signal.SIGINT, signal.SIGTERM)
     previous = {sig: signal.signal(sig, _forward) for sig in stop_signals}
     try:
+        process = subprocess.Popen(call)
+        for signum in pending:
+            _forward(signum, None)
         try:
             returncode = process.wait(timeout=extra_args.get('duration'))
         except subprocess.TimeoutExpired:
