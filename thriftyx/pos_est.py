@@ -18,6 +18,7 @@ import numpy as np
 
 from thriftyx import exceptions
 from thriftyx import tdoa_est
+from thriftyx import util
 
 SPEED_OF_LIGHT = tdoa_est.SPEED_OF_LIGHT
 
@@ -39,12 +40,17 @@ def solve_1d(tdoa_array, rx_pos):
     if len(rx_pos) != 2:
         raise EstimationError(
             f"solve_1d requires exactly 2 receivers, got {len(rx_pos)}")
-    rx0, rx1 = rx_pos.keys()
-    if len(rx_pos[rx0]) != 1:
-        raise EstimationError("solve_1d requires 1D receiver positions")
     if len(tdoa_array) != 1:
         raise EstimationError(
             f"solve_1d requires exactly 1 TDOA, got {len(tdoa_array)}")
+    # The TDOA is d(rx0) - d(rx1) for the receivers its row names, not
+    # for pos-rx.cfg's first and second lines.
+    rx0, rx1 = int(tdoa_array['rx0'][0]), int(tdoa_array['rx1'][0])
+    if rx0 not in rx_pos or rx1 not in rx_pos:
+        raise EstimationError(
+            f"no coordinates for receiver pair ({rx0}, {rx1})")
+    if len(rx_pos[rx0]) != 1:
+        raise EstimationError("solve_1d requires 1D receiver positions")
 
     tdoa_pos = tdoa_array['tdoa'][0] * SPEED_OF_LIGHT
     # Receiver positions are 1-element sequences; use scalars so the
@@ -70,7 +76,10 @@ def solve_numerically(tdoa_array, rx_pos):
     dims = len(rx_pos[first_rx])
     uniq_rx = np.unique(np.concatenate([tdoa_array['rx0'], tdoa_array['rx1']]))
     if len(uniq_rx) < dims + 1:
-        raise EstimationError("Underdetermined")
+        # With z in pos-rx.cfg the tag's height is unknown too.
+        raise EstimationError(
+            "Underdetermined: a {}-D position needs TDOAs from at least {} "
+            "receivers, got {}".format(dims, dims + 1, len(uniq_rx)))
 
     rx_coords = np.array(list(rx_pos.values()))
     min_bounds = np.amin(rx_coords, axis=0) - MAX_DIST
@@ -79,7 +88,10 @@ def solve_numerically(tdoa_array, rx_pos):
     rx0 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx0']])
     rx1 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx1']])
 
-    x0 = [0.1] * dims
+    # Start inside the bounds, which a fixed point near the origin is not
+    # for receivers more than MAX_DIST from it (e.g. UTM coordinates);
+    # the offset keeps it off a receiver, where the Jacobian is undefined.
+    x0 = np.mean(rx_coords, axis=0) + 0.1
 
     def model(pos):
         # position relative to {rx0, rx1}
@@ -181,7 +193,7 @@ def load_positions(fname):
         'formats': POSITION_INFO_DTYPE['formats'][:num_fields]
     }
     data = np.genfromtxt(fname, dtype=dtype)
-    return data
+    return np.atleast_1d(data)   # a one-row file gives a 0-d array
 
 
 def _main():
@@ -194,8 +206,7 @@ def _main():
     parser.add_argument('tdoa', nargs='?',
                         type=argparse.FileType('r'), default='data.tdoa',
                         help="tdoa data (\"-\" streams from stdin)")
-    parser.add_argument('-o', '--output', dest='output',
-                        type=argparse.FileType('w'), default='data.pos',
+    parser.add_argument('-o', '--output', dest='output', default='data.pos',
                         help="output file (\'-\' for stdout)")
     parser.add_argument('-r', '--rx-coordinates', dest='rx_pos',
                         type=argparse.FileType('r'), default='pos-rx.cfg',
@@ -203,10 +214,14 @@ def _main():
                              "coordinates of the receivers")
     args = parser.parse_args()
 
-    tdoa_groups = tdoa_est.load_tdoa_groups(args.tdoa)
-    rx_pos = tdoa_est.load_pos_config(args.rx_pos)
-    results = solve(tdoa_groups, rx_pos)
-    save_positions(args.output, results)
+    with util.info_to_stderr(args.output):
+        tdoa_groups = tdoa_est.load_tdoa_groups(args.tdoa)
+        rx_pos = tdoa_est.load_pos_config(args.rx_pos)
+        results = solve(tdoa_groups, rx_pos)
+
+    # Opened only now, so a failed run leaves an earlier output intact.
+    with util.open_output(args.output) as output:
+        save_positions(output, results)
 
 
 if __name__ == '__main__':
