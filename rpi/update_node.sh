@@ -14,9 +14,11 @@
 # leaves HEAD different from that record, or .update_pending behind; the
 # next run finishes the job -- install, refresh, restart, health check,
 # rollback on failure -- instead of calling the half-installed node up to
-# date.  On a node without the record (never updated by this script) the
-# first run verifies the checked-out release the same way, restarting
-# capture once.
+# date.  The marker records whether the units or the service were
+# touched yet: until they are, a failed install (PyPI unreachable) is
+# exit 1 however often it repeats, never a page.  On a node without the
+# record (never updated by this script) the first run verifies the
+# checked-out release the same way, restarting capture once.
 #
 # The node only moves forward along origin's branch.  A clone with
 # commits origin/<branch> does not have -- a local commit, or origin
@@ -51,8 +53,9 @@
 #       running it; a failed install never restarts a service that
 #       already ran the old SHA), or refused because the clone is ahead
 #       of or diverged from origin (service untouched)
-#   2   update failed AND rollback also failed, or there was no other
-#       known good SHA to roll back to (service may be down — page!)
+#   2   units or service were changed, and the update AND the rollback
+#       failed, or there was no other known good SHA to roll back to
+#       (service may be down — page!)
 #   3   setup error (paths missing, not a git repo, capture instance
 #       unknown, etc.)
 
@@ -159,15 +162,35 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     die "working tree dirty; refuse to update (commit or stash first)"
 fi
 
+is_commit() {
+    [[ "$1" =~ ^[0-9a-f]{40,64}$ ]] && git cat-file -e "$1^{commit}" 2>/dev/null
+}
+
 OLD_SHA="$(git rev-parse HEAD)"
 LKG=""
 if [ -e "${LKG_FILE}" ]; then
     read -r LKG < "${LKG_FILE}" || true
-    if ! [[ "${LKG}" =~ ^[0-9a-f]{40,64}$ ]] \
-            || ! git cat-file -e "${LKG}^{commit}" 2>/dev/null; then
+    if ! is_commit "${LKG}"; then
         log "ignoring ${LKG_FILE}: '${LKG}' is not a commit of this clone"
         LKG=""
     fi
+fi
+
+# The pending marker: "PHASE ROLLBACK_SHA TARGET_SHA".  PHASE "install":
+# a run moved HEAD and/or ran pip, but no unit, script or service was
+# touched -- the service still runs the old release, and an install
+# failure only needs the old tree and package back.  PHASE "service":
+# units or scripts were refreshed or the service restarted (a rollback
+# included), so a failure needs the full rollback.  A marker in any
+# other form counts as "service".
+PHASE=""
+PENDING_ROLLBACK=""
+if [ -e "${PENDING_FILE}" ]; then
+    p_phase=""
+    p_rollback=""
+    read -r p_phase p_rollback _ < "${PENDING_FILE}" || true
+    if [ "${p_phase}" = install ]; then PHASE=install; else PHASE=service; fi
+    if is_commit "${p_rollback}"; then PENDING_ROLLBACK="${p_rollback}"; fi
 fi
 log "current sha = ${OLD_SHA}; last known good = ${LKG:-none};" \
     "capture unit = ${SERVICE}"
@@ -201,12 +224,18 @@ esac
 
 # Is HEAD known to be installed, running and healthy?  A run cut short
 # leaves the pending marker, or HEAD past the last known good SHA.
+# Without a marker nothing says whether the units or the service were
+# touched (an older script, or HEAD moved by hand): assume they were.
 UNFINISHED=""
-if [ -e "${PENDING_FILE}" ]; then
+if [ "${PHASE}" = install ]; then
+    UNFINISHED="an earlier update did not finish installing (units and"
+    UNFINISHED+=" service untouched)"
+elif [ -n "${PHASE}" ]; then
     UNFINISHED="an earlier update or rollback did not finish"
 elif [ -n "${LKG}" ] && [ "${LKG}" != "${OLD_SHA}" ]; then
     UNFINISHED="HEAD is not the last known good sha (an earlier"
     UNFINISHED+=" update did not finish, or HEAD was moved by hand)"
+    PHASE=service
 fi
 
 if [ -z "${UNFINISHED}" ] && [ -n "${LKG}" ] \
@@ -216,8 +245,9 @@ if [ -z "${UNFINISHED}" ] && [ -n "${LKG}" ] \
 fi
 
 # Where a failure goes back to: the last known good SHA or, with no
-# record, the SHA checked out before this run.
-ROLLBACK_SHA="${LKG:-${OLD_SHA}}"
+# record, the one an unfinished run started from, else the SHA checked
+# out before this run.
+ROLLBACK_SHA="${LKG:-${PENDING_ROLLBACK:-${OLD_SHA}}}"
 if [ -n "${UNFINISHED}" ]; then
     log "${UNFINISHED}: finishing it (rollback target ${ROLLBACK_SHA})"
 elif [ -z "${LKG}" ]; then
@@ -230,9 +260,13 @@ else
     log "updating ${OLD_SHA} -> ${NEW_SHA}"
 fi
 
-# From here until the node is verified, the marker says so.
-write_owned "${ROLLBACK_SHA} ${NEW_SHA}" "${PENDING_FILE}" \
-    || die "cannot write ${PENDING_FILE}"
+# From here until the node is verified, the marker says so, and how far
+# the run got.  A "service" phase left by an earlier run stays.
+set_phase() {
+    PHASE="$1"
+    write_owned "${PHASE} ${ROLLBACK_SHA} ${NEW_SHA}" "${PENDING_FILE}"
+}
+set_phase "${PHASE:-install}" || die "cannot write ${PENDING_FILE}"
 
 # The node runs $1, installed and health-checked.  Without the record
 # the pending marker stays and the next run verifies again.
@@ -316,63 +350,91 @@ do_healthy() {
 rollback() {
     local target="$1"
     log "rolling back to ${target}"
-    git reset --hard --quiet "${target}" || return 1
-    do_install || return 1
-    do_refresh || return 1
-    do_restart || return 1
-    do_healthy || return 1
+    git reset --hard --quiet "${target}" \
+        || { log "rollback: git reset to ${target} failed"; return 1; }
+    do_install \
+        || { log "rollback: pip install of ${target} failed"; return 1; }
+    do_refresh \
+        || { log "rollback: refreshing units/scripts failed"; return 1; }
+    do_restart \
+        || { log "rollback: systemctl restart ${SERVICE} failed"; return 1; }
+    do_healthy \
+        || { log "rollback: ${SERVICE} not healthy on ${target}"; return 1; }
     record_good "${target}"
+    log "rolled back: now running ${target}"
     return 0
 }
 
-# A step after the install failed: back to ROLLBACK_SHA, in full.
+# The units or the service were touched: back to ROLLBACK_SHA, in full.
 fail_back() {
     if [ "${ROLLBACK_SHA}" = "${NEW_SHA}" ]; then
         log "no other known good sha to roll back to;" \
             "${SERVICE} may be down"
         exit 2
     fi
-    if rollback "${ROLLBACK_SHA}"; then exit 1; else exit 2; fi
+    rollback "${ROLLBACK_SHA}" && exit 1
+    log "rollback to ${ROLLBACK_SHA} failed; ${SERVICE} may be down"
+    exit 2
 }
 
-if ! do_install; then
-    if [ -n "${UNFINISHED}" ]; then
-        # The service, units or venv may already hold the unfinished
-        # release: restore the old one completely.
-        log "pip install failed on ${NEW_SHA}; rolling back"
-        fail_back
+# The install failed and nothing has touched the units or the service
+# (phase "install", in this run and any earlier unfinished one).  The
+# install is editable: the tree of ROLLBACK_SHA alone gives the service
+# back its code, and the reinstall undoes whatever pip upgraded before
+# failing.  When that fails too (package index unreachable, the usual
+# cause) the node still runs the old release -- exit 1, not a page --
+# and the marker makes the next run redo the install, again as exit 1
+# while pip keeps failing.
+back_untouched() {
+    if [ "${ROLLBACK_SHA}" = "${NEW_SHA}" ]; then
+        # Installing the checked-out release (no record of an older
+        # one): nothing to go back to, and the service is as it was.
+        log "WARNING: the service was not restarted and still runs what" \
+            "it ran before; re-run update_node.sh once pip works"
+        exit 1
     fi
-    # Nothing has touched the service or its units yet, and the install
-    # is editable: the reset alone gives the service back its code.  The
-    # reinstall undoes whatever pip upgraded before failing; when it
-    # fails too (package index unreachable, the usual cause), the node
-    # is still running the old release -- exit 1, not a page -- and the
-    # pending marker makes the next run redo the install.
-    log "pip install failed on new sha; rolling back (service untouched)"
-    git reset --hard --quiet "${OLD_SHA}" \
-        || { log "git reset to ${OLD_SHA} failed"; exit 2; }
+    log "back to ${ROLLBACK_SHA} (service untouched)"
+    git reset --hard --quiet "${ROLLBACK_SHA}" \
+        || { log "git reset to ${ROLLBACK_SHA} failed"; exit 2; }
     if do_install; then
         rm -f "${PENDING_FILE}"
     else
-        log "WARNING: reinstalling ${OLD_SHA} failed too (package index" \
-            "unreachable?); the service was not restarted and still runs" \
-            "it; re-run update_node.sh once pip works"
+        log "WARNING: reinstalling ${ROLLBACK_SHA} failed too (package" \
+            "index unreachable?); the service was not restarted and still" \
+            "runs it; re-run update_node.sh once pip works"
     fi
     exit 1
+}
+
+if ! do_install; then
+    if [ "${PHASE}" = service ]; then
+        log "pip install of ${NEW_SHA} failed, and an earlier run had" \
+            "already touched the units or the service; rolling back"
+        fail_back
+    fi
+    log "pip install of ${NEW_SHA} failed (service untouched)"
+    back_untouched
+fi
+
+# The units and the service are about to change.
+if ! set_phase service; then
+    log "cannot write ${PENDING_FILE}; not touching the service"
+    back_untouched
 fi
 
 if ! do_refresh; then
-    log "refreshing units/scripts failed on new sha; rolling back"
+    log "refreshing units/scripts failed on ${NEW_SHA}; rolling back"
     fail_back
 fi
 
 if ! do_restart; then
-    log "systemctl restart failed on new sha; rolling back"
+    log "systemctl restart failed on ${NEW_SHA}; rolling back"
     fail_back
 fi
 
 if ! do_healthy; then
-    log "service not active after ${HEALTH_WAIT_S}s; rolling back"
+    log "service not healthy ${HEALTH_WAIT_S}s after restarting on" \
+        "${NEW_SHA}; rolling back"
     fail_back
 fi
 

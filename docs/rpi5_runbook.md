@@ -265,8 +265,10 @@ Behavior:
 5. `pip install` with the extras the venv already has (`fft` only if
    pyfftw is installed; override with `PIP_EXTRAS=...`).  If it fails
    (e.g. PyPI unreachable), go back to the previous SHA and reinstall
-   it, without restarting the service → exit 1 (when finishing a cut
-   short update, a full rollback as in step 8 instead)
+   it, without restarting the service → exit 1, on every run for as
+   long as pip keeps failing.  Only when an earlier cut-short run had
+   already got to steps 6-8 (the pending marker records how far a run
+   got) does an install failure need the full rollback of step 8.
 6. Refresh installed copies of the repo's systemd units and
    `update_node.sh` / `cleanup_old_captures.sh` (only files already
    installed; `daemon-reload` when a unit changed)
@@ -284,8 +286,10 @@ Exit codes:
   never restarted and still runs it, so re-run the update once pip
   works); or refused because the clone is ahead of or diverged from
   origin (service untouched)
-- `2` both update and rollback failed, or there was no other known good
-  version to go back to (immediate human intervention required)
+- `2` units or service were changed, and both update and rollback
+  failed (the log names the rollback step that failed), or there was
+  no other known good version to go back to (immediate human
+  intervention required)
 - `3` setup error (working tree dirty, no venv, capture instance
   unknown, etc.)
 

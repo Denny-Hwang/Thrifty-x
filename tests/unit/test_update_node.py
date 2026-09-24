@@ -354,6 +354,85 @@ def test_unreachable_package_index_is_not_a_page(node):
         == 'cleanup v1\n'
 
 
+@pytest.mark.parametrize('has_record', [True, False])
+def test_package_index_down_for_several_runs_is_never_a_page(node,
+                                                             has_record):
+    """Regression: the first run with PyPI unreachable kept the pending
+    marker; the next one took it for an update that had touched the
+    service, rolled back in full, failed to reinstall and exited 2
+    (page) -- without a single systemctl call.  Every such run is exit
+    1 until pip works; then the update goes through."""
+    before = node['head']()
+    if has_record:
+        node['publish']('B', {'rpi/cleanup_old_captures.sh':
+                              'cleanup v2\n'})
+    else:
+        # Never verified: the run installs and checks the tree it has.
+        (node['clone'] / '.last_known_good_sha').unlink()
+    for _ in range(3):
+        result = node['run'](FAKE_PIP_FAIL='1')
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert 'pip install of' in result.stdout
+        assert 'service untouched' in result.stdout
+        assert 'failed on new sha' not in result.stdout
+        assert 'WARNING' in result.stdout
+        assert node['head']() == before
+    assert _calls(node) == ''
+    assert (node['bindir'] / 'cleanup_old_captures.sh').read_text() \
+        == 'cleanup v1\n'
+    result = node['run']()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'restart thriftyx-capture@rx1.service' in _calls(node)
+    assert _lkg(node) == node['head']()
+    assert not _pending(node)
+
+
+def test_killed_install_then_package_index_down(node):
+    """A run killed inside pip left HEAD on the new release; the next
+    run cannot install it either.  Units and service were never
+    touched: back to the last known good tree, exit 1, no restart."""
+    before = node['head']()
+    node['publish']('B', {'rpi/systemd/thriftyx-capture@.service':
+                          'unit v2\n'})
+    process = node['start'](FAKE_PIP_HOLD='1')
+    _hold_pip(node, process)
+    os.killpg(process.pid, signal.SIGKILL)
+    process.communicate()
+    assert node['head']() != before
+    result = node['run'](FAKE_PIP_FAIL='1')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'back to {}'.format(before) in result.stdout
+    assert node['head']() == before
+    assert _calls(node) == ''
+    assert (node['units'] / 'thriftyx-capture@.service').read_text() \
+        == 'unit v1\n'
+    result = node['run']()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (node['units'] / 'thriftyx-capture@.service').read_text() \
+        == 'unit v2\n'
+
+
+def test_failed_rollback_says_which_step_failed(node):
+    """Once units and service were touched (here: a rollback cut short
+    after its reset), an install failure needs the full rollback; when
+    that cannot install either, exit 2 names the failed step."""
+    before = node['head']()
+    node['publish']('broken', {
+        'BROKEN': 'x\n',
+        'rpi/systemd/thriftyx-capture@.service': 'unit broken\n'})
+    process = node['start'](FAKE_PIP_HOLD='2')    # the rollback's pip
+    _hold_pip(node, process)
+    os.killpg(process.pid, signal.SIGKILL)
+    process.communicate()
+    result = node['run'](FAKE_PIP_FAIL='1')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert 'already touched the units or the service' in result.stdout
+    assert 'rollback: pip install of {} failed'.format(before) \
+        in result.stdout
+    assert 'rollback to {} failed'.format(before) in result.stdout
+    assert _pending(node)
+
+
 @pytest.mark.parametrize('record', [None, 'not a sha\n'])
 def test_node_without_a_record_is_verified_once(node, record):
     """No (usable) .last_known_good_sha: nothing shows the checked-out
