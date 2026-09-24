@@ -69,14 +69,16 @@ def _disk_pct(path: str) -> int | None:
 
 
 def _service_state(unit: str) -> str:
+    # `is-active` prints the state whatever it is but exits 3 for all
+    # but active/reloading, so the exit status is not an error here:
+    # checking it would report `failed` and `activating` as 'unknown'.
     try:
-        return subprocess.check_output(
+        result = subprocess.run(
             ['systemctl', 'is-active', unit],
-            text=True, timeout=2).strip()
-    except subprocess.SubprocessError:
+            capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
         return 'unknown'
-    except FileNotFoundError:
-        return 'unknown'
+    return result.stdout.strip() or 'unknown'
 
 
 def _last_detection_ts(card_dir: Path) -> str | None:
