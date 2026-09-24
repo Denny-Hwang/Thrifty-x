@@ -481,6 +481,11 @@ to update a dirty tree.
 cp ~/Thrifty-x/example/detector_mini.cfg ~/thriftyx-run/detector.cfg
 ```
 
+All three examples set `rxid: 0`.  With more than one receiver, give
+each its own `rxid` (edit its `detector.cfg`, or pass `detect --rxid
+N`), equal to the id of its line in `pos-rx.cfg` (Section 11).  `detect`
+stamps it into every detection; `capture` does not use it.
+
 ### 5.3 Parameter Dependencies
 
 Changing `sample_rate` cascades into several other parameters. Always
@@ -795,7 +800,7 @@ The dispatch table lives in `thriftyx/cli.py`.
 | `scope` | Live time / FFT / histogram plot via matplotlib. `--trigger-level <0–1>` for hold-on-peak behaviour. |
 | `analyze_toads` | Summary statistics on a `.toads` file. `-i data.toads -m data.match`. |
 | `analyze_detect` | Re-run detection with diagnostic plots. `-m N` (max blocks), `-p overview,time,overlays,spectra,corrs`. |
-| `analyze_beacon` | Diff in SoA of a beacon between two receivers. `--beacon`, `--rx0`, `--rx1`. |
+| `analyze_beacon` | Diff in SoA of a beacon between two receivers, with clock-sync residuals in metres. `--beacon`, `--rx0`, `--rx1`, `-s` (sample rate; default: `sample_rate` or `device_type` of `detector.cfg`, or `-c` config). |
 | `analyze_tdoa` | Per-slice statistics on `.tdoa` data. `--rx0`, `--rx1`, `--tx`, `--timestamp`. |
 
 ### Utilities
@@ -808,7 +813,15 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 ### Common options
 
-- `-o / --output` — write to a file instead of stdout.
+- `-o / --output` — output file.  `detect` writes `.toad` records only
+  with `-o FILE` or `-a FILE`; without either it prints only its
+  per-block summary lines, which are not a `.toad` file.  `identify`,
+  `match`, `tdoa` and `pos` write `data.toads`, `data.match`,
+  `data.tdoa` and `data.pos` by default, replacing an existing file
+  once the run succeeds (a failed run leaves it untouched).  For these
+  five commands `-o -` writes to stdout, and progress lines go to
+  stderr instead.  `template_generate` and `template_extract` default
+  to `template.npy` and `capture.npy`.
 - `-a / --append` — append to an existing output file (`detect` only).
 - `--quiet` — suppress per-block status output (`detect`).
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,
@@ -886,7 +899,7 @@ One detection per line, 12 whitespace-separated columns in this order
 
 | # | Column | Meaning |
 |---|---|---|
-| 1 | `rxid` | Receiver ID (`rxid:` from the config) |
+| 1 | `rxid` | Receiver ID (`detect --rxid`, or `rxid:` from the config); unique per receiver |
 | 2 | `timestamp` | Linux epoch time at which the block's last sample arrived |
 | 3 | `block` | Block index within the capture (continues across `--rotate` files) |
 | 4 | `soa` | Sample-of-arrival: `block * (block_size - block_history) + sample + offset` |
@@ -938,26 +951,29 @@ frequency map via `--map`:**
 
 ```ini
 # freqmap.cfg - one TX per line, value is "start - stop" in FFT bins
-# (or in Hz if a unit suffix is given).
+# (the carrier_bin column of the .toad files).
 1: 100 - 105   # TX1 carrier sits in bins 100..105
 2: 125 - 130   # TX2 carrier sits in bins 125..130
 
-# Per-receiver bin offsets (in case different receivers have
-# different LO offsets). Key starts with '@' followed by rxid.
-@0: 0
-@1: 0
+# Optional per-receiver bin offsets, for receivers whose LO is off.
+# Key starts with '@' followed by rxid; a receiver without one uses 0.
+@1: 2
 ```
 
 ```bash
-thriftyx identify --map freqmap.cfg rx0.toad rx1.toad -o data.toads
+thriftyx identify --map freqmap.cfg rx0.toad rx1.toad rx2.toad -o data.toads
 ```
 
-The map is parsed by `thriftyx.identify.load_freqmap`. Each TX range
-is offset per-receiver before being checked. A detection whose
-`carrier_bin + carrier_offset` falls outside every TX range gets
-`txid = -1` (sentinel for "unidentified") and is dropped from the
-`.toads` output by `filter_duplicates`. A warning is logged for
-each unidentified detection.
+The map is parsed by `thriftyx.identify.load_freqmap`.  Ranges are in
+FFT bins only: identify does not know the sample rate and block size
+that convert Hz (`bin = Hz * block_size / sample_rate`), so a range with
+a `Hz` unit or a `k`/`M` prefix, or a line that does not parse, stops
+identify with an error naming the line.  Each TX range is shifted by
+the receiver's `@rxid` offset (0 without one) before being checked.  A
+detection whose `carrier_bin + carrier_offset` falls outside every TX
+range gets `txid = -1` (sentinel for "unidentified") and is dropped
+from the `.toads` output by `filter_duplicates`. A warning is logged
+for each unidentified detection.
 
 The auto-classifier is fine for ad-hoc inspection runs but the
 explicit map is the recommended production workflow.
@@ -1058,9 +1074,23 @@ Pipeline stages (CLI commands):
 .tdoa  →  thriftyx pos  -r pos-rx.cfg → .pos
 ```
 
+Each receiver's detections must carry its own `rxid` (`detect --rxid
+N`, or `rxid:` in its `detector.cfg`; Section 5.2), and that `rxid` is
+the id of the receiver's line in `pos-rx.cfg`.  Detections of several
+receivers under one `rxid` cannot be matched: `match` then finds no
+pairs, and `identify` warns about files that hold one `rxid` over the
+same period.
+
 Receiver and beacon coordinates live in `pos-rx.cfg` and
-`pos-beacon.cfg` (one `id: x y` line each). End-to-end multi-receiver
-documentation will be added as the integration testing matures.
+`pos-beacon.cfg`, one `id: x y` line each (metres, any Cartesian
+frame).  Every line in both files has the same number of coordinates:
+with `id: x y z` the tag's height is solved too, which needs at least
+4 receivers; `id: x` gives a 1-D position along the line of the
+receivers and needs at least 2.  A receiver pair that never heard a
+beacon together gets no TDOA (counted as a failure), while the other
+pairs are estimated.
+End-to-end multi-receiver documentation will be added as the
+integration testing matures.
 
 ---
 

@@ -169,8 +169,14 @@ Copy and use `rpi/thriftyx-capture.cfg.example`:
 
 ```bash
 cp ~/thrifty-x/rpi/thriftyx-capture.cfg.example /var/lib/thriftyx/capture.cfg
-$EDITOR /var/lib/thriftyx/capture.cfg   # adjust rxid, tuner_freq, gain, etc.
+$EDITOR /var/lib/thriftyx/capture.cfg   # adjust tuner_freq, gain, etc.
 ```
+
+`capture` ignores the file's `rxid` (a `.card` does not record it).
+The receiver id is set when its cards are detected, with `thriftyx
+detect rx1.card -o rx1.toad --rxid 1` or with `-c` and this file.
+Every receiver needs its own id, the id of its line in `pos-rx.cfg`;
+otherwise `match` cannot pair the receivers.
 
 Manual test capture:
 

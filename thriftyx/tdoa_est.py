@@ -26,6 +26,8 @@ import numpy as np
 from thriftyx import matchmaker
 from thriftyx import stat_tools
 from thriftyx import toads_data
+from thriftyx import util
+from thriftyx.exceptions import ConfigError
 from thriftyx.setting_parsers import metric_float
 from thriftyx.settings import parse_kvconfig
 
@@ -65,8 +67,14 @@ def make_detection_extractor(detections, matches):
     def extract(rxid0, rxid1, timestamp_start, timestamp_stop):
         assert rxid0 < rxid1
         pair = (rxid0, rxid1)
-        left = bisect_left(timestamps[pair], timestamp_start)
-        right = bisect_right(timestamps[pair], timestamp_stop)
+        pair_timestamps = timestamps.get(pair)
+        if not pair_timestamps:
+            # The pair never heard a beacon together (a receiver out of
+            # the beacon's range): no model, which the caller counts as a
+            # failure for this pair only.
+            return []
+        left = bisect_left(pair_timestamps, timestamp_start)
+        right = bisect_right(pair_timestamps, timestamp_stop)
         detection_pairs = rxpair_detections[pair][left:right]
 
         if len(detection_pairs) > 1:
@@ -338,7 +346,8 @@ def save_tdoa_groups(output, tdoa_groups):
 
 
 def load_tdoa_matrix(fname):
-    data = np.loadtxt(fname, dtype=MATRIX_DTYPE)
+    # ndmin=1: a one-row file is a 1-row array, not a 0-d one
+    data = np.loadtxt(fname, dtype=MATRIX_DTYPE, ndmin=1)
     data['tdoa'] /= 1e9
     return data
 
@@ -355,33 +364,52 @@ def groups_to_matrix(groups):
 
 def load_tdoa_groups(fname):
     matrix = load_tdoa_matrix(fname)
-    tdoa_groups = collections.OrderedDict()
-    for row in matrix:
-        group_id = row['group_id']
-        fields = list(TDOA_DTYPE['names'])
-        if group_id not in tdoa_groups:
-            in_group = matrix['group_id'] == group_id
-            tdoa_groups[group_id] = TdoaGroup(group_id=group_id,
-                                              timestamp=row['timestamp'],
-                                              tx=row['tx'],
-                                              tdoas=matrix[fields][in_group])
-    return tdoa_groups.values()
+    tdoas = matrix[list(TDOA_DTYPE['names'])]
+    # Row indices of each group, in order of first appearance: one pass,
+    # where a mask per group took quadratic time on long files.
+    rows = collections.defaultdict(list)
+    for idx, group_id in enumerate(matrix['group_id'].tolist()):
+        rows[group_id].append(idx)
+    return [TdoaGroup(group_id=group_id,
+                      timestamp=matrix['timestamp'][idx[0]],
+                      tx=matrix['tx'][idx[0]],
+                      tdoas=tdoas[idx])
+            for group_id, idx in rows.items()]
 
 
 def load_pos_config(file_):
+    """Load ``id: x [y [z]]`` lines of coordinates in metres.
+
+    Every line must give the same number of coordinates.
+    """
     strings = parse_kvconfig(file_)
-    txfreqs = {int(id_): np.array([float(x) for x in pos_str.split()])
-               for id_, pos_str in strings.items()}
-    return txfreqs
+    name = getattr(file_, 'name', 'coordinates')
+    positions = {}
+    for id_, pos_str in strings.items():
+        try:
+            positions[int(id_)] = np.array([float(x)
+                                            for x in pos_str.split()])
+        except ValueError:
+            raise ConfigError("{}: invalid line '{}: {}'".format(
+                name, id_, pos_str)) from None
+    dims = {len(pos) for pos in positions.values()}
+    if len(dims) != 1 or not dims <= {1, 2, 3}:
+        raise ConfigError(
+            "{}: expected one 'id: x', 'id: x y' or 'id: x y z' line per "
+            "transmitter or receiver, all with the same number of "
+            "coordinates".format(name))
+    return positions
 
 
-def _resolve_sample_rate(cli_value, config_path):
+def _resolve_sample_rate(cli_value, config_path,
+                         affected="TDOA and position estimates"):
     """Resolve the receivers' nominal sample rate for TDOA estimation.
 
     Resolution order: ``--sample-rate`` > ``sample_rate`` in the config
     file > the default for its ``device_type`` (the same default capture
     used, from :mod:`thriftyx.hal.profiles`).  The last case is warned
-    about, since a wrong rate scales every TDOA and position.
+    about, since a wrong rate scales every TDOA and position; the warning
+    names *affected* as the figures that would be wrong.
     """
     if cli_value is not None:
         return float(cli_value)
@@ -405,9 +433,9 @@ def _resolve_sample_rate(cli_value, config_path):
     if 'sample_rate' not in explicit:
         _logging.warning(
             "--sample-rate not specified and %s sets no sample_rate; "
-            "using the %s default of %.4g Hz. TDOA and position estimates "
-            "are wrong if the receivers captured at another rate.",
-            cfg_path, values['device_type'], rate)
+            "using the %s default of %.4g Hz. %s are wrong if the "
+            "receivers captured at another rate.",
+            cfg_path, values['device_type'], rate, affected)
     return rate
 
 
@@ -424,8 +452,7 @@ def _main():
     parser.add_argument('matches', nargs='?',
                         type=argparse.FileType('r'), default='data.match',
                         help="match data (\"-\" streams from stdin)")
-    parser.add_argument('-o', '--output', dest='output',
-                        type=argparse.FileType('w'), default='data.tdoa',
+    parser.add_argument('-o', '--output', dest='output', default='data.tdoa',
                         help="output file (\'-\' for stdout)")
     parser.add_argument('-r', '--rx-coordinates', dest='rx_pos',
                         type=argparse.FileType('r'), default='pos-rx.cfg',
@@ -454,19 +481,37 @@ def _main():
                              "[default: detector.cfg]")
     args = parser.parse_args()
 
-    sample_rate = _resolve_sample_rate(args.sample_rate, args.config)
+    with util.info_to_stderr(args.output):
+        sample_rate = _resolve_sample_rate(args.sample_rate, args.config)
 
-    toads = toads_data.load_toads(args.toads)
-    matches = matchmaker.load_matches(args.matches)
-    rx_pos = load_pos_config(args.rx_pos)
-    beacon_pos = load_pos_config(args.beacon_pos)
-    tdoa_groups, failures = estimate_tdoas(toads, matches, args.window_size,
-                                           beacon_pos, rx_pos,
-                                           sample_rate)
+        toads = toads_data.load_toads(args.toads)
+        matches = matchmaker.load_matches(args.matches)
+        rx_pos = load_pos_config(args.rx_pos)
+        beacon_pos = load_pos_config(args.beacon_pos)
+        if (len(next(iter(beacon_pos.values())))
+                != len(next(iter(rx_pos.values())))):
+            raise ConfigError("{} and {} give different numbers of "
+                              "coordinates".format(args.rx_pos.name,
+                                                   args.beacon_pos.name))
+        unknown = {toads[i].rxid for match in matches
+                   if toads[match[0]].txid not in beacon_pos
+                   for i in match} - set(rx_pos)
+        if unknown:
+            raise ConfigError(
+                "{}: no coordinates for receiver(s) {}; each receiver's "
+                "rxid needs a line".format(
+                    args.rx_pos.name, ', '.join(map(str, sorted(unknown)))))
+        tdoa_groups, failures = estimate_tdoas(toads, matches,
+                                               args.window_size,
+                                               beacon_pos, rx_pos,
+                                               sample_rate)
 
-    print("Number of TDOA estimations:", len(tdoa_groups))
-    print("Number of TDOA estimation failures:", len(failures))
-    save_tdoa_groups(args.output, tdoa_groups)
+        print("Number of TDOA estimations:", len(tdoa_groups))
+        print("Number of TDOA estimation failures:", len(failures))
+
+    # Opened only now, so a failed run leaves an earlier output intact.
+    with util.open_output(args.output) as output:
+        save_tdoa_groups(output, tdoa_groups)
 
 
 if __name__ == '__main__':

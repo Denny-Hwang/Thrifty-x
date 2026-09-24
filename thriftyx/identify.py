@@ -17,17 +17,24 @@ frequency, remove duplicate detections, and output .toads file.
 
 
 import argparse
-from collections import defaultdict
+from collections import defaultdict, namedtuple
+import errno
 import glob
 import itertools
 import logging
+import re
 
 import numpy as np
 
-from thriftyx import toads_data
+from thriftyx import toads_data, util
+from thriftyx.exceptions import ConfigError
+from thriftyx.setting_parsers import freq_range
 from thriftyx.settings import parse_kvconfig
 
 UNIDENTIFIED_TX = -1
+
+# --map contents: {txid: (start_bin, stop_bin)} and {rxid: bin offset}.
+FreqMap = namedtuple('FreqMap', ['tx_ranges', 'rx_offset'])
 
 
 def detect_transmitter_windows(freqs, verbose=False):
@@ -127,10 +134,11 @@ def classify_transmitters(detections, freqmap):
     txids = []
     for detection in detections:
         freq = detection.carrier_info.bin + detection.carrier_info.offset
+        # A receiver without an '@rxid' line has no LO offset.
+        offset = freqmap.rx_offset.get(detection.rxid, 0.0)
         this_txid = UNIDENTIFIED_TX
-        for txid, range_ in freqmap[detection.rxid].items():
-            start, stop = range_
-            if freq >= start and freq <= stop:
+        for txid, (start, stop) in freqmap.tx_ranges.items():
+            if start + offset <= freq <= stop + offset:
                 this_txid = txid
         if this_txid == UNIDENTIFIED_TX:
             logging.warning("Failed to classify transmitter for detection "
@@ -197,43 +205,98 @@ def filter_duplicates(detections):
 
 
 def load_toad_files(toad_globs):
+    """Load the detections of every file matching one of *toad_globs*.
+
+    A pattern that matches no file is an error: a mistyped receiver file
+    would otherwise just drop that receiver from the run.
+    """
     filenames = []
     for toad_glob in toad_globs:
-        filenames.extend(glob.glob(toad_glob))
+        matched = sorted(glob.glob(toad_glob))
+        if not matched:
+            raise FileNotFoundError(errno.ENOENT, "no file matches",
+                                    toad_glob)
+        filenames.extend(matched)
+    filenames = list(dict.fromkeys(filenames))   # each file once
 
     detections = []
+    spans = defaultdict(list)   # rxid -> [(first, last timestamp, file)]
     for filename in filenames:
         with open(filename, 'r') as file_:
-            detections.extend(toads_data.load_toad(file_))
+            file_detections = toads_data.load_toad(file_)
+        detections.extend(file_detections)
+        timestamps = defaultdict(list)
+        for detection in file_detections:
+            timestamps[detection.rxid].append(detection.timestamp)
+        for rxid, times in timestamps.items():
+            spans[rxid].append((min(times), max(times), filename))
+    _check_rxids(spans)
 
     return detections, filenames
 
 
+def _check_rxids(spans):
+    """Warn when two files hold detections of one rxid over the same time.
+
+    One receiver's files (hourly --rotate captures, say) follow each
+    other; files that overlap come from different receivers left at the
+    same rxid, and `match` would then find nothing to pair.
+    """
+    for rxid, rx_spans in spans.items():
+        rx_spans.sort()
+        last_stop, last_file = rx_spans[0][1], rx_spans[0][2]
+        for first, stop, filename in rx_spans[1:]:
+            if first < last_stop:
+                logging.warning(
+                    "%s and %s both hold rxid %d detections from the same "
+                    "period: give every receiver its own rxid (detect "
+                    "--rxid N, or rxid: in its detector.cfg), the id of "
+                    "its line in pos-rx.cfg", last_file, filename, rxid)
+                break
+            if stop > last_stop:
+                last_stop, last_file = stop, filename
+
+
 def load_freqmap(file_):
+    """Load an ``identify --map`` file.
+
+    ``txid: start - stop`` lines give each transmitter's carrier range in
+    FFT bins (the ``carrier_bin`` column of the .toad files); optional
+    ``@rxid: offset`` lines shift the ranges for one receiver, whose
+    offset is 0 without one.
+    """
     if file_ is None:
         return None
     strings = parse_kvconfig(file_)
+    name = getattr(file_, 'name', 'frequency map')
 
     tx_ranges = {}
     rx_offset = {}
 
     for key, value in strings.items():
-        if key[0] == '@':
-            rx_offset[int(key[1:])] = float(value)
-        else:
-            # TODO: use regex
-            start, stop = [float(x.strip()) for x in value.split('-')]
-            tx_ranges[int(key)] = (start, stop)
-            # TODO: ensure that ranges do not overlap
+        try:
+            if key.startswith('@'):
+                rx_offset[int(key[1:])] = float(value)
+                continue
+            txid = int(key)
+            start, stop, unit_hz = freq_range(value)
+        except ValueError:
+            raise ConfigError(
+                "{}: invalid line '{}: {}' (expected 'txid: start - stop' "
+                "in FFT bins, or '@rxid: offset')".format(
+                    name, key, value)) from None
+        if unit_hz or re.search(r'[kKmM]\s*$', value):
+            # identify knows neither the sample rate nor the block size
+            # that would convert Hz to bins ('105k' is 105 kHz, not
+            # 105000 bins).
+            raise ConfigError(
+                "{}: '{}: {}': give the range in FFT bins, not Hz "
+                "(bin = Hz * block_size / sample_rate)".format(
+                    name, key, value))
+        tx_ranges[txid] = (start, stop)
+        # TODO: ensure that ranges do not overlap
 
-    freq_map = {}
-    for rxid, offset in rx_offset.items():
-        freq_map[rxid] = {}
-        for txid, range_ in tx_ranges.items():
-            start, stop = range_
-            freq_map[rxid][txid] = (start+offset, stop+offset)
-
-    return freq_map
+    return FreqMap(tx_ranges, rx_offset)
 
 
 def integrate(detections, freqmap=None):
@@ -244,16 +307,21 @@ def integrate(detections, freqmap=None):
 
 
 def generate_toads(output, toad_globs, freqmap):
-    detections, filenames = load_toad_files(toad_globs)
-    output.write("# source_files: [%s]\n" % (' '.join(filenames)))
-    filtered = integrate(detections, freqmap)
+    """Identify and filter the detections of *toad_globs* and write them
+    to the file *output* (``'-'`` for stdout)."""
+    with util.info_to_stderr(output):
+        detections, filenames = load_toad_files(toad_globs)
+        filtered = integrate(detections, freqmap)
 
-    print("Removed {} duplicates / unidentified transmissions "
-          "from {} detections.".format(len(detections)-len(filtered),
-                                       len(detections)))
+        print("Removed {} duplicates / unidentified transmissions "
+              "from {} detections.".format(len(detections)-len(filtered),
+                                           len(detections)))
 
-    for detection in filtered:
-        output.write(detection.serialize() + '\n')
+    # Opened only now, so a failed run leaves an earlier output intact.
+    with util.open_output(output) as out:
+        out.write("# source_files: [%s]\n" % (' '.join(filenames)))
+        for detection in filtered:
+            out.write(detection.serialize() + '\n')
 
 
 def _main():
@@ -261,11 +329,11 @@ def _main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    parser.add_argument('toad_file', type=str, nargs='*', default="*.toad",
+    parser.add_argument('toad_file', type=str, nargs='*', default=['*.toad'],
                         help="toad file(s) from receivers [default: *.toad]")
-    parser.add_argument('-o', '--output', type=argparse.FileType('w'),
-                        default='data.toads',
-                        help="output file [default: data.toads]")
+    parser.add_argument('-o', '--output', default='data.toads',
+                        help="output file ('-' for stdout) "
+                             "[default: data.toads]")
     parser.add_argument('-m', '--map', type=argparse.FileType('r'),
                         help="schema for mapping DFT index to transmitter ID "
                              "[default: auto-detect]")

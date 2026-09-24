@@ -13,6 +13,8 @@ import logging
 
 import numpy as np
 
+from thriftyx.exceptions import FileFormatError
+
 
 CarrierSyncInfo = namedtuple('CarrierSyncInfo', [
     'bin',
@@ -102,26 +104,43 @@ class DetectionResult:
 def _load_toads(stream, with_rxid=True, with_txid=True):
     """Load list of TOA detection serializations from a file."""
     toads = []
+    skipped = []
+    kind = '.toads' if with_txid else '.toad'
     opened = False
     if isinstance(stream, str):
         stream = open(stream, 'r')
         opened = True
+    name = getattr(stream, 'name', '<input>')
     try:
         for i, line in enumerate(stream):
-            if len(line) == 0 or line[0] == '#':
+            if not line.strip() or line[0] == '#':
                 continue
 
-            detection = DetectionResult.deserialize(line,
-                                                    with_rxid=with_rxid,
-                                                    with_txid=with_txid)
+            try:
+                detection = DetectionResult.deserialize(line,
+                                                        with_rxid=with_rxid,
+                                                        with_txid=with_txid)
+            except ValueError:
+                # e.g. detect's summary lines saved with `> rx0.toad`,
+                # or a .toads file given where a .toad is expected
+                raise FileFormatError(
+                    "{}: line {} is not a {} record: {!r}".format(
+                        name, i + 1, kind, line.strip()[:60])) from None
             if detection is None:
-                logging.warning("skipped line #%d: "
-                               "line's formatting is invalid", i+1)
+                skipped.append(i + 1)
                 continue
             toads.append(detection)
     finally:
         if opened:
             stream.close()
+    if skipped and not toads:
+        # Every record too short, e.g. a .toad file given where a .toads
+        # is expected: an error, not an empty result.
+        raise FileFormatError("{}: no {} records{}".format(
+            name, kind, ' (a .toad file?)' if with_txid else ''))
+    for line_no in skipped:
+        logging.warning("skipped line #%d: line's formatting is invalid",
+                        line_no)
     return toads
 
 

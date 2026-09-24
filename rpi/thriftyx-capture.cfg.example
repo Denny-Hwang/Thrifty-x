@@ -3,6 +3,9 @@
 # Format: key: value  (hash = comment, ms/k/M unit suffixes allowed)
 
 # --- Receiver identity ---
+# Not used by capture (a .card does not record it): `thriftyx detect -c`
+# with this file stamps it into the detections.  Unique per receiver,
+# the id of its line in pos-rx.cfg.
 rxid:               0
 
 # --- Hardware selection ---

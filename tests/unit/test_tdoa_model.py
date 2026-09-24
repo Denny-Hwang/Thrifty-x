@@ -98,3 +98,34 @@ def test_too_few_beacons_is_a_failure_not_a_guess():
     assert groups == []
     assert len(failures) == len(mobile_groups)
 
+
+def test_receiver_that_never_hears_the_beacon():
+    """A receiver out of the beacon's range loses only its own pairs.
+
+    Regression: the beacon extractor indexed a plain dict by receiver
+    pair, so the first mobile group with a pair that never heard the
+    beacon together raised KeyError and aborted the whole run.
+    """
+    detections, matches = _detections()
+    rx_pos = dict(RX_POS)
+    rx_pos[2] = (0.0, 900.0)
+    for group in matches:
+        det0 = detections[group[0]]
+        if det0.txid != MOBILE:
+            continue
+        t_emit = det0.timestamp - _dist(MOBILE_POS, RX_POS[0]) / C
+        arrival = t_emit + _dist(MOBILE_POS, rx_pos[2]) / C
+        info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
+        detections.append(DetectionResult(
+            arrival, 0, 777.0 + FS * arrival, None, info, rxid=2,
+            txid=MOBILE))
+        group.append(len(detections) - 1)
+
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, rx_pos, FS)
+    assert len(groups) == 19
+    assert all(g.tdoas[['rx0', 'rx1']].tolist() == [(0, 1)] for g in groups)
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+    # (0, 2) and (1, 2) of every mobile group
+    assert len(failures) == 2 * 19

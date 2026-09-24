@@ -13,17 +13,28 @@ Analyze the difference in SOA of a beacon between two receivers.
 """
 
 
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 from thriftyx import matchmaker
+from thriftyx import tdoa_est
 from thriftyx import toads_data
+from thriftyx.exceptions import EstimationError
+from thriftyx.setting_parsers import metric_float
 
 
 SPEED_OF_LIGHT = 2.997e8
 
+# Largest departure of the receivers' relative clock rate from its median
+# over a capture that is still drift: crystals are tens of ppm apart,
+# which the median takes out, and drift by a few ppm with temperature.
+MAX_RATE_DRIFT = 100e-6
 
-def plot(soa0, residuals, discontinuities, avg_snr=None, sample_rate=6e6):
+
+def plot(soa0, residuals, discontinuities, sample_rate, avg_snr=None):
+    """Plot and print the residuals (in samples of *sample_rate*) in m."""
     s2m = SPEED_OF_LIGHT / sample_rate
 
     if avg_snr is None:
@@ -42,7 +53,7 @@ def plot(soa0, residuals, discontinuities, avg_snr=None, sample_rate=6e6):
     plt.plot(soa0, residuals * s2m, '.-')
     plt.title("Residuals")
     plt.xlabel("RX sample")
-    plt.ylabel("Residual (samples)")
+    plt.ylabel("Residual (m)")
     plt.grid()
     # plt.ylim([-0.5, 0.5])
 
@@ -50,8 +61,9 @@ def plot(soa0, residuals, discontinuities, avg_snr=None, sample_rate=6e6):
         plt.axvline(discontinuity, color='k')
 
     plt.subplot(1, 2, 2)
-    plt.hist(residuals, 20)
+    plt.hist(residuals * s2m, 20)
     plt.title("Histogram: residuals")
+    plt.xlabel("Residual (m)")
     plt.grid()
 
     plt.suptitle("Clock sync (stddev = {:.01f} m; max = {:.01f} m; "
@@ -64,27 +76,75 @@ def plot(soa0, residuals, discontinuities, avg_snr=None, sample_rate=6e6):
     plt.subplots_adjust(top=0.90)
 
 
-def analyze(detections, matches, deg=2):
+def _local_median(values, size=9):
+    """Median of the *size* values around each of *values*, ignoring NaNs
+    (NaN where all are), with the ends mirrored."""
+    windows = np.lib.stride_tricks.sliding_window_view(
+        np.pad(values, size // 2, mode='reflect'), size)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)   # all-NaN window
+        return np.nanmedian(windows, axis=1)
+
+
+def find_discontinuities(soa):
+    """Indices i where the SDOA jumps between beacon match i and i+1.
+
+    Between two beacon transmissions the SDOA changes by the time between
+    them times the receivers' relative clock rate, which has either sign
+    (whichever clock is faster), drifts slowly and is about zero for
+    coherent clocks; a beacon missed by either receiver doubles the
+    change.  A step that departs from the local rate by more than the
+    noise (10 MADs, and at least one sample) is a jump in one receiver's
+    sample count.
+
+    The local rate is the median of the 9 steps around a step, which
+    jumps in most of them would set.  So a step whose rate departs from
+    the median of all steps by more than MAX_RATE_DRIFT is a jump too,
+    and the jumps found are left out of the local rates and the search
+    repeated until it finds no more.  Smaller jumps in 5 or more of 9
+    consecutive steps are still missed.
+
+    Parameters
+    ----------
+    soa : (N, 2) array
+        SoAs of the beacon at the two receivers, in time order.
+    """
+    soa = np.asarray(soa, dtype=float)
+    dsdoa = np.diff(soa[:, 1] - soa[:, 0])
+    dsoa0 = np.diff(soa[:, 0])
+    if len(dsdoa) == 0:
+        return np.array([], dtype=int)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rate = dsdoa / dsoa0
+    jumps = np.abs(rate - np.median(rate)) > MAX_RATE_DRIFT
+    while not jumps.all():
+        local_rate = _local_median(np.where(jumps, np.nan, rate))
+        deviation = np.abs(dsdoa - local_rate * dsoa0)
+        noise = 1.4826 * np.median(deviation[~jumps])
+        found = jumps | (deviation > max(10 * noise, 1.0))
+        if np.array_equal(found, jumps):
+            break
+        jumps = found
+    return np.flatnonzero(jumps)
+
+
+def analyze(detections, matches, sample_rate, deg=2):
     """
     Parameters
     ---------
     detections: detection array
     matches:    matches of beacon transmissions of the two receivers
+    sample_rate: the receivers' nominal sample rate, for figures in m
     """
 
     print("Number of detection groups:", len(matches))
+    if len(matches) < 2:
+        raise EstimationError("fewer than two beacon transmissions matched "
+                              "between the two receivers")
 
     soa = detections['soa'][matches]
-    sdoa = soa[:, 1] - soa[:, 0]
-    dsdoa = np.diff(sdoa)
-    # plt.plot(dsdoa)
-    # plt.show()
+    discontinuities = find_discontinuities(soa)
 
-    is_rapid_change = dsdoa > np.mean(dsdoa) * 10
-    discontinuities = np.where(is_rapid_change)[0]
-
-    # print(np.column_stack([np.diff(soa[:,0]), np.diff(soa[:,1]), sdoa[1:],
-    #                        dsdoa, is_rapid_change]).astype(int))
     print("Number of discontinuities:", np.size(discontinuities))
     print("Discontinuities (index):", " ".join(map(str, discontinuities)))
     discont_ids = detections[matches]['idx'][discontinuities]
@@ -124,10 +184,14 @@ def analyze(detections, matches, deg=2):
 
         print('Cut #{}: {} outliers'.format(i+1, np.sum(outliers)))
 
+    if not all_soas:
+        raise EstimationError("no run of more than 8 matched beacon "
+                              "transmissions between discontinuities; "
+                              "nothing to fit")
     soas = np.concatenate(all_soas)
     residuals = np.concatenate(all_residuals)
     avg_snr = np.mean(all_avg_snr)
-    plot(soas[:, 0], residuals, discontinuity_soas, avg_snr)
+    plot(soas[:, 0], residuals, discontinuity_soas, sample_rate, avg_snr)
 
     return all_coefs
 
@@ -175,8 +239,19 @@ def _main():
     parser.add_argument('--export', type=str, nargs='?',
                         const=True,
                         help="export plot to a .PDF file")
+    parser.add_argument('-s', '--sample-rate', dest='sample_rate',
+                        type=metric_float, default=None,
+                        help="nominal sample rate of the receivers in Hz "
+                             "(e.g. 2.4M, 6M, 10M), for the residuals in "
+                             "metres. If omitted, reads from detector.cfg "
+                             "(sample_rate or device_type).")
+    parser.add_argument('-c', '--config', dest='config', default=None,
+                        help="settings config file to read sample_rate from "
+                             "[default: detector.cfg]")
 
     args = parser.parse_args()
+    sample_rate = tdoa_est._resolve_sample_rate(
+        args.sample_rate, args.config, affected="The residuals in metres")
 
     toads = toads_data.load_toads(args.toads)
     detections = toads_data.toads_array(toads, with_ids=True)
@@ -193,7 +268,7 @@ def _main():
                        m[1] >= start and m[1] <= stop)]
     matches = np.array(matches)
 
-    analyze(detections, matches, deg=args.deg)
+    analyze(detections, matches, sample_rate, deg=args.deg)
 
     if args.export:
         if args.export is True:

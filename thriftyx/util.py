@@ -8,6 +8,9 @@
 
 """Various utility methods."""
 
+import contextlib
+import sys
+
 import numpy as np
 
 
@@ -41,3 +44,24 @@ def find_nearest(array, values):
                         np.abs(value - array[idx])):
             indices[i] = idx - 1
     return indices
+
+
+def open_output(path):
+    """Open the text output file *path* for writing; ``'-'`` is stdout.
+
+    Commands call this once their results are computed, rather than
+    taking an ``argparse.FileType('w')`` that truncates the file while
+    the arguments are parsed: a run that fails leaves the previous
+    output intact.
+    """
+    if path == '-':
+        return contextlib.nullcontext(sys.stdout)
+    return open(path, 'w')
+
+
+def info_to_stderr(path):
+    """Divert progress prints to stderr while *path* is stdout (``'-'``),
+    so they do not end up in the data."""
+    if path == '-':
+        return contextlib.redirect_stdout(sys.stderr)
+    return contextlib.nullcontext()

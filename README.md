@@ -231,9 +231,10 @@ full argument list of any command.
 cp example/detector_mini.cfg detector.cfg     # or detector_r2.cfg / detector.cfg (RTL-SDR)
 thriftyx template_generate 11 0 -o template.npy   # upstream Thrifty transmitters' code
 
-# 2. On each receiver: capture, then detect.
+# 2. On each receiver: capture, then detect with that receiver's own
+#    id (rx1.card with --rxid 1, and so on).
 thriftyx capture rx0.card --duration 60
-thriftyx detect rx0.card -o rx0.toad
+thriftyx detect rx0.card -o rx0.toad --rxid 0
 
 # 3. On the central server, combine .toad files from all receivers.
 #    Each step reads the previous one's default output file:
@@ -243,12 +244,26 @@ thriftyx tdoa -s 6M                            # -> data.tdoa (needs pos-rx.cfg,
 thriftyx pos                                   # -> data.pos  (needs pos-rx.cfg)
 ```
 
-`tdoa` and `pos` need the surveyed positions, one `id: x y [z]` line
-per receiver in `pos-rx.cfg` and per beacon transmitter in
-`pos-beacon.cfg` (metres, any local Cartesian frame; `-r` / `-b`
-choose other files).  `tdoa -s` is the receivers' sample rate; without
-it `tdoa` reads `sample_rate` from `detector.cfg`, then falls back to the
-`device_type` default with a warning.
+Every receiver needs its own `rxid`, set by `detect --rxid N` or by
+`rxid:` in that receiver's `detector.cfg` (the example configs all say
+`0`).  It is stamped into each detection and must be the id of the
+receiver's line in `pos-rx.cfg`.  `capture` does not record it, so it
+is set when detecting.  Detections of several receivers under one
+`rxid` look like a single receiver: `match` pairs nothing, and
+`identify` warns when two files hold one `rxid` over the same period.
+
+`tdoa` and `pos` need the surveyed positions in `pos-rx.cfg` (one line
+per receiver) and `pos-beacon.cfg` (one line per beacon transmitter),
+in metres in any local Cartesian frame (UTM works too; `-r` / `-b`
+choose other files).  Every line in both files has the same number of
+coordinates: `id: x y` gives 2-D positions and needs at least 3
+receivers; `id: x y z` also solves the tag's height and needs at least
+4; `id: x` gives a 1-D position along the line of the receivers and
+needs at least 2.  `tdoa -s` is the receivers' sample rate; without it
+`tdoa` reads `sample_rate` from `detector.cfg`, then falls back to the
+`device_type` default with a warning.  A receiver pair that never
+heard a beacon together gets no TDOA (it is counted as a failure); the
+other pairs are still estimated.
 
 `detect`, `analyze_detect` and `template_extract` take the sample rate,
 block geometry and bit depth from the card's `#v2` header, so a card
@@ -466,7 +481,7 @@ Other commonly-tuned detector flags (all unchanged from upstream):
 | `--carrier-threshold, -t` | `15*snr` | Carrier detection threshold expression |
 | `--corr-threshold, -u`    | `15*snr` | Correlation threshold expression |
 | `--template, -z`          | `template.npy` | Path to the matched-filter template |
-| `--rxid, -r`              | `-1` | Receiver ID stamped into output files |
+| `--rxid, -r`              | `-1` | Receiver ID stamped into each detection: unique per receiver, the id of its line in `pos-rx.cfg` |
 
 For multi-TX captures (e.g. BatRF's two-collar deployment), use
 `thriftyx identify --map freqmap.cfg` rather than the histogram

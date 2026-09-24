@@ -12,9 +12,12 @@ all: rx.toads_analysis
 
 TOAD_FILES 		:= $(patsubst cards/%.card, toad/%.toad, $(wildcard cards/*.card))
 
+# Every receiver needs its own rxid, the id of its line in pos-rx.cfg.
+# It is taken from the card name: cards/rx<N>.card or cards/rx<N>_*.card
+# (e.g. --rotate output) are detected with --rxid <N>.
 toad/%.toad: cards/%.card detector.cfg
 	@mkdir -p toad
-	thriftyx detect $< -o $@
+	thriftyx detect $< -o $@ --rxid $(firstword $(subst _, ,$(patsubst rx%,%,$*)))
 
 rx.toads: $(TOAD_FILES) detector.cfg
 	thriftyx identify $(TOAD_FILES) -o rx.toads
