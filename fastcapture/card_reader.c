@@ -12,9 +12,14 @@ typedef struct {
     reader_settings_t settings;
     bool header_read;           /* the leading header has been read */
     int header_status;          /* what reading it returned */
-    bool history_known;         /* recorded by the current header, or set */
     bool rate_seen;             /* a #v2 line has been read */
     unsigned long long sample_rate;  /* the first #v2 line's; 0: none */
+    unsigned long long known_rate;   /* the first non-zero one */
+    /* What the current header (from its #v2 line on) records. */
+    unsigned long long header_rate;
+    bool v2_history;            /* block_history, on the #v2 line itself */
+    bool history_known;         /* the history, anywhere -- or it is set */
+    bool size_known;            /* the block size, anywhere */
 } card_reader_t;
 
 /* The number after `key` in `line`.  False when the line has none. */
@@ -54,44 +59,71 @@ static int check_recorded(const char* line, const char* key,
     return -7;
 }
 
-/* The history thriftyx capture used before its cards recorded one
+/* The geometry thriftyx capture used before its cards recorded it
  * (settings._pre_header_block_params, which thriftyx detect assumes for
- * them): 4920, or twice the 1023-chip template when that did not fit. */
-static size_t pre_header_history(unsigned long long sample_rate) {
+ * them): history 4920, or twice the 1023-chip template when that did
+ * not fit; the block the next power of two from 16384 that holds the
+ * template + history and twice the history.  For rates up to
+ * MAX_RULE_RATE (the header's rate is not trusted beyond that). */
+#define MAX_RULE_RATE 100000000ULL
+static void pre_header_geometry(unsigned long long sample_rate,
+                                size_t* block, size_t* history) {
     size_t template_len = (size_t)(sample_rate / 999707.0 * 1023);
-    size_t history = 4920;
-    if (history + 1 < template_len) {
-        history = 2 * template_len;
+    *history = 4920;
+    if (*history + 1 < template_len) {
+        *history = 2 * template_len;
     }
-    return history;
+    size_t min_block = template_len + *history + 1;
+    if (2 * *history > min_block) {
+        min_block = 2 * *history;
+    }
+    *block = 16384;
+    while (*block < min_block) {
+        *block *= 2;
+    }
 }
 
 /* Without the history the SoA of every block is a guess, and a card
  * re-emitted from it (fastcapture -o, fastdet -x) would record the
- * guess as fact.  Returns -8 after saying which -h to rerun with. */
+ * guess as fact.  Returns -8 after saying what to rerun with: -h, and
+ * -b when the header records no block size either (Python cards before
+ * 611e320 recorded only the rate; at 2.5M or 3M their 16384 blocks are
+ * not what -s 6M derives). */
 static int history_unknown(const card_reader_t* state) {
+    unsigned long long rate = state->header_rate;
     if (!state->rate_seen) {
         fprintf(stderr, "card_reader: the card has no #v2 header recording "
                 "its block history; rerun with -h <the history it was "
                 "captured with>\n");
-    } else if (state->sample_rate == 0) {
+    } else if (rate == 0 || rate > MAX_RULE_RATE) {
         fprintf(stderr, "card_reader: the card's header records no block "
-                "history; rerun with -h <the history it was captured "
-                "with>\n");
+                "%s; rerun with the %s it was captured with\n",
+                state->size_known ? "history" : "size or history",
+                state->size_known ? "-h" : "-b/-h");
     } else {
-        size_t history = pre_header_history(state->sample_rate);
-        fprintf(stderr, "card_reader: the card's header records no block "
-                "history; thriftyx capture used %zu at %llu sps before its "
-                "cards recorded it: rerun with -h %zu if the card is one "
-                "of those, or with -h <the history it was captured with>\n",
-                history, state->sample_rate, history);
+        size_t block, history;
+        pre_header_geometry(rate, &block, &history);
+        if (state->size_known) {
+            fprintf(stderr, "card_reader: the card's header records no "
+                    "block history; thriftyx capture used %zu at %llu sps "
+                    "before its cards recorded it: rerun with -h %zu if the "
+                    "card is one of those, or with -h <the history it was "
+                    "captured with>\n", history, rate, history);
+        } else {
+            fprintf(stderr, "card_reader: the card's header records no "
+                    "block size or history; thriftyx capture used -b %zu "
+                    "-h %zu at %llu sps before its cards recorded them: "
+                    "rerun with -b %zu -h %zu if the card is one of those, "
+                    "or with the -b/-h it was captured with\n",
+                    block, history, rate, block, history);
+        }
     }
     return -8;
 }
 
-/* Check one comment line.  A #v2 line starts a header: whether the
- * history is known is decided anew by what it (or an "# arguments"
- * line after it) records. */
+/* Check one comment line.  A #v2 line starts a header: what is known
+ * of the geometry is decided anew by what it (or an "# arguments" line
+ * after it) records. */
 static int check_header_line(card_reader_t* state, const char* line) {
     const reader_settings_t* s = &state->settings;
     if (strncmp(line, "#v2", 3) == 0) {
@@ -100,22 +132,29 @@ static int check_header_line(card_reader_t* state, const char* line) {
         if (!state->rate_seen) {
             state->rate_seen = true;
             state->sample_rate = rate;
-        } else if (rate != state->sample_rate) {
-            /* Joined captures: a re-emitted card has one header. */
+        }
+        if (rate != 0 && state->known_rate == 0) {
+            state->known_rate = rate;
+        } else if (rate != 0 && rate != state->known_rate) {
+            /* Joined captures: a re-emitted card has one header.  A
+             * rate of 0 is unknown, and agrees with any. */
             fprintf(stderr, "card_reader: a header records sample_rate="
                     "%llu, but an earlier one %llu; replay the captures "
-                    "separately\n", rate, state->sample_rate);
+                    "separately\n", rate, state->known_rate);
             return -7;
         }
+        state->header_rate = rate;
         int ret = check_recorded(line, " block_size=", s->block_size, "-b");
         if (ret < 0) {
             return ret;
         }
+        state->size_known = ret == 1;
         ret = check_recorded(line, " block_history=", s->history_size,
                              "-h");
         if (ret < 0) {
             return ret;
         }
+        state->v2_history = ret == 1;
         state->history_known = ret == 1 || s->history_size_set;
         return 0;
     }
@@ -123,6 +162,9 @@ static int check_header_line(card_reader_t* state, const char* line) {
         int ret = check_recorded(line, " block_size: ", s->block_size, "-b");
         if (ret < 0) {
             return ret;
+        }
+        if (ret == 1) {
+            state->size_known = true;
         }
         ret = check_recorded(line, "history_size: ", s->history_size, "-h");
         if (ret < 0) {
@@ -136,9 +178,12 @@ static int check_header_line(card_reader_t* state, const char* line) {
 }
 
 /* Read the comment lines at the file position, checking what the
- * header lines record.  `header` (the leading header): stop once the
- * #v2 line has been read and the history is known, so a card arriving
- * on a pipe is not held up until its first block. */
+ * header lines record.  `header` (the leading header): stop right
+ * after a #v2 line that records the history, so a card arriving on a
+ * pipe is not held up until its first block.  Otherwise the lines up
+ * to the first block are all read here -- a history on an older card's
+ * "# arguments" line must be checked against -h before the caller
+ * writes a header of its own. */
 static int read_comment_lines(card_reader_t* state, bool header) {
     bool v2_seen = false;
     int first;
@@ -160,7 +205,7 @@ static int read_comment_lines(card_reader_t* state, bool header) {
         if (ret != 0) {
             return ret;
         }
-        if (header && v2_seen && state->history_known) {
+        if (header && state->v2_history) {
             return 0;
         }
     }

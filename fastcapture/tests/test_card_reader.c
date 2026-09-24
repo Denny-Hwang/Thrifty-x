@@ -38,12 +38,12 @@ typedef struct {
     int header;         /* card_reader_read_header's return */
     uint32_t rate;      /* the sample rate it gave */
     long header_end;    /* file position after it */
-    int next;           /* the first reader_next's return */
+    int next;           /* the first failing reader_next's; 0: none */
     char err[1024];     /* what the reader printed */
 } result_t;
 
-/* Read the first block (index 3) of a card with header `header` and
- * `trailer` after that block, at BLOCK/HISTORY (-h given when
+/* Read a card with header `header`, one block (index 3, checked) and
+ * `trailer` after it, to the end, at BLOCK/HISTORY (-h given when
  * `history_set`).  `read_header`: call card_reader_read_header first,
  * as fastcard_new does; otherwise reader_next reads the header. */
 static result_t replay(const char* header, const char* trailer,
@@ -79,7 +79,9 @@ static result_t replay(const char* header, const char* trailer,
     if (result.next == 0) {
         CHECK(block->index == 3);
         CHECK(memcmp(block->raw_samples, samples, sizeof(samples)) == 0);
-        int ret = reader->next(reader->context);
+        int ret;
+        while ((ret = reader->next(reader->context)) == 0) {
+        }
         if (ret != 1) {
             result.next = ret;      /* what the trailer gave */
         }
@@ -144,11 +146,25 @@ static void test_history_must_be_recorded_or_given(void) {
     r = replay("#v2 bit_depth=12 sample_rate=10000000 endian=little "
                "block_size=16\n", "", false, true);
     CHECK(r.header == -8 && strstr(r.err, "-h 20464") != NULL);
-    r = replay("#v2 bit_depth=12 sample_rate=3000000\n", "", false, true);
-    CHECK(r.header == -8 && strstr(r.err, "-h 4920") != NULL);
+    CHECK(strstr(r.err, "-b ") == NULL);      /* the size is recorded */
     r = replay("#v2 bit_depth=12 sample_rate=0 endian=little "
                "block_size=16\n", "", false, true);
-    CHECK(r.header == -8 && strstr(r.err, "-h <") != NULL);
+    CHECK(r.header == -8 && strstr(r.err, "the -h it was") != NULL);
+
+    /* Python cards before 611e320: the rate only.  The size is part of
+     * the hint: -s 6M derives 32768, not the 16384 capture used at 3M. */
+    r = replay("#v2 bit_depth=12 sample_rate=3000000\n", "", false, true);
+    CHECK(r.header == -8 && strstr(r.err, "-b 16384 -h 4920") != NULL);
+    r = replay("#v2 bit_depth=12 sample_rate=2500000\n", "", false, true);
+    CHECK(r.header == -8 && strstr(r.err, "-b 16384 -h 4920") != NULL);
+    r = replay("#v2 bit_depth=12 sample_rate=6000000\n", "", false, true);
+    CHECK(r.header == -8 && strstr(r.err, "-b 32768 -h 12278") != NULL);
+    r = replay("#v2 bit_depth=12 sample_rate=0\n", "", false, true);
+    CHECK(r.header == -8 && strstr(r.err, "the -b/-h it was") != NULL);
+    /* A rate no capture used gets no rule. */
+    r = replay("#v2 bit_depth=12 sample_rate=99999999999999999\n", "",
+               false, true);
+    CHECK(r.header == -8 && strstr(r.err, "the -b/-h it was") != NULL);
     CHECK(read_first_block(V2_6M "block_size=16\n") == -8);  /* lazily */
 
     /* No header at all: nothing records the history either. */
@@ -191,23 +207,48 @@ static void test_sample_rate_is_read(void) {
     CHECK(replay("", "", true, true).rate == 0);
 }
 
-/* With the history known from the #v2 line the header read stops
- * there: on a pipe it must not wait for the first block. */
+/* With the history on the #v2 line the header read stops there: on a
+ * pipe it must not wait for the first block.  Otherwise it reads up to
+ * the first block, so an older card's "# arguments" history is checked
+ * against -h before the caller writes its own header. */
 static void test_header_read_stops_at_known_history(void) {
     const char* v2 = V2_6M "block_size=16 block_history=4\n";
     result_t r = replay(v2, "", false, true);
     CHECK(r.header_end == (long)strlen(v2));
+    char with_tool[256];
+    snprintf(with_tool, sizeof(with_tool), "%s# tool: 'x'\n", v2);
+    r = replay(with_tool, "", false, true);
+    CHECK(r.header == 0 && r.header_end == (long)strlen(v2));
     const char* old = "#v2 bit_depth=12 sample_rate=0 endian=little "
                       "block_size=16\n"
-                      "# arguments: { block_size: 16, history_size: 4 }\n";
+                      "# arguments: { block_size: 16, history_size: 4 }\n"
+                      "# tool: 'fastcapture 0.2'\n";
     r = replay(old, "", false, true);
     CHECK(r.header == 0 && r.header_end == (long)strlen(old));
+    r = replay(old, "", true, true);                  /* -h 4 agrees */
+    CHECK(r.header == 0 && r.header_end == (long)strlen(old));
+    r = replay("#v2 bit_depth=12 sample_rate=0 endian=little "
+               "block_size=16\n"
+               "# arguments: { block_size: 16, history_size: 9 }\n",
+               "", true, true);                       /* -h 4 does not */
+    CHECK(r.header == -7 && strstr(r.err, "rerun with -h 9") != NULL);
+}
+
+/* A block line with the samples replay() writes, at `index`. */
+static const char* data_line(int index) {
+    static char line[512];
+    int16_t samples[2 * BLOCK];
+    for (int i = 0; i < 2 * BLOCK; ++i) samples[i] = (int16_t)(i * 7);
+    char encoded[256];
+    Base64encode(encoded, (const char*)samples, sizeof(samples));
+    snprintf(line, sizeof(line), "1000.600000 %d %s\n", index, encoded);
+    return line;
 }
 
 /* Joined cards: each header is checked when its blocks come. */
 static void test_later_headers_are_checked(void) {
     const char* v2 = V2_6M "block_size=16 block_history=4\n";
-    char trailer[256];
+    char trailer[1024];
     snprintf(trailer, sizeof(trailer), "%s", v2);
     CHECK(replay(v2, trailer, false, true).next == 0);    /* EOF after */
     CHECK(replay(v2, V2_6M "block_size=16\n1000.6 4 x\n", false,
@@ -217,6 +258,22 @@ static void test_later_headers_are_checked(void) {
                  true).next == -7);
     CHECK(replay(v2, V2_6M "block_size=16 block_history=5\n1000.6 4 x\n",
                  false, true).next == -7);
+
+    /* sample_rate=0 is unknown: it agrees with any rate. */
+    const char* v2_0 = "#v2 bit_depth=12 sample_rate=0 endian=little "
+                       "block_size=16 block_history=4\n";
+    snprintf(trailer, sizeof(trailer), "%s%s", v2, data_line(4));
+    result_t r = replay(v2_0, trailer, false, true);
+    CHECK(r.header == 0 && r.rate == 0 && r.next == 0);
+    snprintf(trailer, sizeof(trailer), "%s%s", v2_0, data_line(4));
+    r = replay(v2, trailer, false, true);
+    CHECK(r.header == 0 && r.rate == 6000000 && r.next == 0);
+    /* ... but two known rates must agree, however many 0s between. */
+    snprintf(trailer, sizeof(trailer), "%s%s#v2 bit_depth=12 "
+             "sample_rate=3000000 endian=little block_size=16 "
+             "block_history=4\n1000.7 5 x\n", v2_0, data_line(4));
+    r = replay(v2, trailer, false, true);
+    CHECK(r.next == -7 && strstr(r.err, "earlier one 6000000") != NULL);
 }
 
 int main(void) {

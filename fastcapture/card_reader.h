@@ -16,10 +16,10 @@ extern "C"
 reader_t * card_reader_new(reader_settings_t settings,
                            FILE* file);
 
-/// Read the card's leading header (its #v2 line, and the comment lines
-/// after it until the block history is known) and check it against the
-/// settings.  Returns 0, or, after printing why the card cannot be
-/// replayed with them:
+/// Read the card's leading header (its #v2 line and, unless that
+/// records the block history, the comment lines after it up to the
+/// first block) and check it against the settings.  Returns 0, or,
+/// after printing why the card cannot be replayed with them:
 ///   -7  the header records another block size or history;
 ///   -8  nothing records the block history (a card thriftyx capture
 ///       wrote before it recorded one, or no header at all) and the
