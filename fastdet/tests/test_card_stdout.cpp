@@ -92,14 +92,18 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string fastdet = std::string("'") + argv[1] + "'";
-    const std::string geometry = " -b 1024 -h 128 -k 0 -z card_stdout.tpl";
+    const std::string geometry = " -b 1024 -h 128 -z card_stdout.tpl";
     write_inputs();
 
-    // The card goes to stdout, the status lines to stderr.
+    // The card goes to stdout, the status lines to stderr.  -k 0: the
+    // first block counts too.  -s: a file's rate is recorded when given.
     CHECK(run(fastdet + " -i card_stdout.raw" + geometry
-              + " -x - >card_stdout.card 2>card_stdout.log") == 0);
+              + " -k 0 -s 3M -x - >card_stdout.card 2>card_stdout.log")
+          == 0);
     std::vector<std::string> card = read_lines("card_stdout.card");
     CHECK(!card.empty() && card[0].rfind("#v2 ", 0) == 0);
+    CHECK(!card.empty()
+          && card[0].find(" sample_rate=3000000 ") != std::string::npos);
     const std::regex data_line("[0-9]+\\.[0-9]{6} [0-9]+ [A-Za-z0-9+/]+=*");
     const size_t data_len = (4 * BLOCK + 2) / 3 * 4;  // base64 of a block
     int blocks = 0;
@@ -122,10 +126,14 @@ int main(int argc, char** argv) {
     }
     CHECK(status_lines == BLOCKS);
 
-    // Both card readers must take it; fastdet finds the same bursts.
+    // Both card readers must take it; fastdet finds the same bursts --
+    // every one: a card replay skips no block, without -k 0 too.
     CHECK(run(fastdet + " -q --card -i card_stdout.card" + geometry
-              + " -o - >card_stdout.toad") == 0);
+              + " -o - -x card_stdout.recard >card_stdout.toad") == 0);
     CHECK((int)read_lines("card_stdout.toad").size() == BLOCKS);
+    // The card re-emitted from it records the same rate and geometry.
+    std::vector<std::string> recard = read_lines("card_stdout.recard");
+    CHECK(!recard.empty() && recard[0] == card[0]);
 
     // The .toad and the card cannot share stdout, and --help says so.
     CHECK(run(fastdet + " -q -i card_stdout.raw" + geometry
