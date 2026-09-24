@@ -16,6 +16,7 @@ from collections import namedtuple
 
 import numpy as np
 
+from thriftyx import gold
 from thriftyx import settings as settings_module
 from thriftyx.settings import load_args
 from thriftyx import toads_data
@@ -104,13 +105,20 @@ class Detector:
         return self.next()
 
 
-def load_template(path, sample_rate=None, chip_rate=None):
-    """Load a template (``.npy``) and sanity-check it against the rate.
+def load_template(path, sample_rate=None, chip_rate=None, report=None):
+    """Load a template (``.npy``) and check which code it holds.
 
-    A template generated for a different sample rate than the data
-    still "works" -- it just correlates poorly and nothing is detected
-    -- so a length far from ``code_length * sample_rate / chip_rate``
-    is logged as a warning.
+    A template generated for a different sample rate, or for another
+    code or code family than the transmitters send, still "works": it
+    does not match the bursts, so weak ones go undetected and strong
+    ones are "detected" on its cross-correlation sidelobes, with
+    sample-of-arrival values that are off by hundreds of samples.  So
+    when the sample rate is known the template's code is identified
+    (:func:`thriftyx.gold.identify`) and reported -- logged at INFO and
+    passed to *report* (e.g. ``print``), so every run records which code
+    it searches for -- with a warning when no code matches at this rate
+    (code lengths double with the register length, so a template for
+    half or twice the rate can have a valid length).
 
     Raises
     ------
@@ -129,16 +137,33 @@ def load_template(path, sample_rate=None, chip_rate=None):
         chip_def = settings_module.DEFINITIONS['chip_rate']
         chip_rate = chip_def.parser(chip_def.default)
     if sample_rate:
-        expected = (settings_module.DEFAULT_CODE_LENGTH * sample_rate
-                    / chip_rate)
-        if not 0.8 < len(template) / expected < 1.25:
+        results = gold.identify(template, sample_rate, chip_rate)
+        if gold.is_clear_match(results):
+            best = results[0]
+            family = ('Gold' if best['family'] == 'gold'
+                      else 'legacy (not Gold)')
+            message = ("template {} holds the {}-bit {} code {} "
+                       "(correlation {:.2f})".format(
+                           path, best['bits'], family, best['index'],
+                           abs(best['correlation'])))
+            logging.info("%s", message)
+            if report is not None:
+                report(message)
+            chips = 2 ** best['bits'] - 1
+            if min(best['shift'], chips - best['shift']) > 1:
+                logging.warning(
+                    "template %s starts at chip %d of its code, not chip "
+                    "0; a transmission is one code period from chip 0, so "
+                    "the correlation peak splits", path, best['shift'])
+        else:
             logging.warning(
-                "template %s has %d samples; a %d-chip code at %.6g sps "
-                "and %.6g chips/s is %.0f samples. Was the template "
-                "generated for a different sample rate? (thriftyx "
-                "template_generate --sample-rate ...)",
-                path, len(template), settings_module.DEFAULT_CODE_LENGTH,
-                sample_rate, chip_rate, expected)
+                "template %s (%d samples) matches no code at %gM sps and "
+                "%g chips/s. Was it generated for a different sample rate "
+                "(thriftyx template_generate --sample-rate ...), or is it "
+                "not a single transmitter's code? Check it with `thriftyx "
+                "gold --identify %s --sample-rate %gM`.", path,
+                len(template), sample_rate / 1e6, chip_rate, path,
+                sample_rate / 1e6)
     return template
 
 
@@ -300,8 +325,9 @@ def detector_cli(detector_class, parser=None, extra_args=None):
 
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
-    template = load_template(config.template, config.sample_rate,
-                             config.get('chip_rate'))
+    template = load_template(
+        config.template, config.sample_rate, config.get('chip_rate'),
+        report=None if args.quiet else lambda m: print(m, file=info_out))
 
     settings = DetectorSettings(block_len=config.block_size,
                                 history_len=config.block_history,
@@ -317,13 +343,42 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                                          config.block_size,
                                          add_dt=True)
 
+    carriers = correlated = 0
     for detected, result in detections:
+        carriers += result.corr_info is not None
+        correlated += bool(detected)
         if detected and output_file is not None:
             print(result.serialize(), file=output_file)
 
         if not args.quiet:
             # Output summary line
             print(summary_liner(detected, result), file=info_out)
+    _check_yield(carriers, correlated, config.template,
+                 getattr(args.input, 'name', None))
+
+
+# Carrier detections without a single correlation peak, beyond which a
+# run is more likely using the wrong template than seeing only noise.
+_MISMATCH_CARRIERS = 20
+
+
+def _check_yield(carriers, correlated, template_path, input_name):
+    """Warn when carriers were found but nothing correlated.
+
+    The signature of a template for another code, code family or sample
+    rate: the carrier detector does not depend on the code, the
+    correlator does.
+    """
+    if correlated or carriers < _MISMATCH_CARRIERS:
+        return
+    card = input_name if input_name and not str(input_name).startswith(
+        '<') else 'CAPTURE.card'
+    logging.warning(
+        "%d blocks had a carrier but none correlated with template %s. "
+        "Check that it holds the code the transmitters send, at this "
+        "sample rate: `thriftyx gold --identify %s` reports the code in "
+        "a capture (8- and 10-bit codes exist in two families; see "
+        "--family).", carriers, template_path, card)
 
 
 def _main():

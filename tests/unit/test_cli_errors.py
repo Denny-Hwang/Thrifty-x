@@ -28,6 +28,7 @@ from thriftyx.exceptions import (EXIT_CONFIG, ConfigValidationError,
                                  DetectionError, FileFormatError,
                                  TemplateError)
 from thriftyx.soa_estimator import SoaEstimator
+from thriftyx.template_generate import generate
 
 
 def _run_cli(args, cwd):
@@ -157,19 +158,42 @@ def test_template_error_is_still_a_value_error():
                      history_len=500)
 
 
-def test_load_template_warns_on_rate_mismatch(tmp_path, caplog):
+def _template_file(tmp_path, bits, idx, family, rate):
     path = tmp_path / 'template.npy'
-    np.save(path, np.ones(2455))  # a 2.4 MSPS template
+    np.save(path, generate(bits, idx, rate / 0.999707e6, family))
+    return str(path)
+
+
+def test_load_template_names_its_code(tmp_path, caplog):
+    path = _template_file(tmp_path, 10, 3, 'legacy', 6e6)
+    with caplog.at_level(logging.INFO):
+        template = detect.load_template(path, sample_rate=6e6)
+    assert len(template) == 6139
+    assert 'the 10-bit legacy (not Gold) code 3' in caplog.text
+    assert 'WARNING' not in caplog.text
+
+
+@pytest.mark.parametrize('bits, made_at, used_at', [
+    (11, 2.4e6, 6e6),     # the shipped template on an Airspy
+    # Rates 2x apart: an n-bit template at R is as long as an
+    # (n+1)-bit one at R/2, so its length alone looks valid.
+    (10, 6e6, 3e6), (11, 3e6, 6e6), (9, 10e6, 2.5e6), (11, 2.5e6, 10e6),
+    (10, 3e6, 6e6)])
+def test_load_template_warns_on_rate_mismatch(tmp_path, caplog, bits,
+                                              made_at, used_at):
+    path = _template_file(tmp_path, bits, 5, 'gold', made_at)
     with caplog.at_level(logging.WARNING):
-        template = detect.load_template(str(path), sample_rate=6e6)
-    assert len(template) == 2455
+        detect.load_template(path, sample_rate=used_at)
     assert 'different sample rate' in caplog.text
 
-    caplog.clear()
-    np.save(path, np.ones(6139))  # matches 6 MSPS
+
+def test_detect_warns_when_carriers_never_correlate(caplog):
     with caplog.at_level(logging.WARNING):
-        detect.load_template(str(path), sample_rate=6e6)
-    assert caplog.text == ''
+        detect._check_yield(50, 0, 'template.npy', 'rx0.card')
+        detect._check_yield(50, 1, 'template.npy', 'rx0.card')
+        detect._check_yield(5, 0, 'template.npy', 'rx0.card')
+    assert caplog.text.count('none correlated') == 1
+    assert '--identify rx0.card' in caplog.text
 
 
 def test_load_template_rejects_non_npy(tmp_path):

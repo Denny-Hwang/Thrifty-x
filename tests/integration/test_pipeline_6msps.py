@@ -105,10 +105,10 @@ def _run(monkeypatch, module, *argv):
 def test_six_msps_pipeline_recovers_mobile_position(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # every CLI default path lands here
     rng = np.random.default_rng(2026)
-    code = np.array(gold.gold(10, 0), dtype=float)
+    code = np.array(gold.gold(10, 0, 'gold'), dtype=float)
 
     template = tmp_path / 'template.npy'
-    np.save(template, resample(gold.gold(10, 0), FS / CHIP_RATE))
+    np.save(template, resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE))
     bin_hz = FS / 32768
     (tmp_path / 'freqmap.cfg').write_text(
         "".join("{}: {:.0f} - {:.0f}\n".format(

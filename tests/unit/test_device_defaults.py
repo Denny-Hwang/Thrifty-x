@@ -46,7 +46,7 @@ class TestDerivedDefaults:
         values = settings.load({'device_type': 'airspy_r2',
                                 'sample_rate': '10M'})
         assert (values['block_size'], values['block_history']) == \
-            (65536, 20464)
+            (65536, 20539)
 
     def test_unknown_device_type_is_a_config_error(self):
         with pytest.raises(ConfigValidationError, match="hackrf"):

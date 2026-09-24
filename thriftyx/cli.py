@@ -46,7 +46,7 @@ Valid commands are:
     ~ Utilities ~
     template_generate Generate a new (ideal) template
     template_extract  Extract a new template from captured data
-    gold              Print or analyze a Gold code sequence
+    gold              Print a code, or identify the one a capture holds
 
 Use 'thriftyx help <command>' for information about the command's arguments."""
 

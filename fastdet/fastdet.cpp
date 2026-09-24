@@ -2,6 +2,7 @@
 // This is a mess. This should be refactored.
 
 #include <iostream>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -92,6 +93,18 @@ static std::mutex carrier_det_lock;
 static std::unique_ptr<CarrierDetector> carrier_det;
 static bool stop_requested = false;
 
+// Whether a template of `samples` samples is a whole code (2^n - 1
+// chips, n = 5 ... 11, at the Thrifty chip rate) at `sample_rate`.
+static bool template_fits_rate(size_t samples, double sample_rate) {
+    double chips = samples * 999707.0 / sample_rate;
+    for (int bits = 5; bits <= 11; ++bits) {
+        if (fabs(chips / ((1 << bits) - 1) - 1) < 0.01) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Runs on the signal thread (sigthread.h), not in a signal handler.
 static void on_stop_signal(int signo, void* ctx) {
     (void)signo;
@@ -157,6 +170,17 @@ int main(int argc, char **argv) {
         }
 
         vector<float> template_samples = load_template(template_file);
+        bool live = args->input_file
+            && strcmp(args->input_file, "airspy") == 0;
+        if (live && !template_fits_rate(template_samples.size(),
+                                        args->sdr_sample_rate)) {
+            cerr << "warning: template '" << template_file << "' has "
+                 << template_samples.size() << " samples, which is no "
+                 << "2^n-1-chip code at " << args->sdr_sample_rate / 1e6
+                 << " Msps: it was made for another sample rate, so "
+                 << "nothing will correlate (thriftyx template_generate "
+                 << "--sample-rate ...)" << endl;
+        }
         if (template_samples.size() > args->block_len) {
             throw std::runtime_error(
                 "template '" + template_file + "' has "

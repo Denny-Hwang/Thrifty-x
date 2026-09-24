@@ -14,18 +14,20 @@ from thriftyx.carrier_sync import DefaultSynchronizer
 from thriftyx.soa_estimator import SoaEstimator
 from thriftyx.block_data import card_reader
 from thriftyx.setting_parsers import metric_float
-from thriftyx import template_generate
+from thriftyx import gold, template_generate
 
 
-def search(fft, initial_chip_rate, bit_length, code_index, sample_rate):
+def search(fft, initial_chip_rate, bit_length, code_index, sample_rate,
+           family=None):
     """Find chip rate that yields the maximum correlation peak when being
-    correlated with the ideal Gold code template."""
+    correlated with the ideal code template (see thriftyx.gold)."""
 
     def _objective(params):
         chip_rate = params[0]
 
         sps = sample_rate / chip_rate
-        detected, corr_info = _match(fft, sps, bit_length, code_index)
+        detected, corr_info = _match(fft, sps, bit_length, code_index,
+                                     family)
 
         if not detected:
             ampl = 0
@@ -42,9 +44,9 @@ def search(fft, initial_chip_rate, bit_length, code_index, sample_rate):
     return res.x[0]
 
 
-def _match(fft, sps, bit_length, code_index):
+def _match(fft, sps, bit_length, code_index, family=None):
     template = template_generate.generate(
-        bit_length, code_index, sps)
+        bit_length, code_index, sps, family)
 
     block_history = len(template) - 1
     soa_estimate = SoaEstimator(template=template,
@@ -63,12 +65,14 @@ def _find_block(blocks, block_id):
     raise Exception("Could not find block with index {}".format(block_id))
 
 
-def _plot(fft, chip_rate, bit_length, code_index, sample_rate):
+def _plot(fft, chip_rate, bit_length, code_index, sample_rate,
+          family=None):
     import matplotlib.pyplot as plt
 
     sps = sample_rate / chip_rate
-    template = template_generate.generate(bit_length, code_index, sps)
-    detected, corr_info = _match(fft, sps, bit_length, code_index)
+    template = template_generate.generate(bit_length, code_index, sps,
+                                          family)
+    detected, corr_info = _match(fft, sps, bit_length, code_index, family)
     assert detected
 
     signal = np.fft.ifft(fft)
@@ -97,14 +101,21 @@ def _main():
     parser.add_argument('chip_rate', type=metric_float,
                         help="Estimated chip rate.")
     parser.add_argument('bit_length', type=int,
-                        help="Register length of gold code to generate and "
+                        help="Register length of the code to generate and "
                              "match.")
     parser.add_argument('code_index', nargs='?', type=int, default=0,
-                        help="Index of code within the set of Gold codes of "
-                             "equal length.")
+                        help="Index of the code within its family "
+                             "(0 ... 2^n).")
+    parser.add_argument('--family', choices=gold.FAMILIES, default=None,
+                        help="code family; required for 8 and 10 bits "
+                             "(see `thriftyx gold --help`)")
     parser.add_argument('-p', '--plot', action="store_true",
                         help="Plot best fit.")
     args = parser.parse_args()
+    try:
+        gold.taps_for(args.bit_length, args.family)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     blocks = card_reader(args.card_file)
     block = _find_block(blocks, args.block_id)
@@ -123,13 +134,14 @@ def _main():
                   initial_chip_rate=args.chip_rate,
                   bit_length=args.bit_length,
                   code_index=args.code_index,
-                  sample_rate=args.sample_rate)
+                  sample_rate=args.sample_rate,
+                  family=args.family)
 
     print("Best chip rate: {}".format(best))
 
     if args.plot:
         _plot(shifted_fft, best, args.bit_length,
-              args.code_index, args.sample_rate)
+              args.code_index, args.sample_rate, args.family)
 
 
 if __name__ == '__main__':

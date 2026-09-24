@@ -125,10 +125,41 @@ class TestAutoAdjustBlockParams:
         assert values['block_history'] == 4920
 
     def test_default_device_gets_6msps_block_params(self):
-        # The default device (Airspy Mini) defaults to 6 MSPS.
+        # The default device (Airspy Mini) defaults to 6 MSPS; the overlap
+        # holds an 11-bit (2047-chip) template: 12285 samples + 64.
         values = settings.load(None, None)
         assert (values['block_size'], values['block_history']) == \
-            (32768, 12278)
+            (32768, 12349)
+
+    @pytest.mark.parametrize('rate, geometry', [
+        ('2.4M', (16384, 4920)), ('2.5M', (16384, 5182)),
+        ('3M', (16384, 6206)), ('6M', (32768, 12349)),
+        ('10M', (65536, 20539))])
+    def test_defaults_hold_an_eleven_bit_template(self, rate, geometry):
+        """Upstream Thrifty transmitters send an 11-bit code (the captured
+        example/template.npy is gold(11, 0)); the defaults used to fit
+        only 1023-chip templates, so those transmitters could not be
+        correlated at the Airspy rates."""
+        from thriftyx.template_generate import generate
+        values = settings.load({'sample_rate': rate}, None)
+        assert (values['block_size'], values['block_history']) == geometry
+        sps = values['sample_rate'] / values['chip_rate']
+        template = generate(11, 0, sps)
+        assert values['block_history'] >= len(template) - 1
+
+    def test_explicit_ten_bit_history_warns(self, caplog):
+        """A config pinned to the old 10-bit overlap is kept, but its
+        captures can never be correlated with an 11-bit template -- a
+        warning, not an INFO line, even if the fleet sends 10-bit codes
+        today."""
+        import logging as _logging
+        with caplog.at_level(_logging.INFO):
+            values = settings.load({'sample_rate': '6M',
+                                    'block_history': '12278'}, None)
+        assert values['block_history'] == 12278
+        notes = [r for r in caplog.records if 'holds codes up to 10 bits'
+                 in r.message]
+        assert notes and all(r.levelno == _logging.WARNING for r in notes)
 
     def test_defaults_adjusted_at_6msps(self, caplog):
         import logging as _logging

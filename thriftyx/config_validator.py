@@ -13,6 +13,7 @@ Supports RTL-SDR (legacy 8-bit), Airspy Mini, and Airspy R2 devices.
 
 from thriftyx.exceptions import ConfigValidationError
 from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, get_profile
+from thriftyx.settings import compute_block_params, longest_code_bits
 
 
 def validate_config(config: dict) -> list[str]:
@@ -99,21 +100,28 @@ def validate_config(config: dict) -> list[str]:
                 f"history window. Increase block_size or decrease "
                 f"block_history.")
 
-    # 5b. block_history must accommodate the template for the given sample rate
+    # 5b. block_history should hold the template of the longest code
+    # (11 bits): a card captured with less can never be correlated with
+    # it, whatever the detector is configured with later.
     chip_rate = config.get('chip_rate')
     if sample_rate is not None and chip_rate is not None and history is not None:
-        sps = sample_rate / chip_rate
-        est_template_len = int(sps * 1023)  # 10-bit Gold code
-        if history < est_template_len - 1:
+        _, rec_history, _ = compute_block_params(sample_rate, chip_rate)
+        bits = longest_code_bits(history, sample_rate, chip_rate)
+        if bits is None or bits < 11:
+            fits = (f"codes up to {bits} bits" if bits
+                    else "no supported code")
             warnings.append(
-                f"block_history ({history}) is smaller than estimated "
-                f"template length ({est_template_len}) for sample_rate="
-                f"{sample_rate/1e6:.1f}M. Detection will fail. "
-                f"Recommended block_history >= {est_template_len * 2}.")
-        if block_size is not None and block_size <= est_template_len:
+                f"block_history ({history}) at sample_rate="
+                f"{sample_rate/1e6:.1f}M holds {fits}: cards captured with "
+                f"it can never be correlated with a longer code's template "
+                f"(upstream Thrifty transmitters send 11-bit codes). "
+                f"Recommended block_history >= {rec_history}, the default "
+                f"when block_history is not set.")
+        template_10 = int(sample_rate / chip_rate * 1023)
+        if block_size is not None and block_size <= template_10:
             warnings.append(
-                f"block_size ({block_size}) is not larger than estimated "
-                f"template length ({est_template_len}) for sample_rate="
+                f"block_size ({block_size}) is not larger than a 10-bit "
+                f"code's template ({template_10} samples) at sample_rate="
                 f"{sample_rate/1e6:.1f}M. Detection will fail.")
 
     # 6. carrier_window must fit within block_size/2 (Nyquist)

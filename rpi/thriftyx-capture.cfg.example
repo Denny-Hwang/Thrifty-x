@@ -15,9 +15,13 @@ tuner_freq:         433.83M
 sample_rate:        3M           # Mini: 3M or 6M ; R2: 2.5M or 10M
 chip_rate:          0.999707M
 
-# --- Block layout (auto-adjusted from chip/sample rate if omitted) ---
-block_size:         16384
-block_history:      4920
+# --- Block layout ---
+# Leave block_size / block_history unset: the defaults follow the sample
+# rate and hold the template of any supported code (up to 11 bits).  A
+# pinned overlap that is too short makes every card uncorrelatable with
+# longer codes -- capture and the config validator warn about it.
+# block_size:       16384
+# block_history:    6206        # 3M default; 12349 at 6M
 capture_skip:       100
 
 # --- Carrier detection ---

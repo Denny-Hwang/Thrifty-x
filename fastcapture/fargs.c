@@ -6,15 +6,17 @@
 
 /* Block geometry defaults follow thriftyx capture
  * (settings._auto_adjust_block_params): start from 16384 / 4920 and,
- * when the template (a 1023-chip Gold code at the Thrifty chip rate)
- * does not fit that history, use twice the template as history and the
- * next power of two that holds template + history and at least twice
- * the history.  3M and 2.5M keep 16384 / 4920; 6M: 32768 / 12278;
- * 10M: 65536 / 20464. */
+ * when the template of the longest supported code (11 bits, 2047 chips
+ * at the Thrifty chip rate -- what the upstream Thrifty transmitters
+ * send) does not fit that history, use the template + HISTORY_MARGIN as
+ * history and the next power of two that holds template + history and
+ * at least twice the history.  2.4M keeps 16384 / 4920; 2.5M 16384 /
+ * 5182; 3M 16384 / 6206; 6M 32768 / 12349; 10M 65536 / 20539. */
 #define DEFAULT_BLOCK_LEN           16384
 #define DEFAULT_HISTORY_LEN         4920
 #define CHIP_RATE                   999707.0
-#define CODE_LENGTH                 1023
+#define CODE_LENGTH                 2047
+#define HISTORY_MARGIN              64
 #define MAX_BLOCK_LEN               65536
 
 /* Airspy sample rates (Mini 3M/6M, R2 2.5M/10M).  libairspy reads a
@@ -67,8 +69,8 @@ const fargs_option_t fargs_options[] = {
     {"history", 'h', "<length>", 0,
         "The number of samples at the beginning of a block that should be "
         "copied from the end of the previous block "
-        "[default: 4920, or twice the template length when that is "
-        "longer: 12278 at 6M]", 2},
+        "[default: 4920, or the 11-bit template + 64 when that is "
+        "longer: 12349 at 6M]", 2},
     {"skip", 'k', "<num_blocks>", 0,
         "Number of blocks to skip while waiting for the SDR to stabilize "
         "[default: 1]", 2},
@@ -158,7 +160,7 @@ int fargs_finalize(fargs_t *fa) {
     if (!fa->history_len_set) {
         fa->history_len = DEFAULT_HISTORY_LEN;
         if (fa->history_len + 1 < template_len) {
-            fa->history_len = 2 * template_len;
+            fa->history_len = template_len + HISTORY_MARGIN;
         }
     }
     if (!fa->block_len_set) {

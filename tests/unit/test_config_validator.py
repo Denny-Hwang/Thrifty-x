@@ -252,3 +252,27 @@ def test_gain_mode_linearity_warns_when_agc_set():
     config['lna_agc'] = True
     warnings = validate_config(config)
     assert any('ignores' in w for w in warnings)
+
+
+@pytest.mark.parametrize('rate, history, bits', [
+    (3e6, 4920, 10), (6e6, 12278, 10), (10e6, 20464, 10), (6e6, 4920, 9)])
+def test_history_too_short_for_eleven_bits_warns(rate, history, bits):
+    """The Pi capture example used to pin 3M / 4920: its captures could
+    never be correlated with an 11-bit template."""
+    config = {'device_type': 'airspy_mini' if rate in (3e6, 6e6)
+              else 'airspy_r2', 'sample_rate': rate,
+              'block_size': 65536, 'block_history': history,
+              'chip_rate': 0.999707e6}
+    warnings = validate_config(config)
+    assert any(f'holds codes up to {bits} bits' in w for w in warnings)
+
+
+@pytest.mark.parametrize('rate', [2.4e6, 2.5e6, 3e6, 6e6, 10e6])
+def test_default_geometry_raises_no_history_warning(rate):
+    from thriftyx.settings import compute_block_params
+    size, history, _ = compute_block_params(rate, 0.999707e6)
+    config = {'device_type': 'rtlsdr' if rate == 2.4e6 else
+              'airspy_r2' if rate in (2.5e6, 10e6) else 'airspy_mini',
+              'sample_rate': rate, 'block_size': size,
+              'block_history': history, 'chip_rate': 0.999707e6}
+    assert not [w for w in validate_config(config) if 'holds' in w]

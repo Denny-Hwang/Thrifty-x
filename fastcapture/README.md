@@ -19,7 +19,8 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Streaming starts | `reader_start` | `reader_start`, after FFT planning |
 | Block timestamp | Arrival of the block's last sample (stamped in the USB callback) | Same: per-transfer arrival times are recorded in the callback (`stamp_queue.c`), not the time the block leaves the ring |
 | Ctrl-C / SIGTERM | Clean stop | Clean stop: exit status 0 and capture statistics printed. Signals are taken by a dedicated thread (`sigthread.c`), not a signal handler; a second Ctrl-C exits at once |
-| Block geometry default | 16384 / 4920 | Enlarged for `-s` exactly as `thriftyx capture` does: 16384 / 4920 at 2.5M and 3M, 32768 / 12278 at 6M, 65536 / 20464 at 10M (`-b`/`-h` override) |
+| Block geometry default | 16384 / 4920 | Enlarged for `-s` exactly as `thriftyx capture` does, to hold an 11-bit (2047-chip) template + 64 samples: 16384 / 5182 at 2.5M, 16384 / 6206 at 3M, 32768 / 12349 at 6M, 65536 / 20539 at 10M (`-b`/`-h` override) |
+| Replaying a `.card` (`fastdet --card`) | Block geometry from the arguments | Refused, with the `-b`/`-h` to rerun with, when the card's `#v2` header (or the `# arguments` line of older cards) records a different geometry: it decides every SoA |
 | Device unplugged | Hangs | The reader notices within 1 s (`airspy_is_streaming`), or after 10 s without samples, and exits non-zero so a supervisor restarts it |
 | Output write fails | — | Full disk or a closed pipe ends the run with an error (SIGPIPE is ignored) |
 | Argument checks | — | `-s` must be a rate (1M-10M: libairspy reads values below 100 as a rate *index*), `-f` 24M-1.8G, `-g` 0-14, `-M`/`-V` 0-15 |
@@ -59,7 +60,7 @@ pkg-config.
 
 fastcapture writes v2 .card format with metadata header:
 ```
-#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12278
+#v2 bit_depth=12 sample_rate=6000000 endian=little block_size=32768 block_history=12349
 <timestamp> <block_idx> <base64-encoded int16 I/Q data>
 ```
 

@@ -12,14 +12,18 @@ Extract a template from captured data.
 Usage example:
 
     Capture data:
-    $ thrifty capture rx1.card
+    $ thriftyx capture rx1.card
 
-    Generate a "base template" to be able to extract the code signal:
-    $ thrifty template_generate 10 0 -o theoretical-template.npy
+    Find which code the transmitter sends (no template needed):
+    $ thriftyx gold --identify rx1.card
 
-    Extract the new tamplte:
-    $ thrifty template_extract rx1.card --template=theoretical-template.npy \\
-                                        -o captured-template.npy
+    Generate a "base template" for that code to be able to extract the
+    code signal, e.g. for the 11-bit code 0:
+    $ thriftyx template_generate 11 0 -o theoretical-template.npy
+
+    Extract the new template:
+    $ thriftyx template_extract rx1.card --template=theoretical-template.npy \\
+                                         -o captured-template.npy
 
 """
 
@@ -52,8 +56,11 @@ def best_detection(detections, max_offset):
     if best_result is None:
         raise DetectionError(
             "no block had a correlation detection with |offset| <= {}; "
-            "check the carrier window/thresholds and that the template "
-            "matches the data's sample rate".format(max_offset))
+            "check the carrier window/thresholds and that the base "
+            "template holds the transmitter's code (register length, "
+            "index and, for 8 and 10 bits, --family) at the data's sample "
+            "rate: `thriftyx gold --identify CAPTURE.card` reports the "
+            "code".format(max_offset))
     best_signal = np.fft.ifft(best_fft)
     return best_signal, best_result
 

@@ -28,7 +28,7 @@ PNG_MAGIC = b'\x89PNG\r\n\x1a\n'
 
 def _card_with_one_burst():
     rng = np.random.default_rng(7)
-    code = np.array(gold.gold(10, 0), dtype=float)
+    code = np.array(gold.gold(10, 0, 'gold'), dtype=float)
     sps = FS / CHIP_RATE
     keyed = code[(np.arange(int(len(code) * sps)) / sps).astype(int)]
     block = (rng.normal(0, 0.01, BLOCK)
@@ -48,7 +48,7 @@ def test_export_writes_one_png_per_plot_family(tmp_path, monkeypatch):
     card = tmp_path / 'rx0.card'
     card.write_text(_card_with_one_burst())
     template = tmp_path / 'template.npy'
-    np.save(template, resample(gold.gold(10, 0), FS / CHIP_RATE))
+    np.save(template, resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE))
     monkeypatch.chdir(tmp_path)  # no detector.cfg; header supplies geometry
     monkeypatch.setattr(sys, 'argv', [
         'analyze_detect', str(card), '-z', str(template),
