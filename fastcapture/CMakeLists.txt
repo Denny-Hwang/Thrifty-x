@@ -96,12 +96,25 @@ if(BUILD_TESTING)
     add_test(NAME stamp_queue COMMAND test_stamp_queue)
     add_executable(test_fargs tests/test_fargs.c fargs.c parse.c)
     add_test(NAME fargs COMMAND test_fargs)
+    # A block-size search that never ends fails instead of stalling.
+    set_tests_properties(fargs PROPERTIES TIMEOUT 30)
     add_executable(test_card_reader tests/test_card_reader.c card_reader.c
                    reader.c lib/base64.c)
     add_test(NAME card_reader COMMAND test_card_reader)
     add_executable(test_cardet tests/test_cardet.c cardet.c)
     target_link_libraries(test_cardet ${VOLK_LIBRARIES})
     add_test(NAME cardet COMMAND test_cardet)
+
+    # Installs into a scratch prefix under the build tree (no root) and
+    # builds a program on the installed headers with fastcapture.pc.
+    add_test(NAME install
+             COMMAND ${CMAKE_COMMAND}
+                     -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                     -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-install
+                     -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
+                     -DCC=${CMAKE_C_COMPILER}
+                     "-DC_FLAGS=${CMAKE_C_FLAGS}"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 endif()
 
 # Installation
@@ -120,7 +133,8 @@ install(FILES
     lib/base64.h
     DESTINATION include)
 
-# pkg-config file
+# pkg-config file.  Threads::Threads' flag (none where libc has them).
+set(FASTCAPTURE_PC_THREAD_LIBS "${CMAKE_THREAD_LIBS_INIT}")
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/fastcard.pc.in
     ${CMAKE_CURRENT_BINARY_DIR}/fastcapture.pc

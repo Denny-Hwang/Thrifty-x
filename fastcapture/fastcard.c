@@ -9,6 +9,29 @@
 #include "card_reader.h"
 #include "airspy_reader.h"
 
+/* Check a card input's header against the arguments and adopt the
+ * sample rate it records, so a card re-emitted from it records that
+ * rate too (instead of 0, which leaves thriftyx to assume its default).
+ * Returns 0, or non-zero after printing why the card cannot be read. */
+static int adopt_card_header(reader_t* reader, fargs_t* args) {
+    uint32_t rate;
+    if (card_reader_read_header(reader, &rate) != 0) {
+        return -1;
+    }
+    if (rate == 0) {
+        return 0;
+    }
+    if (args->sdr_sample_rate_set && rate != args->sdr_sample_rate) {
+        fprintf(stderr, "the card was captured at sample_rate=%u, but this "
+                "run uses %u; rerun with -s %u\n",
+                rate, args->sdr_sample_rate, rate);
+        return -1;
+    }
+    args->sdr_sample_rate = rate;
+    args->sdr_sample_rate_set = true;
+    return 0;
+}
+
 
 fastcard_t* fastcard_new(fargs_t* args) {
     /* '>=': history == block_len means zero new samples per block —
@@ -69,6 +92,7 @@ fastcard_t* fastcard_new(fargs_t* args) {
     reader_settings.output = fc->data.block;
     reader_settings.block_size = args->block_len;
     reader_settings.history_size = args->history_len;
+    reader_settings.history_size_set = args->history_len_set;
 
     if (in == NULL) {
         airspy_reader_config_t sdr_config;
@@ -108,6 +132,14 @@ fastcard_t* fastcard_new(fargs_t* args) {
             fc->reader = card_reader_new(reader_settings, in);
             // don't skip blocks when reading from .card file
             args->skip = 0;
+            // Read the card's header now, before the caller writes its
+            // own (fastcapture -o, fastdet -x): a geometry the card does
+            // not record must not be passed on as recorded, and the
+            // rate it records is passed on.
+            if (fc->reader != NULL
+                    && adopt_card_header(fc->reader, args) != 0) {
+                goto fail;
+            }
         } else {
             fc->reader = raw_reader_new(reader_settings, in);
         }

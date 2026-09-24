@@ -15,6 +15,7 @@ extern "C"
 {
 #endif
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/time.h>
@@ -37,6 +38,10 @@ typedef struct {
     block_t* output;
     size_t block_size;
     size_t history_size;
+    /* history_size was given (-h), not derived from the sample rate:
+     * the card reader replays a card that records no history only
+     * with a history given. */
+    bool history_size_set;
 } reader_settings_t;
 
 typedef struct reader_t reader_t;

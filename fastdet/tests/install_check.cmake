@@ -3,10 +3,12 @@
 #  - the binary starts without LD_LIBRARY_PATH or an ldconfig run, and
 #    loads the libfastdet.so installed next to it;
 #  - `pkg-config --cflags --libs fastdet` resolves, points at STAGE_DIR,
-#    and is enough to build a program on the installed headers.
+#    and is enough to build and run a program on the installed headers
+#    (CorrDetector, and CarrierDetector on a fargs_new'd fargs_t).
 #
 # Run by ctest: cmake -DBUILD_DIR=... -DSTAGE_DIR=... [-DPKG_CONFIG=...
-#   -DFASTCAPTURE_PC_DIR=... -DCXX=...] -P install_check.cmake
+#   -DFASTCAPTURE_PC_DIR=... -DCXX=... -DCXX_FLAGS=...]
+#   -P install_check.cmake
 
 file(REMOVE_RECURSE "${STAGE_DIR}")
 # Every install rule is in the default "Unspecified" component, so this
@@ -68,24 +70,58 @@ if(PKG_CONFIG AND FASTCAPTURE_PC_DIR)
 
     # A program on the installed headers links with those flags alone:
     # AlignedArray calls volk inline, and a dynamic link does not pull
-    # in the Requires.private libraries.
+    # in the Requires.private libraries.  CarrierDetector takes a
+    # fargs_t, so fargs_new/fargs_finalize (fargs.h, which
+    # fastcard_wrappers.h includes) must come from libfastdet.so too.
+    # Built with the project's CXX_FLAGS: under the sanitizers the
+    # program must load their runtime first.
     if(CXX)
-        file(WRITE "${STAGE_DIR}/consumer.cpp"
-             "#include <fastdet/corr_detector.h>\n"
-             "int main() {\n"
-             "    CorrDetector det(std::vector<float>(31, 1.0f),"
-             " 256, 31, 0, 15);\n"
-             "    return 0;\n"
-             "}\n")
+        file(WRITE "${STAGE_DIR}/consumer.cpp" [=[
+#include <cstdlib>
+#include <fastdet/corr_detector.h>
+
+int main() {
+    CorrDetector det(std::vector<float>(31, 1.0f), 256, 31, 0, 15);
+    char block[] = "1024", history[] = "128";
+    fargs_t* args = fargs_new();
+    if (args == NULL
+            || fargs_parse_opt(args, 'b', block) != 0
+            || fargs_parse_opt(args, 'h', history) != 0
+            || fargs_finalize(args) != 0) {
+        return 1;
+    }
+    args->input_file = "/dev/null";
+    {
+        CarrierDetector carrier(args);
+        carrier.start();
+        if (carrier.process_next()) {
+            return 2;               // /dev/null holds no block
+        }
+    }
+    free(args);
+    return 0;
+}
+]=])
         separate_arguments(flags UNIX_COMMAND "${flags}")
+        separate_arguments(cxx_flags UNIX_COMMAND "${CXX_FLAGS}")
         execute_process(
-            COMMAND "${CXX}" -std=gnu++17 -o "${STAGE_DIR}/consumer"
+            COMMAND "${CXX}" ${cxx_flags} -std=gnu++17
+                    -o "${STAGE_DIR}/consumer"
                     "${STAGE_DIR}/consumer.cpp" ${flags}
             RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
         if(NOT rc EQUAL 0)
             message(FATAL_ERROR "a program on the fastdet headers does "
                                 "not build with `pkg-config --cflags "
                                 "--libs fastdet`:\n${out}")
+        endif()
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env
+                    "LD_LIBRARY_PATH=${STAGE_DIR}/lib"
+                    "${STAGE_DIR}/consumer"
+            RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "the program built on fastdet.pc failed "
+                                "(${rc}):\n${out}")
         endif()
     endif()
 else()

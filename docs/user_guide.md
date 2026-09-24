@@ -925,6 +925,13 @@ capture derived it.  Headerless v1 cards from the original Thrifty are
 decoded as 8-bit with the configured block geometry, so they are
 usable without conversion.
 
+The C tools do not guess: `fastcapture --card` and `fastdet --card`
+refuse a card whose recorded geometry differs from their `-b`/`-h`, or
+that records no history unless `-h` is given (the message names the
+history capture used then for the recorded rate).  A card they
+re-emit records the replayed card's `sample_rate` (or `-s`, for a raw
+file); `sample_rate=0` means unknown.
+
 ### 9.2 `.toad` File Format
 
 One detection per line, 12 whitespace-separated columns in this order

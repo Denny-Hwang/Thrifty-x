@@ -334,7 +334,7 @@ sidelobe −20.2 vs −19.5 dB); 11-bit codes gain about 2.5 dB more.
   `detect` reads it from the `#v2` header (or, for older cards, the
   `# arguments` line or the rule used when they were captured), and
   `fastdet --card` refuses a card whose recorded geometry differs from
-  its arguments.
+  its arguments, or that records no history unless `-h` is given.
 
 ## Capture Reference
 

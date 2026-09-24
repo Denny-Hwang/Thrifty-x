@@ -29,13 +29,18 @@ typedef struct {
 
     uint32_t sdr_freq;
     uint32_t sdr_sample_rate;
-    int sdr_gain;           /* LNA gain index (0-14; R820T2 on both models) */
+    int sdr_gain;         /* LNA gain index (0-14; R820T2 on both models) */
     uint8_t sdr_mixer_gain; /* Mixer gain index (0-15) */
     uint8_t sdr_vga_gain;   /* VGA/IF gain index (0-15) */
     uint8_t sdr_bias_tee;   /* Bias tee enable (0/1) */
     uint32_t sdr_dev_index;
 
     bool silent;
+
+    /* sdr_sample_rate is known, not the default: given with -s, or
+     * recorded by the input card (fastcard_new).  Card headers record
+     * it.  Last, so the fields before it keep their offsets. */
+    bool sdr_sample_rate_set;
 } fargs_t;
 
 #ifdef __cplusplus

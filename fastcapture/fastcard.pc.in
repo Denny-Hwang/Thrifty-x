@@ -8,7 +8,9 @@ includedir=${prefix}/include
 Name: fastcapture
 Description: Fast carrier detection for Airspy SDR (Thrifty-X)
 Version: @VERSION_INFO_MAJOR_VERSION@.@VERSION_INFO_MINOR_VERSION@
-Cflags: -I${includedir}/ @FASTCARD_PC_CFLAGS@
-Requires.private: libairspy volk fftw3f
-Libs: -L${libdir} -lfastcapture
-Libs.private: @FASTCARD_PC_LIBS@
+Cflags: -I${includedir}/
+# libfastcapture is a static archive only, so whoever links it links
+# what it uses too: its dependencies are public (Requires, Libs), and
+# `pkg-config --libs fastcapture` is a complete link line.
+Requires: libairspy volk fftw3f
+Libs: -L${libdir} -lfastcapture -lm @FASTCAPTURE_PC_THREAD_LIBS@
