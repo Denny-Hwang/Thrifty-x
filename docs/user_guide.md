@@ -947,7 +947,10 @@ One detection per line, 12 whitespace-separated columns in this order
 
 The `.toads` file produced by `identify` inserts a `txid` column after
 `rxid` and drops per-receiver duplicates (a burst detected in two
-overlapping blocks).
+overlapping blocks): of two detections with the same `rxid` and `txid`,
+adjacent `block` indices and timestamps at most 1 s apart, the one with
+the lower `corr_energy`.  The timestamp check keeps the detections of
+another capture session, whose block index restarts at 0.
 
 **Magnitude note for `carrier_energy` / `corr_energy`.** Samples are
 normalised so that ADC full scale is `|z| = 1` on every device. RTL-SDR
@@ -1001,12 +1004,16 @@ The map is parsed by `thriftyx.identify.load_freqmap`.  Ranges are in
 FFT bins only: identify does not know the sample rate and block size
 that convert Hz (`bin = Hz * block_size / sample_rate`), so a range with
 a `Hz` unit or a `k`/`M` prefix, or a line that does not parse, stops
-identify with an error naming the line.  Each TX range is shifted by
-the receiver's `@rxid` offset (0 without one) before being checked.  A
-detection whose `carrier_bin + carrier_offset` falls outside every TX
-range gets `txid = -1` (sentinel for "unidentified") and is dropped
-from the `.toads` output by `filter_duplicates`. A warning is logged
-for each unidentified detection.
+identify with an error naming the line.  A range `start - stop` holds
+the whole bins `start` to `stop`: a detection belongs to it when its
+`carrier_bin + carrier_offset` is at least `start - 0.5` and below
+`stop + 0.5`, after the range is shifted by the receiver's `@rxid`
+offset (0 without one).  So `100 - 105` takes a carrier at bin 105 with
+offset +0.3, and ranges of adjacent bins (`100 - 105`, `106 - 110`) do
+not overlap.  A detection outside every TX range gets `txid = -1`
+(sentinel for "unidentified") and is dropped from the `.toads` output
+by `filter_duplicates`. A warning is logged for each unidentified
+detection.
 
 The auto-classifier is fine for ad-hoc inspection runs but the
 explicit map is the recommended production workflow.

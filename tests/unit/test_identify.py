@@ -224,3 +224,104 @@ def test_no_warning_for_consecutive_files_of_one_receiver(tmp_path, caplog):
         detections, _ = identify.load_toad_files([str(tmp_path / '*.toad')])
     assert len(detections) == 6
     assert caplog.text == ''
+
+
+def _detection(rxid, block, timestamp, energy=50.0, carrier_bin=102,
+               carrier_offset=0.1):
+    return toads_data.DetectionResult(
+        timestamp, block, block * 11464.0 + 100.5,
+        toads_data.CarrierSyncInfo(carrier_bin, carrier_offset, 40.0, 1.0),
+        toads_data.CorrDetectionInfo(100, 0.1, energy, 1.0), rxid=rxid)
+
+
+def test_map_ranges_hold_whole_bins():
+    """Regression: a range was tested against carrier_bin +
+    carrier_offset inclusively, so '100 - 105' dropped a carrier at bin
+    105 with offset +0.3 (and one at bin 100 with offset -0.3), although
+    both are in the bins the range names."""
+    freqmap = identify.load_freqmap(io.StringIO(
+        '1: 100 - 105\n2: 106 - 110\n@1: 2\n'))
+    bins = [(105, 0.3), (100, -0.3), (100, -0.5), (99, 0.49),
+            (106, -0.5), (110, 0.49), (110, 0.5)]
+    detections = [_detection(0, 10 * i, 0.1 * i, carrier_bin=b,
+                             carrier_offset=o)
+                  for i, (b, o) in enumerate(bins)]
+    assert identify.classify_transmitters(detections, freqmap) == [
+        1, 1, 1, identify.UNIDENTIFIED_TX, 2, 2, identify.UNIDENTIFIED_TX]
+    # '@1: 2' shifts receiver 1's ranges to 102-107 and 108-112.
+    detections = [_detection(1, 0, 0.0, carrier_bin=107, carrier_offset=0.3),
+                  _detection(1, 10, 0.1, carrier_bin=101,
+                             carrier_offset=0.3)]
+    assert identify.classify_transmitters(detections, freqmap) == [
+        1, identify.UNIDENTIFIED_TX]
+
+
+# --- duplicates --------------------------------------------------------------
+
+def _integrate(detections):
+    freqmap = identify.load_freqmap(io.StringIO('0: 90 - 110\n1: 120 - 130\n'))
+    return identify.integrate(detections, freqmap)
+
+
+def test_drops_the_weaker_detection_of_adjacent_blocks():
+    """A burst detected in two adjacent blocks of one capture."""
+    kept = _integrate([_detection(0, 99, 10.000, energy=80.0),
+                       _detection(0, 100, 10.005, energy=200.0),
+                       _detection(0, 101, 10.010, energy=60.0),
+                       _detection(0, 300, 11.000, energy=70.0)])
+    assert [d.block for d in kept] == [100, 300]
+
+
+def test_keeps_detections_of_other_capture_sessions():
+    """Regression: the block index restarts at 0 with every capture, and
+    adjacent block indices of two sessions of one receiver counted as a
+    duplicate: 30 one-hour sessions lost 11.5 % of their detections."""
+    day = 86400.0
+    detections = [
+        # session 1: block 99; a real duplicate pair at blocks 500-501
+        _detection(0, 99, 1e9 + 0.48, energy=100.0),
+        _detection(0, 500, 1e9 + 2.40, energy=100.0),
+        _detection(0, 501, 1e9 + 2.405, energy=90.0),
+        # session 2: blocks 100 and 501, next to session 1's 99 and 500
+        _detection(0, 100, 1e9 + day + 0.48, energy=200.0),
+        _detection(0, 501, 1e9 + day + 2.40, energy=300.0),
+    ]
+    kept = _integrate(detections)
+    assert [(d.block, d.corr_info.energy) for d in kept] == [
+        (99, 100.0), (500, 100.0), (100, 200.0), (501, 300.0)]
+
+    # Sessions whose block indices interleave: session 2's block 500 sorts
+    # between session 1's duplicate pair 500-501 by block index.
+    detections.append(_detection(0, 500, 1e9 + day + 60.0, energy=50.0))
+    kept = _integrate(detections)
+    assert len(kept) == 5
+    assert (501, 90.0) not in [(d.block, d.corr_info.energy) for d in kept]
+
+
+def test_duplicates_are_per_receiver_and_transmitter():
+    """Regression: neighbours after sorting by (rxid, txid, block) were
+    compared without checking rxid and txid, so the last detection of one
+    group and the first of the next could remove each other."""
+    tx0 = _detection(0, 99, 10.0, energy=200.0, carrier_bin=100)
+    tx1 = _detection(0, 100, 10.005, energy=100.0, carrier_bin=125)
+    assert [d.txid for d in _integrate([tx0, tx1])] == [0, 1]
+
+    rx0 = _detection(0, 99, 10.0, energy=200.0)
+    rx1 = _detection(1, 100, 10.005, energy=100.0)
+    assert [d.rxid for d in _integrate([rx0, rx1])] == [0, 1]
+
+
+def test_block_index_beyond_int32(tmp_path):
+    """Regression: identify stored the block index as int32 and crashed
+    with OverflowError once a capture passed 2**31 blocks (85 days at
+    6 Msps)."""
+    block = 2**31 + 5
+    path = tmp_path / 'rx0.toad'
+    path.write_text(''.join(
+        _detection(0, block + b, 1e9 + t, energy=e).serialize() + '\n'
+        for b, t, e in ((0, 0.0, 50.0), (209, 1.0, 50.0), (210, 1.005, 40.0))))
+    detections, _ = identify.load_toad_files([str(path)])
+    kept = _integrate(detections)
+    assert [d.block for d in kept] == [block, block + 209]
+    assert toads_data.toads_array(kept)['block'].tolist() == [
+        block, block + 209]
