@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -7,6 +8,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+# The same for child processes (``python -m thriftyx.cli ...``): without
+# it they import whatever thriftyx is installed -- e.g. the editable
+# install of another checkout or worktree -- and test that code instead.
+os.environ['PYTHONPATH'] = os.pathsep.join(
+    [str(PROJECT_ROOT)] + ([os.environ['PYTHONPATH']]
+                           if os.environ.get('PYTHONPATH') else []))
 
 # Ensure the tests/ directory is on the import path so that ``tests.mocks``
 # is importable as a package (e.g. from integration tests).
