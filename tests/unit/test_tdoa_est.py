@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Unit tests for thriftyx.tdoa_est — physical-constant + dtype contracts,
-.tdoa file loading and the command line.
+the nearest-beacon model, .tdoa file loading and the command line.
 
 These tests pin the small but high-blast-radius contracts: the
 speed-of-light constant, the saturating MAX_TDOA cap, and the named
@@ -22,7 +22,7 @@ import sys
 import numpy as np
 import pytest
 
-from thriftyx import cli, tdoa_est
+from thriftyx import cli, tdoa_est, toads_data
 from thriftyx.exceptions import EXIT_CONFIG
 
 
@@ -70,6 +70,46 @@ def test_matrix_dtype_extends_tdoa_dtype_with_group_keys():
     """MATRIX_DTYPE prepends (group_id, timestamp, tx) to TDOA_DTYPE."""
     assert tdoa_est.MATRIX_DTYPE['names'][:3] == ('group_id', 'timestamp', 'tx')
     assert tdoa_est.MATRIX_DTYPE['names'][3:] == tdoa_est.TDOA_DTYPE['names']
+
+
+# --- the nearest-beacon model -----------------------------------------------
+
+def test_find_nearest_value():
+    """(Was defined in tdoa_est.py itself, where pytest never collected
+    it.)"""
+    list_ = [5, 10, 15]
+    values = [4, 5, 6, 9, 10, 11, 14, 16]
+    expected_output = [0, 0, 0, 1, 1, 1, 2, 2]
+    nearest = [tdoa_est.find_nearest_value(list_, v) for v in values]
+    np.testing.assert_equal(nearest, expected_output)
+
+
+def _pair(timestamp, soa0, soa1):
+    info = toads_data.CorrDetectionInfo(0, 0.0, 100.0, 1.0)
+    return (toads_data.DetectionResult(timestamp, 0, soa0, None, info,
+                                       rxid=0, txid=0),
+            toads_data.DetectionResult(timestamp, 0, soa1, None, info,
+                                       rxid=1, txid=0))
+
+
+def test_nearest_model_uses_the_closest_beacon():
+    """build_model_nearest takes the clock offset of the beacon nearest
+    in time.  rx1's clock steps by 10 samples per beacon, so another
+    beacon would put the TDOA 10 samples off."""
+    fs = 1e6
+    beacon_sdoa = np.full(3, 50.0)   # the beacon is 50 samples nearer rx1
+
+    def rx1_soa(t, sdoa, clock_offset):
+        # arrival at rx1, in rx1's clock, of what reaches rx0 at t
+        return fs * t - sdoa + clock_offset
+
+    beacons = [_pair(float(i), fs * i, rx1_soa(i, 50.0, 1000.0 + 10 * i))
+               for i in range(3)]
+    model = tdoa_est.build_model_nearest(beacons, beacon_sdoa, fs)
+    for t, nearest in ((0.2, 0), (1.2, 1), (1.7, 2), (5.0, 2)):
+        mobile = _pair(t, fs * t, rx1_soa(t, 20.0, 1000.0 + 10 * nearest))
+        assert model(*mobile) == pytest.approx(20.0 / fs, abs=1e-12)
+    assert tdoa_est.build_model_nearest([], [], fs) is None
 
 
 # --- .tdoa files ------------------------------------------------------------

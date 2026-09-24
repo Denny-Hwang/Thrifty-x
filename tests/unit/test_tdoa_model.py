@@ -11,6 +11,7 @@ of arrival of the mobile transmitter.
 """
 
 import numpy as np
+import pytest
 
 from thriftyx import tdoa_est
 from thriftyx.toads_data import CorrDetectionInfo, DetectionResult
@@ -129,3 +130,42 @@ def test_receiver_that_never_hears_the_beacon():
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
     # (0, 2) and (1, 2) of every mobile group
     assert len(failures) == 2 * 19
+
+
+def _shift_soa(detections, matches, txid, nth, samples):
+    """Shift rx1's SoA in the *nth* group of *txid* by *samples*."""
+    group = [m for m in matches if detections[m[0]].txid == txid][nth]
+    det = detections[group[1]]
+    detections[group[1]] = DetectionResult(
+        det.timestamp, det.block, det.soa + samples, None, det.corr_info,
+        rxid=det.rxid, txid=det.txid)
+    return group
+
+
+def test_beacon_outlier_is_left_out_of_the_model():
+    """A beacon detection with a bad SoA (a burst paired with the wrong
+    one) must not bend the clock model: without the outlier rejection,
+    +300 samples at one receiver moved mobile TDOAs by up to 2.8 km."""
+    detections, matches = _detections()
+    _shift_soa(detections, matches, BEACON, 10, 300)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+@pytest.mark.parametrize('samples', [2000, -2000])
+def test_tdoa_beyond_max_tdoa_is_a_failure(samples):
+    """A mobile SoA off by 2000 samples (333 us, 100 km) gives a TDOA no
+    receiver pair within MAX_TDOA (30 km) can have: a failure, not a
+    group for pos."""
+    detections, matches = _detections()
+    group = _shift_soa(detections, matches, MOBILE, 5, samples)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    assert failures == [tuple(group)]
+    assert len(groups) == 18
+    assert all(abs(g.tdoas['tdoa'][0]) < tdoa_est.MAX_TDOA for g in groups)
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)

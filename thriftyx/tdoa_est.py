@@ -179,14 +179,6 @@ def find_nearest_value(list_, value):
         return idx
 
 
-def test_find_nearest_value():
-    list_ = [5, 10, 15]
-    values = [4, 5, 6, 9, 10, 11, 14, 16]
-    expected_output = [0, 0, 0, 1, 1, 1, 2, 2]
-    nearest = [find_nearest_value(list_, v) for v in values]
-    np.testing.assert_equal(nearest, expected_output)
-
-
 def build_model_nearest(detection_pairs, beacon_sdoa, nominal_sample_rate):
     if len(detection_pairs) < 1:
         # not enough beacon transmissions
