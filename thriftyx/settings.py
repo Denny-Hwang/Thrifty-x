@@ -143,7 +143,7 @@ DEFINITIONS = {
 
     'airspy_serial': Definition(
         ['--airspy-serial'],
-        str,
+        setting_parsers.airspy_serial,
         None,
         "Airspy device serial (hex or decimal). Selects a specific Airspy "
         "when multiple devices are connected. Takes precedence over "
@@ -286,6 +286,42 @@ HISTORY_MARGIN = 64
 STOCK_BLOCK_HISTORY = 4920
 # Register lengths gold.py generates codes for.
 CODE_BITS = range(5, 12)
+
+
+# Samples per chip (sample_rate / chip_rate) a template can be built
+# with.  Below one the code does not fit; far above, chip_rate is a typo
+# (a lowercase 'm' means milli) whose template would size blocks in
+# terabytes.  At 2.4-10 Msps and the transmitters' ~1 Mchip/s it is 2-10.
+SAMPLES_PER_CHIP = (1, 100)
+
+
+def _check_chip_rate(values):
+    """Reject a chip_rate that gives no usable block geometry.
+
+    Every command sizes its blocks by the template chip_rate implies
+    (:func:`compute_block_params`), so a zero would crash each of them
+    and ``0.999707m`` would ask for a 2**45-sample block.  Raises
+    ConfigValidationError, which exits with status 78 like any other
+    bad setting.
+    """
+    sample_rate = values.get('sample_rate')
+    chip_rate = values.get('chip_rate')
+    if chip_rate is None:
+        return
+    if not chip_rate > 0:
+        raise ConfigValidationError(
+            "chip_rate must be positive, got {}".format(_fmt(chip_rate)))
+    if sample_rate is None:
+        return
+    low, high = SAMPLES_PER_CHIP
+    sps = sample_rate / chip_rate
+    if not low <= sps <= high:
+        raise ConfigValidationError(
+            "sample_rate {} / chip_rate {} is {:.3g} samples per chip; "
+            "expected {}-{}.  chip_rate is in chips/s (the transmitters "
+            "send 0.999707M), and a lowercase 'm' suffix means milli, "
+            "not mega.".format(_fmt(sample_rate), _fmt(chip_rate), sps,
+                               low, high))
 
 
 def compute_block_params(sample_rate, chip_rate,
@@ -741,8 +777,9 @@ def load(args=None, config_file=None, definitions=None,
         If the syntax of the config file is incorrect.
     SettingKeyError
         If a non-existing setting was specified in the config file or in args.
-    ValueError
-        If a string could not be converted to a settings value.
+    ConfigValidationError
+        If a string could not be converted to a settings value, or
+        chip_rate is impossible for the sample rate.
     """
 
     if definitions is None:
@@ -783,6 +820,7 @@ def load(args=None, config_file=None, definitions=None,
 
     # Defaults that depend on the device (sample rate, bit depth).
     _apply_device_defaults(values, definitions)
+    _check_chip_rate(values)
 
     # Auto-adjust block parameters for higher sample rates (defaults
     # only — explicitly-set values are respected, with a warning).

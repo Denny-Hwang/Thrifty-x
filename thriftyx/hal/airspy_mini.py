@@ -27,6 +27,7 @@ import numpy as np
 
 from thriftyx.hal.base import SDRDevice, DeviceInfo
 from thriftyx.hal.profiles import AIRSPY_MINI, GAIN_MODES
+from thriftyx.setting_parsers import parse_airspy_serial
 from thriftyx.exceptions import (DeviceNotFoundError, DeviceConfigError,
                                    DeviceCaptureError, DeviceError)
 
@@ -194,8 +195,9 @@ AIRSPY_SAMPLE_FLOAT32_REAL = 1
 AIRSPY_SAMPLE_INT16_IQ = 2
 AIRSPY_SAMPLE_INT16_REAL = 3
 
-# ``GAIN_MODES`` is re-exported from thriftyx.hal.profiles for callers
-# that import it from here.
+# ``GAIN_MODES`` (thriftyx.hal.profiles) and ``parse_airspy_serial``
+# (thriftyx.setting_parsers, which checks the setting) are re-exported
+# for callers that import them from here.
 __all__ = ['AirspyMiniDevice', 'GAIN_MODES', 'libairspy_version',
            'list_airspy_serials', 'parse_airspy_serial']
 
@@ -256,42 +258,6 @@ def list_airspy_serials() -> list[int]:
     buf = (ctypes.c_uint64 * count)()
     got = _lib.airspy_list_devices(buf, count)
     return [int(buf[i]) for i in range(min(got, count))]
-
-
-def parse_airspy_serial(value: 'int | str') -> int:
-    """Convert a CLI serial argument to ``uint64`` for ``airspy_open_sn``.
-
-    Accepts:
-      - int           (returned as-is)
-      - hex string    e.g. ``"0x1234ABCD..."`` or ``"1234ABCDDEADBEEF"``
-      - decimal str   e.g. ``"123456789"``
-    """
-    if isinstance(value, int):
-        return int(value) & 0xFFFFFFFFFFFFFFFF
-    if value is None:
-        raise ValueError("Airspy serial value is None")
-    text = str(value).strip().lower().replace('_', '')
-    # An explicit 0x prefix always means hex, even when the remaining
-    # digits happen to be all-decimal (e.g. "0x12345678").
-    is_hex = text.startswith('0x')
-    if is_hex:
-        text = text[2:]
-    def _checked(value_int: int) -> int:
-        # Airspy serials are unsigned 64-bit; silently masking a typo'd
-        # negative or over-long value would select the wrong device.
-        if not 0 <= value_int <= 0xFFFFFFFFFFFFFFFF:
-            raise ValueError(
-                f"Airspy serial {text!r} out of the unsigned 64-bit range")
-        return value_int
-
-    # Heuristic: if string contains any non-decimal digit, treat as hex.
-    if is_hex or any(c in 'abcdef' for c in text):
-        return _checked(int(text, 16))
-    # If purely numeric and exactly 16 chars, treat as hex (e.g. board ID
-    # printed by `airspy_info`).
-    if len(text) == 16 and all(c in '0123456789abcdef' for c in text):
-        return _checked(int(text, 16))
-    return _checked(int(text))
 
 
 class AirspyMiniDevice(SDRDevice):

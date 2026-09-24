@@ -35,6 +35,7 @@ from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
 from thriftyx.hal.profiles import get_profile
 from thriftyx.carrier_detect import detect as carrier_detect_block
+from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import (EXIT_CONFIG, DeviceNotFoundError,
                                   DeviceConfigError, DeviceCaptureError,
                                   ConfigValidationError)
@@ -63,6 +64,24 @@ def _stdout_is_tty():
         return sys.stdout.isatty()
     except (AttributeError, ValueError):
         return False
+
+
+def _carrier_bins(carrier_window, sample_rate, block_size):
+    """``carrier_window`` in FFT bins, checked against the block size.
+
+    A bin the carrier detector cannot index would otherwise stop capture
+    on its first block, after the output file was created.
+    ``validate_config`` rejects such a window too; this guards callers
+    that skip it.
+    """
+    window = setting_parsers.normalize_freq_range(
+        carrier_window, sample_rate / block_size)
+    try:
+        fft_range_index(window[0], window[1], block_size)
+    except ValueError as exc:
+        raise ConfigValidationError(
+            "carrier_window: {}".format(exc)) from None
+    return window
 
 
 class CardSink:
@@ -175,7 +194,12 @@ def _open_new(path):
     Two rotations can map to the same name (a strftime pattern coarser
     than the interval, or local time falling back an hour); the later
     file then gets a ``.1``, ``.2``, ... suffix before its extension.
+    The directory is created if needed: a pattern such as
+    ``%Y%m%d/rx0_%H%M%S.card`` names a new one every day.
     """
+    directory = os.path.dirname(path)
+    if directory:  # os.makedirs('') raises
+        os.makedirs(directory, exist_ok=True)
     base, ext = os.path.splitext(path)
     candidate = path
     for n in range(1, 1000):
@@ -326,9 +350,8 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     fastcard performs carrier detection in C and writes only detected blocks
     to the .card file.
     """
-    bin_freq = config.sample_rate / config.block_size
-    window = setting_parsers.normalize_freq_range(
-        config.carrier_window, bin_freq)
+    window = _carrier_bins(config.carrier_window, config.sample_rate,
+                           int(config.block_size))
     constant, snr, stddev = config.carrier_threshold
     if stddev != 0:
         print("Warning: fastcard does not support 'stddev' in threshold "
@@ -351,13 +374,23 @@ def _capture_rtlsdr_fastcard(config, extra_args):
         '-k', str(int(config.capture_skip)),
     ]
 
+    # Card data goes where _card_sink_for sends it for the Python
+    # capture.  Without -o fastcard writes none, and prints its status
+    # text on stdout; with '-o -' that text moves to stderr, so a pipe
+    # carries only card lines.
     output_path = extra_args.get('output')
-    if output_path is not None and output_path != '-':
+    if output_path is not None:
         call.extend(['-o', output_path])
+    elif not _stdout_is_tty():
+        call.extend(['-o', '-'])
 
     logging.info("Calling %s", ' '.join(call))
 
-    os.setpgrp()
+    # A session leader (systemd service, setsid, ssh remote command)
+    # already leads its own process group, and setpgid() on it fails
+    # with EPERM.
+    if os.getsid(0) != os.getpid():
+        os.setpgrp()
     process = subprocess.Popen(call)
 
     def _signal_handler(signal_, _frame):
@@ -405,9 +438,7 @@ def _capture_rtlsdr(config, extra_args, output):
     bit_depth = 8
     thresh_coeffs = config.carrier_threshold
 
-    bin_freq = sample_rate / block_size
-    window = setting_parsers.normalize_freq_range(
-        config.carrier_window, bin_freq)
+    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
 
     # Determine input source
     if input_path and input_path != '-':
@@ -430,26 +461,35 @@ def _capture_rtlsdr(config, extra_args, output):
     # RTL-SDR: uint8 I/Q interleaved, 1 byte per component
     bytes_per_block = new_samples * 2
 
+    # Block 0's history must hold real samples: a raw uint8 0 decodes to
+    # about -1-1j, a full-scale DC step the carrier detector fires on
+    # (the Airspy's int16 zeros are silence).  It is the tail of the
+    # last skipped block or, without a skip, the first samples read.
+    history_bytes = block_history * 2
+    history = b''
+
     try:
         with _StopOnSignal() as stop:
             if capture_skip > 0:
-                skip_bytes = capture_skip * bytes_per_block
                 print("\nSkipping {} block(s)...".format(capture_skip),
                       end="", file=sys.stderr)
                 sys.stderr.flush()
                 skipped = 0
-                while skipped < skip_bytes and stop.running:
-                    chunk = input_stream.read(
-                        min(skip_bytes - skipped, 65536))
-                    if not chunk:
+                while skipped < capture_skip and stop.running:
+                    chunk = input_stream.read(bytes_per_block)
+                    if len(chunk) < bytes_per_block:
                         break
-                    skipped += len(chunk)
+                    history = chunk[len(chunk) - history_bytes:]
+                    skipped += 1
                 print(" done\n", file=sys.stderr)
+            else:
+                history = input_stream.read(history_bytes)
 
             # History buffer for block overlap
-            history_raw = np.zeros(block_history * 2, dtype=np.uint8)
+            history_raw = np.frombuffer(history, dtype=np.uint8)
+            ended = len(history) < history_bytes  # the input ran out
 
-            while stop.running:
+            while stop.running and not ended:
                 if (duration is not None
                         and (time.time() - start_time) >= duration):
                     break
@@ -538,9 +578,7 @@ def _capture_airspy(config, extra_args, output):
     duration = extra_args.get('duration')
     thresh_coeffs = config.carrier_threshold
 
-    bin_freq = sample_rate / block_size
-    window = setting_parsers.normalize_freq_range(
-        config.carrier_window, bin_freq)
+    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
 
     # Resolve device selector.  ``airspy_serial`` (hex/decimal) takes
     # precedence; otherwise ``--device-index`` selects by enumeration order.
@@ -570,9 +608,10 @@ def _capture_airspy(config, extra_args, output):
               file=sys.stderr)
         sys.exit(1)
     except (TypeError, ValueError) as e:
-        # create_device received an unsupported kwarg or invalid serial.
+        # create_device received an unsupported kwarg or invalid serial:
+        # configuration, which retrying cannot fix.
         print("ERROR: {}".format(e), file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CONFIG)
     except DeviceConfigError as e:
         # open() itself can raise DeviceConfigError (e.g. the INT16_IQ
         # sample-type fail-fast); exit cleanly instead of a traceback.
@@ -680,11 +719,13 @@ def _capture_airspy(config, extra_args, output):
                     dropped_seen = dropped_now
 
                 block_raw = np.concatenate([history_raw, raw])
-                # A block of lost samples (all zeros) cannot hold a
-                # carrier; skipping its FFT lets capture catch up after
-                # a long drop.
+                # A block of lost samples (all zeros, history included)
+                # cannot hold a carrier; skipping its FFT lets capture
+                # catch up after a long drop.  The first block of a drop
+                # still carries the previous block's tail, and a burst
+                # there peaks in this block's window, not in the last.
                 detected = False
-                if raw.any():
+                if block_raw.any():
                     block_complex = raw_to_complex(block_raw,
                                                    bit_depth=bit_depth)
                     # Carrier detection via FFT (pyfftw when available)
@@ -812,7 +853,11 @@ def capture_cli(args=None):
     output_path = extra_args.get('output')
     rotate = extra_args.get('rotate')
     fastcard_path = extra_args.get('fastcard', 'fastcard')
-    use_fastcard = device_type == 'rtlsdr' and shutil.which(fastcard_path)
+    # fastcard reads the dongle itself; --input (a recording or stdin)
+    # is read by the Python capture.
+    use_fastcard = (device_type == 'rtlsdr'
+                    and extra_args.get('input') is None
+                    and shutil.which(fastcard_path))
     if rotate is not None:
         problem = None
         if not rotate > 0:
@@ -837,9 +882,9 @@ def capture_cli(args=None):
             logger.info("Using fastcard binary: %s", fastcard_path)
             _capture_rtlsdr_fastcard(config, extra_args)
         elif device_type == 'rtlsdr':
-            # Python fallback: carrier detection + v1 .card format
-            logger.info("fastcard not found; using Python carrier "
-                        "detection")
+            # Python fallback: carrier detection + v2 .card format
+            logger.info("using Python carrier detection (--input given, "
+                        "or fastcard not found)")
             _capture_rtlsdr(config, extra_args,
                             _card_sink_for(output_path, rotate))
         else:

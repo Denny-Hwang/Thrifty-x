@@ -392,7 +392,12 @@ introducing a comment. The same parser is used by every Thrifty-X
 command, so a single `detector.cfg` covers `capture`, `detect`,
 `scope`, `template_*`, etc.
 
-Numeric suffixes accepted: `K`, `M`, `G` (e.g. `2.4M = 2_400_000`).
+`sample_rate`, `chip_rate` and `tuner_freq` accept a metric suffix:
+`k` or `K`, `M`, `G` (e.g. `2.4M = 2_400_000`).  A lowercase `m` means
+milli, not mega: `chip_rate: 0.999707m` is rejected, since no template
+fits that many samples per chip.  `carrier_window` is in FFT bins
+unless it ends in `Hz`: `50-60kHz` is 50 to 60 kHz, but `50-60k` is
+bins 50 000 to 60 000, beyond the FFT, and capture refuses it.
 `carrier_window` and threshold expressions are parsed by
 `thriftyx.setting_parsers`.
 
@@ -821,17 +826,22 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 - `--device-type {rtlsdr, airspy_mini, airspy_r2}` — overrides config.
 - `--duration <sec>` — stop after N seconds (default: until Ctrl+C).
-- `--input <path>` — RTL-SDR Python path only: read raw samples from a
-  file or `-` (stdin, the default) instead of the `fastcard` binary.
-  Useful with `rtl_sdr -f … -s … - | thriftyx capture … --device-type
-  rtlsdr`.
+- `--input <path>` — RTL-SDR only: read raw samples from a file or `-`
+  (stdin) with the Python capture, instead of letting the `fastcard`
+  binary open the dongle.  Without `fastcard` the Python capture reads
+  stdin by default.  Useful with `rtl_sdr -f … -s … - | thriftyx
+  capture … --device-type rtlsdr --input -`.
 - `--fastcard <path>` — alternate path to the `fastcard` binary
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
-  to its Python carrier detector.
+  to its Python carrier detector.  Card data goes to the same place
+  either way: the output file, or stdout for `-` or when stdout is a
+  pipe.
 - `--rotate <sec>` — start a new output file every N seconds, on
   wall-clock boundaries (`--rotate 3600` switches files on the hour on
   every receiver).  The output path is then a `strftime` pattern, e.g.
-  `rx0_%Y%m%dT%H%M%S.card`; each file gets its own `#v2` header, and
+  `rx0_%Y%m%dT%H%M%S.card` (directories may use fields too, e.g.
+  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed); each file gets
+  its own `#v2` header, and
   block indices continue across files, so sample-of-arrival stays
   continuous for the whole run.  Finished files can be processed or
   deleted while capture keeps running.  Not available with the
@@ -848,7 +858,9 @@ overlap the gap are affected.
 The output file is opened only once the SDR has been opened and
 configured, so a capture that fails to start leaves an existing file
 with the same name untouched.  A bad setting (unknown device type,
-unparseable value, invalid `--rotate`) exits with status 78
+unparseable value or `airspy_serial`, a `carrier_window` outside the
+FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`)
+exits with status 78
 (`EX_CONFIG`); systemd units use it to stop restarting a node whose
 configuration needs fixing.
 

@@ -11,9 +11,15 @@
 Supports RTL-SDR (legacy 8-bit), Airspy Mini, and Airspy R2 devices.
 """
 
+from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import ConfigValidationError
 from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, get_profile
+from thriftyx.setting_parsers import normalize_freq_range
 from thriftyx.settings import compute_block_params, longest_code_bits
+
+
+# Largest block_size capture accepts (2**24 samples, 1.7 s at 10 Msps).
+MAX_BLOCK_SIZE = 2 ** 24
 
 
 def validate_config(config: dict) -> list[str]:
@@ -74,6 +80,11 @@ def validate_config(config: dict) -> list[str]:
         if block_size <= 0 or (block_size & (block_size - 1)) != 0:
             raise ConfigValidationError(
                 f"block_size {block_size} must be a positive power of 2")
+        # Capture allocates and FFTs whole blocks; anything larger is a
+        # typo, not a geometry (an 11-bit code at 10 Msps needs 65536).
+        if block_size > MAX_BLOCK_SIZE:
+            raise ConfigValidationError(
+                f"block_size {block_size} is larger than {MAX_BLOCK_SIZE}")
 
     # 5. block_history >= template_length - 1 (if both present)
     history = config.get('block_history')
@@ -124,25 +135,37 @@ def validate_config(config: dict) -> list[str]:
                 f"code's template ({template_10} samples) at sample_rate="
                 f"{sample_rate/1e6:.1f}M. Detection will fail.")
 
-    # 6. carrier_window must fit within block_size/2 (Nyquist)
+    # 6. carrier_window must lie within the FFT, and should within
+    # block_size/2 (Nyquist).  A bin the carrier detector cannot index
+    # would otherwise stop capture on its first block, after the output
+    # file was created.
     carrier_window = config.get('carrier_window')
     if carrier_window is not None and block_size is not None:
         # carrier_window is (start, stop) or (start, stop, unit_hz) tuple
         if isinstance(carrier_window, (tuple, list)) and len(carrier_window) >= 2:
-            stop_val = carrier_window[1]
-            unit_hz = (len(carrier_window) >= 3 and carrier_window[2])
-            if unit_hz:
-                # Values are in Hz; convert to bins before Nyquist check
-                if sample_rate is not None:
-                    stop_bin = int(stop_val * block_size / sample_rate)
-                else:
-                    stop_bin = None  # cannot check without sample_rate
+            unit_hz = bool(len(carrier_window) >= 3 and carrier_window[2])
+            window = (carrier_window[0], carrier_window[1], unit_hz)
+            # The conversion capture uses.
+            if not unit_hz:
+                bins = normalize_freq_range(window, 1.0)
+            elif sample_rate is not None:
+                bins = normalize_freq_range(window, sample_rate / block_size)
             else:
-                stop_bin = stop_val
-            if stop_bin is not None and stop_bin > block_size // 2:
-                warnings.append(
-                    f"carrier_window stop bin {stop_bin} exceeds Nyquist "
-                    f"({block_size // 2}). Check carrier_window setting.")
+                bins = None  # cannot convert Hz without sample_rate
+            if bins is not None:
+                try:
+                    fft_range_index(bins[0], bins[1], block_size)
+                except ValueError:
+                    raise ConfigValidationError(
+                        f"carrier_window {bins[0]} to {bins[1]} (FFT bins) "
+                        f"lies outside the {block_size}-bin FFT. A window "
+                        f"without 'Hz' is in bins even with a k/M suffix: "
+                        f"write e.g. 50-60kHz for one in Hz.") from None
+                if max(abs(bins[0]), abs(bins[1])) > block_size // 2:
+                    warnings.append(
+                        f"carrier_window {bins[0]} to {bins[1]} (FFT bins) "
+                        f"exceeds Nyquist ({block_size // 2}). Check "
+                        f"carrier_window setting.")
 
     # 7. Gain indices and gain_mode, for devices with staged gain
     if profile.gain_stages:

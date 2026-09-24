@@ -61,6 +61,8 @@ def test_help_exits_zero(command, tmp_path):
     ('--device-type', 'airspy_mini2', 'device_type'),
     ('--soa-interpolation', 'cubic', 'soa_interpolation'),
     ('--bit-depth', '16', 'bit_depth'),
+    ('--chip-rate', '0', 'chip_rate'),
+    ('--chip-rate', '0.999707m', 'chip_rate'),
 ])
 def test_bad_setting_exits_78_without_traceback(tmp_path, flag, value, key):
     card = tmp_path / 'empty.card'
@@ -70,6 +72,25 @@ def test_bad_setting_exits_78_without_traceback(tmp_path, flag, value, key):
     assert result.returncode == EXIT_CONFIG, result.stderr
     assert 'Traceback' not in result.stderr
     assert key in result.stderr
+
+
+@pytest.mark.parametrize('line', [
+    'airspy_serial: 0xABCDEF012345678G',
+    'carrier_window: 50-60k',           # bins, not kHz: beyond the FFT
+    'chip_rate: 0.999707m',             # milli
+])
+def test_bad_capture_setting_exits_78_before_any_output(tmp_path, line):
+    """These used to exit 1 (a traceback, or a device error), so the
+    systemd unit restarted forever -- each run leaving a header-only
+    card, for the window."""
+    (tmp_path / 'capture.cfg').write_text(
+        'device_type: airspy_mini\n' + line + '\n')
+    result = _run_cli(['capture', 'rx0_%Y%m%dT%H%M%S.card', '--rotate',
+                       '3600', '-c', 'capture.cfg'], cwd=tmp_path)
+    assert result.returncode == EXIT_CONFIG, result.stderr
+    assert 'Traceback' not in result.stderr
+    assert line.split(':')[0] in result.stderr
+    assert [p.name for p in tmp_path.iterdir()] == ['capture.cfg']
 
 
 def test_load_rejects_unknown_choices():
