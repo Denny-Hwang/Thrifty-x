@@ -293,9 +293,13 @@ CODE_BITS = range(5, 12)
 # (a lowercase 'm' means milli) whose template would size blocks in
 # terabytes.  At 2.4-10 Msps and the transmitters' ~1 Mchip/s it is 2-10.
 SAMPLES_PER_CHIP = (1, 100)
+# Sample rates any supported SDR captures at (RTL-SDR from 225 ksps,
+# Airspy up to 10 Msps): what a .card may record in place of the
+# configured rate.
+SDR_SAMPLE_RATES = (225e3, 10e6)
 
 
-def _check_chip_rate(values):
+def _check_chip_rate(values, rate_is_final=True):
     """Reject a chip_rate that gives no usable block geometry.
 
     Every command sizes its blocks by the template chip_rate implies
@@ -303,6 +307,11 @@ def _check_chip_rate(values):
     and ``0.999707m`` would ask for a 2**45-sample block.  Raises
     ConfigValidationError, which exits with status 78 like any other
     bad setting.
+
+    With *rate_is_final* false the sample rate is only a device default
+    that a .card header may still replace (:func:`apply_card_header`
+    checks again with the recorded rate), so only a chip_rate no SDR
+    rate could use is rejected here.
     """
     sample_rate = values.get('sample_rate')
     chip_rate = values.get('chip_rate')
@@ -314,14 +323,15 @@ def _check_chip_rate(values):
     if sample_rate is None:
         return
     low, high = SAMPLES_PER_CHIP
-    sps = sample_rate / chip_rate
-    if not low <= sps <= high:
+    slowest, fastest = ((sample_rate, sample_rate) if rate_is_final
+                        else SDR_SAMPLE_RATES)
+    if fastest / chip_rate < low or slowest / chip_rate > high:
         raise ConfigValidationError(
             "sample_rate {} / chip_rate {} is {:.3g} samples per chip; "
             "expected {}-{}.  chip_rate is in chips/s (the transmitters "
             "send 0.999707M), and a lowercase 'm' suffix means milli, "
-            "not mega.".format(_fmt(sample_rate), _fmt(chip_rate), sps,
-                               low, high))
+            "not mega.".format(_fmt(sample_rate), _fmt(chip_rate),
+                               sample_rate / chip_rate, low, high))
 
 
 def compute_block_params(sample_rate, chip_rate,
@@ -644,6 +654,8 @@ def apply_card_header(config, header):
         _apply_recorded_arguments(values, header, adopted, explicit)
     if not adopted:
         return config
+    if 'sample_rate' in adopted:
+        _check_chip_rate(values)            # against the recorded rate
 
     if 'sample_rate' in adopted and 'block_history' not in adopted:
         # Written before the #v2 line recorded block_history.  Re-deriving
@@ -820,7 +832,7 @@ def load(args=None, config_file=None, definitions=None,
 
     # Defaults that depend on the device (sample rate, bit depth).
     _apply_device_defaults(values, definitions)
-    _check_chip_rate(values)
+    _check_chip_rate(values, rate_is_final='sample_rate' in explicit)
 
     # Auto-adjust block parameters for higher sample rates (defaults
     # only — explicitly-set values are respected, with a warning).

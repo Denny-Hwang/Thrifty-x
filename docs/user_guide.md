@@ -838,11 +838,13 @@ The dispatch table lives in `thriftyx/cli.py`.
   with `-o FILE` or `-a FILE`; without either it prints only its
   per-block summary lines, which are not a `.toad` file.  `identify`,
   `match`, `tdoa` and `pos` write `data.toads`, `data.match`,
-  `data.tdoa` and `data.pos` by default.  These four, `detect` and
-  `template_extract` create or replace the file only once the input,
-  template and settings have loaded (`template_extract` only once it
-  has a template to write, though it reports a missing directory
-  first), so a failed run leaves an existing file untouched.  For these
+  `data.tdoa` and `data.pos` by default.  These four and
+  `template_extract` write the file only once their results are
+  complete (`template_extract` reports a missing directory first), so a
+  failed run leaves an existing file untouched.  `detect` opens it once
+  the input, template and settings have loaded -- a run that fails to
+  start keeps the old file -- and then streams detections into it, so
+  an error part-way through a card leaves a partial file.  For these
   six commands `-o -` writes to stdout, and progress lines go to stderr
   instead.  `template_generate` and `template_extract` default to
   `template.npy` and `capture.npy`.

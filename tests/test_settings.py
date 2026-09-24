@@ -211,6 +211,18 @@ def test_impossible_chip_rate_is_a_config_error(chip_rate):
         settings.load(None, config)
 
 
+def test_chip_rate_is_checked_against_the_card_sample_rate():
+    """A device-default rate is not final: a card replaces it, so the
+    samples-per-chip range is checked against the recorded rate."""
+    config = settings.Namespace(settings.load({'chip_rate': '30k'}, None))
+    config.explicit_keys = frozenset({'chip_rate'})
+    assert config.sample_rate == 6e6            # 200 samples/chip
+    card = settings.apply_card_header(config, {'sample_rate': '2400000'})
+    assert card.sample_rate == 2.4e6            # 80 samples/chip
+    with pytest.raises(ConfigValidationError, match='samples per chip'):
+        settings.apply_card_header(config, {'sample_rate': '10000000'})
+
+
 def test_chip_rate_is_checked_against_the_device_sample_rate():
     config = io.StringIO("device_type: airspy_r2\nchip_rate: 0.999707M\n")
     values = settings.load(None, config)
