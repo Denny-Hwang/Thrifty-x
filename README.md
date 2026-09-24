@@ -276,10 +276,13 @@ thriftyx gold --identify rx0.card
 #   template for this code: thriftyx template_generate 11 0 --family gold --sample-rate 6M
 ```
 
-It also reads a template (`.npy` or `.tpl`): the one that detects today
-is the best evidence of what a fleet sends.  `detect` logs the code its
-template holds on every run and warns when it holds none at the card's
-sample rate.
+It also reads a template (`.npy` or `.tpl`), to check which code a
+receiver searches for.  `detect` prints the code its template holds at
+the start of every run and warns when it holds none at the card's
+sample rate.  A template for the wrong code or family does not simply
+detect nothing: strong bursts still give "detections" on its
+correlation sidelobes, with SoAs off by hundreds of samples — check the
+code on a capture, not by whether detections appear.
 
 - **Gold family** (`--family gold`).  Codes `0 … 2^N` of the Gold family
   of `N`-bit registers (N = 5, 6, 7, 9, 10, 11): any two codes

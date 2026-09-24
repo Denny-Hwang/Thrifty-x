@@ -349,3 +349,102 @@ def test_template_generate_legacy_is_the_old_output(tmp_path, monkeypatch):
     assert len(samples) == 6139
     np.testing.assert_array_equal(
         samples, generate(10, 3, 6e6 / 0.999707e6, 'legacy'))
+
+
+def _stream_card(path, bits, idx, family, rate, amplitude=4.0, seed=0):
+    """A card cut from one continuous stream with the default geometry,
+    as capture writes it: every block overlaps the next, so each burst
+    is whole in one block and cut in its neighbour."""
+    from thriftyx.block_data import card_writer, write_card_header
+    from thriftyx.settings import compute_block_params
+    rng = np.random.default_rng(seed)
+    size, history, _ = compute_block_params(rate, 0.999707e6)
+    envelope = (generate(bits, idx, rate / 0.999707e6, family) + 1) / 2
+    total = 12 * size
+    stream = (rng.normal(size=total) + 1j * rng.normal(size=total)) / 2 ** .5
+    period = int(0.8 * size)                # bursts land anywhere
+    for start in range(int(rng.integers(0, period)), total - len(envelope),
+                       period):
+        stream[start:start + len(envelope)] += amplitude * envelope * np.exp(
+            2j * np.pi * (20e3 / rate * np.arange(len(envelope))
+                          + rng.uniform()))
+    stream *= 0.5 / np.abs(stream).max()
+    step = size - history
+    with open(path, 'w') as card:
+        write_card_header(card, bit_depth=12, sample_rate=int(rate),
+                          block_size=size, block_history=history)
+        for k in range((total - size) // step):
+            card_writer(card, float(k), k, stream[k * step:k * step + size]
+                        .astype(np.complex64), bit_depth=12)
+
+
+@pytest.mark.parametrize('bits, idx, family, rate, seed', [
+    (11, 469, 'gold', 2.5e6, 1), (11, 1284, 'gold', 6e6, 2),
+    (10, 37, 'legacy', 6e6, 3), (9, 8, 'gold', 3e6, 4),
+    (5, 15, 'gold', 6e6, 5)])
+def test_identify_card_ignores_bursts_cut_by_block_edges(
+        tmp_path, bits, idx, family, rate, seed):
+    """A burst cut by a block edge used to win about half the time and
+    name a shorter register length."""
+    from thriftyx.gold import identify_card, is_clear_match
+    path = tmp_path / 'rx0.card'
+    _stream_card(path, bits, idx, family, rate, seed=seed)
+    with open(path, 'rb') as card:
+        results = identify_card(card)[0]
+    assert (results[0]['family'], results[0]['bits'],
+            results[0]['index']) == (family, bits, idx)
+    assert is_clear_match(results)
+
+
+@pytest.mark.parametrize('bits, idx, rate', [
+    *[(5, i, 2.4e6) for i in range(33)], (5, 13, 2.5e6), (5, 15, 3e6),
+    (6, 44, 2.4e6), (6, 3, 6e6)])
+def test_short_codes_are_identified(bits, idx, rate):
+    """31- and 63-chip codes: one sample per chip middle at ~2.4
+    samples per chip, and runner-ups near 0.5."""
+    from thriftyx.gold import is_clear_match
+    template = generate(bits, idx, rate / 0.999707e6, 'gold').astype(float)
+    for given in (rate, None):
+        results = identify(template, given)
+        assert (results[0]['bits'], results[0]['index']) == (bits, idx)
+        assert is_clear_match(results)
+
+
+def test_shared_codes_belong_to_the_legacy_family_too(monkeypatch, capsys):
+    from thriftyx import gold as gold_module
+    template = str(REPO / 'example' / 'template.npy')
+    assert _run(monkeypatch, gold_module,
+                ['gold', '11', '--family', 'legacy', '--identify',
+                 template]) == 0
+    assert 'best match: 11-bit Gold code 0' in capsys.readouterr().out
+    assert _run(monkeypatch, gold_module,
+                ['gold', '10', '--family', 'legacy', '--identify',
+                 template, '-s', '2.4M']) == 1
+    assert 'no code of the requested' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('name, content, message', [
+    ('bad.npy', b'not an array', 'cannot load template'),
+    ('empty.tpl', b'', 'not a .tpl template'),
+    ('short.tpl', np.int16(100).tobytes() + b'\0' * 40, 'truncated'),
+    ('missing.npy', None, 'No such file'),
+])
+def test_identify_rejects_bad_files_cleanly(tmp_path, monkeypatch, capsys,
+                                            name, content, message):
+    from thriftyx import gold as gold_module
+    path = tmp_path / name
+    if content is not None:
+        path.write_bytes(content)
+    assert _run(monkeypatch, gold_module,
+                ['gold', '--identify', str(path)]) == 2
+    assert message in capsys.readouterr().err
+
+
+def test_detect_reports_its_template_code(tmp_path):
+    from thriftyx import detect
+    path = tmp_path / 'template.npy'
+    np.save(path, generate(10, 3, 6e6 / 0.999707e6, 'legacy'))
+    lines = []
+    detect.load_template(str(path), 6e6, report=lines.append)
+    assert lines == ['template {} holds the 10-bit legacy (not Gold) code '
+                     '3 (correlation 1.00)'.format(path)]

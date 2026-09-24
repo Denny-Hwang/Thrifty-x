@@ -351,29 +351,55 @@ def longest_code_bits(block_history, sample_rate, chip_rate):
     return max(fitting) if fitting else None
 
 
-def _apply_pre_header_geometry(values, header, adopted, explicit):
-    """Fill the overlap of a card whose #v2 line lacks block_history.
+def _apply_recorded_arguments(values, header, adopted, explicit):
+    """Adopt the geometry older C cards record on "# arguments".
 
-    fastcapture/fastdet wrote it on their "# arguments" line
-    (``history_size``, see block_data.peek_card_header).  Python capture
-    recorded nothing but used ``_pre_header_block_params``; that is only
-    trusted when the recorded block_size agrees with it.  Anything
-    assumed is logged, since a wrong overlap shifts every SoA.
+    fastcapture/fastdet wrote ``block_size`` and ``history_size`` there
+    (see block_data.peek_card_header) before the #v2 line recorded
+    them, including on cards whose #v2 line says sample_rate=0.  Like
+    the #v2 values, they describe the data and override the config.
     """
-    if 'block_history' not in values or 'block_history' in explicit:
-        return
-    if 'history_size' in header:
+    for key, field in (('block_size', 'arguments_block_size'),
+                       ('block_history', 'history_size')):
+        if field not in header or key not in values or key in adopted:
+            continue
         try:
-            values['block_history'] = int(header['history_size'])
-            return
+            recorded = int(header[field])
         except ValueError:
-            pass
+            continue
+        if key in explicit and recorded != values[key]:
+            logging.warning(
+                "%s=%s recorded in the .card header overrides the "
+                "configured %s=%s", key, recorded, key, _fmt(values[key]))
+        values[key] = recorded
+        adopted.add(key)
+
+
+def _apply_pre_header_geometry(values, adopted, explicit):
+    """Fill the geometry of a card that records no block_history at all.
+
+    Python capture recorded nothing before the #v2 line carried it, and
+    used ``_pre_header_block_params`` for the recorded rate; a recorded
+    block_size that disagrees with that rule leaves the overlap a guess.
+    Anything assumed is logged, since a wrong overlap shifts every SoA.
+    """
+    if 'block_history' not in values:
+        return                              # a command without geometry
     chip_rate = values.get('chip_rate') or DEFINITIONS['chip_rate'].parser(
         DEFINITIONS['chip_rate'].default)
-    old_size, old_history = _pre_header_block_params(values['sample_rate'],
-                                                     chip_rate)
+    rate = values['sample_rate']
     size = values.get('block_size')
-    values['block_history'] = old_history
+    if 'block_history' in explicit:
+        history = values['block_history']
+    else:
+        history = _pre_header_block_params(rate, chip_rate)[1]
+        values['block_history'] = history
+    old_size = _pre_header_block_params(rate, chip_rate, history)[0]
+    if 'block_size' in values and 'block_size' not in adopted \
+            and 'block_size' not in explicit:
+        values['block_size'] = old_size
+    if 'block_history' in explicit:
+        return
     if 'block_size' in adopted and size != old_size:
         # Capture chose the overlap independently of a configured
         # block_size, so the old rule is still the best guess -- but not
@@ -383,29 +409,27 @@ def _apply_pre_header_geometry(values, header, adopted, explicit):
             "and %s is not what capture used by default at %s sps; the "
             "overlap is unknown -- assuming %d, the default history then. "
             "Set --history to the value used for the capture.", size,
-            size, _fmt(values['sample_rate']), old_history)
+            size, _fmt(rate), history)
         return
-    if 'block_size' in values and 'block_size' not in adopted \
-            and 'block_size' not in explicit:
-        values['block_size'] = old_size
     logging.warning(
         "the .card header does not record block_history; assuming %d, what "
         "capture used at %s sps before it was recorded. Set --history if "
-        "this card was captured with another value.", old_history,
-        _fmt(values['sample_rate']))
+        "this card was captured with another value.", history, _fmt(rate))
 
 
-def _pre_header_block_params(sample_rate, chip_rate):
+def _pre_header_block_params(sample_rate, chip_rate, block_history=None):
     """Block geometry capture used before cards recorded block_history.
 
     The stock 16384 / 4920, enlarged when a 1023-chip template did not
     fit (history twice that template): 32768 / 12278 at 6 Msps, 65536 /
-    20464 at 10 Msps.  Only for reading such files.
+    20464 at 10 Msps.  A given *block_history* (one the user set) keeps
+    its value and sizes the block for it.  Only for reading such files.
     """
     template_len = int(sample_rate / chip_rate * 1023)
-    block_history = 4920
-    if block_history < template_len - 1:
-        block_history = 2 * template_len
+    if block_history is None:
+        block_history = 4920
+        if block_history < template_len - 1:
+            block_history = 2 * template_len
     min_block = max(template_len + block_history + 1, 2 * block_history)
     block_size = 16384
     while block_size < min_block:
@@ -413,7 +437,7 @@ def _pre_header_block_params(sample_rate, chip_rate):
     return block_size, block_history
 
 
-def _auto_adjust_block_params(values, explicit=None):
+def _auto_adjust_block_params(values, explicit=None, recorded=frozenset()):
     """Auto-adjust block_history and block_size when too small for sample rate.
 
     Called after parsing all settings.  Only enlarges *default-derived*
@@ -433,6 +457,9 @@ def _auto_adjust_block_params(values, explicit=None):
     explicit : set or None
         Keys that were set explicitly rather than filled from defaults.
         ``None`` is treated as "nothing explicit" (legacy behavior).
+    recorded : set
+        Keys among *explicit* that a .card header recorded: facts about
+        the data rather than settings, reported without config advice.
     """
     explicit = explicit if explicit is not None else frozenset()
     sample_rate = values.get('sample_rate')
@@ -444,7 +471,15 @@ def _auto_adjust_block_params(values, explicit=None):
 
     block_history = values.get('block_history')
     if block_history is not None and block_history < template_len - 1:
-        if 'block_history' in explicit:
+        if 'block_history' in recorded:
+            # The card is what it is; a template too long for it fails
+            # loudly in the correlator.  Nothing to configure here.
+            bits = longest_code_bits(block_history, sample_rate, chip_rate)
+            logging.info(
+                "this .card was captured with block_history %d, which at "
+                "%.1f Msps holds codes up to %s bits", block_history,
+                sample_rate / 1e6, bits)
+        elif 'block_history' in explicit:
             # Captured blocks cannot be re-blocked later: a card recorded
             # with this overlap can never be correlated with a longer
             # code's template.  Hence a warning, even though it is right
@@ -477,7 +512,9 @@ def _auto_adjust_block_params(values, explicit=None):
         min_block = max(template_len + block_history + 1,
                         2 * block_history)
         if block_size < min_block:
-            if 'block_size' in explicit:
+            if 'block_size' in recorded:
+                pass                    # the card's geometry, see above
+            elif 'block_size' in explicit:
                 logging.warning(
                     "block_size %d is smaller than the recommended "
                     "minimum %d for block_history=%d and a %d-sample "
@@ -516,11 +553,13 @@ def apply_card_header(config, header):
     and it disagrees, a warning names both values; the header still
     wins because it describes the data actually on disk.
 
-    If the header records ``sample_rate`` but not ``block_history``
-    (v2 files written before it was recorded), block parameters that
-    were filled from defaults are set to the geometry capture used back
-    then for the recorded rate (``_pre_header_block_params``); the
-    current defaults would give a different overlap than the file has.
+    Older cards: a geometry the C writers recorded on the "# arguments"
+    line is adopted like the #v2 values.  If the header records
+    ``sample_rate`` but no history anywhere (Python cards written before
+    it was recorded), block parameters that were filled from defaults
+    are set to the geometry capture used back then for the recorded rate
+    (``_pre_header_block_params``); the current defaults would give a
+    different overlap than the file has.
 
     Parameters
     ----------
@@ -565,15 +604,17 @@ def apply_card_header(config, header):
                 _fmt(values[key]))
         values[key] = recorded
         adopted.add(key)
+    if 'block_history' not in header:
+        _apply_recorded_arguments(values, header, adopted, explicit)
     if not adopted:
         return config
 
-    if 'sample_rate' in adopted and 'block_history' not in header:
+    if 'sample_rate' in adopted and 'block_history' not in adopted:
         # Written before the #v2 line recorded block_history.  Re-deriving
         # it with today's rule could give a different overlap than the
         # file has and shift every sample-of-arrival, so use what the
         # writer used.
-        _apply_pre_header_geometry(values, header, adopted, explicit)
+        _apply_pre_header_geometry(values, adopted, explicit)
     elif 'sample_rate' in adopted:
         # Defaults derived for the configured rate are stale now; derive
         # them again for the recorded rate.
@@ -585,7 +626,8 @@ def apply_card_header(config, header):
         if added_chip_rate:
             chip_def = DEFINITIONS['chip_rate']
             values['chip_rate'] = chip_def.parser(chip_def.default)
-        values = _auto_adjust_block_params(values, set(explicit) | adopted)
+        values = _auto_adjust_block_params(values, set(explicit) | adopted,
+                                           recorded=adopted)
         if added_chip_rate:
             values.pop('chip_rate')
 

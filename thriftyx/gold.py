@@ -189,31 +189,37 @@ def lfsr(taps, init):
 def _decode_chips(template, sps, chips):
     """Chips of a sampled code as +1 / -1 (mean of each chip's middle).
 
-    The chip timing is searched over a fraction of a chip.  Several
-    timings can decide every chip equally firmly (at ~2 samples per chip
-    a chip's middle is a single sample); the middle of that run is then
-    the one aligned with the chips.
+    The chip timing is searched over a fraction of a chip and the timing
+    whose chips, laid back out at it, best reproduce the template wins.
+    (Scoring by how firmly chips decide instead favours a timing half a
+    chip off at ~2.4 samples per chip, where each chip's middle is a
+    single sample.)  Ties go to the timing nearest the nominal one.
     """
     guard = 0.25 * sps
     starts = np.arange(chips) * sps
+    positions = np.arange(len(template))
     phases = np.linspace(-0.5, 0.5, 17) * sps
-    scores, decoded = [], []
-    for phase in phases:
+    best = None
+    for phase in sorted(phases, key=abs):
         lo = np.clip(np.ceil(starts + phase + guard).astype(int),
                      0, len(template) - 1)
         hi = np.floor(starts + phase + sps - guard).astype(int)
         hi = np.clip(np.maximum(hi, lo + 1), 1, len(template))
         means = np.array([template[a:b].mean()
                           for a, b in zip(lo, hi, strict=True)])
-        scores.append(np.mean(np.abs(means)))
-        decoded.append(np.where(means >= 0, 1.0, -1.0))
-    scores = np.array(scores)
-    tied = np.flatnonzero(scores >= scores.max() - 1e-9)
-    return decoded[int(tied[len(tied) // 2])]
+        decoded = np.where(means >= 0, 1.0, -1.0)
+        chip_of = np.floor((positions - phase) / sps).astype(int) % chips
+        score = float(np.dot(template, decoded[chip_of]))
+        if best is None or score > best[0] * (1 + 1e-9) + 1e-12:
+            best = (score, decoded)
+    return best[1]
 
 
 # Relative samples-per-chip errors identify() tries at sample level.
 _RATE_ERRORS = (0.0, -3e-4, 3e-4, -6e-4, 6e-4, -1e-3, 1e-3)
+# Codes this short are all scored at sample level: a few wrong chips
+# can push the right one out of the chip-level top candidates.
+_SCORE_ALL_UP_TO = 127
 
 
 def identify(template, sample_rate=None, chip_rate=0.999707e6,
@@ -239,7 +245,8 @@ def identify(template, sample_rate=None, chip_rate=0.999707e6,
     families : iterable of str
         Families to search.
     candidates : int
-        Codes per register length and family scored at sample level.
+        Codes per register length and family scored at sample level
+        (every code of up to 127 chips is).
 
     Returns
     -------
@@ -295,7 +302,9 @@ def identify(template, sample_rate=None, chip_rate=0.999707e6,
             chip_corr = np.real(np.fft.ifft(np.fft.fft(codes, axis=1)
                                             * decoded, axis=1))
             ranking = np.argsort(-np.max(np.abs(chip_corr), axis=1))
-            for idx in ranking[:candidates]:
+            if chips > _SCORE_ALL_UP_TO:
+                ranking = ranking[:candidates]
+            for idx in ranking:
                 best = None
                 for err, chip_of in zip(_RATE_ERRORS, chip_maps, strict=True):
                     sampled = codes[idx][chip_of]
@@ -315,24 +324,73 @@ def identify(template, sample_rate=None, chip_rate=0.999707e6,
     return results
 
 
-def _find_burst(envelope, sps):
-    """Locate one complete on-off keyed burst in a block's envelope.
+def _code_bits_for(chips):
+    """Register length whose code length *chips* (a burst's measured
+    length) is, or None.  Bursts measure within about 12 chips: a code
+    can start or end with off chips, and the edges are smoothed."""
+    for bits in range(5, 12):
+        length = 2 ** bits - 1
+        if abs(chips - length) <= max(0.05 * length, 12):
+            return bits
+    return None
 
-    Returns ``(start, stop, strength)`` -- sample bounds and the burst
-    level over the noise level -- or None when the block holds no clear
-    burst that starts and ends inside it.
+
+def _find_bursts(envelope, sps):
+    """Locate the complete on-off keyed bursts in a block's envelope.
+
+    Returns ``[(start, stop, strength), ...]`` -- sample bounds and the
+    burst level over the noise level -- for every burst that starts and
+    ends well inside the block.  The envelope is smoothed over 16 chips
+    and thresholded at a quarter of the strongest burst's level; where a
+    stretch of mostly-off chips dips below that (a Gold code, the XOR of
+    two sequences, can go ~20 chips nearly off), the pieces are joined
+    across gaps of up to 48 chips.  A burst cut by a block edge reaches
+    that edge and is left out.
     """
-    width = max(int(8 * sps), 1)               # ~8 chips
+    width = max(int(16 * sps), 1)
+    if len(envelope) < 6 * width:
+        return []
     smooth = np.convolve(envelope, np.ones(width) / width, mode='same')
-    noise = np.median(smooth)
+    # A burst can fill most of a block: the noise level is a low
+    # percentile, away from the zero-padded ends.
+    noise = np.percentile(smooth[width:-width], 10)
     peak = smooth.max()
-    if noise <= 0 or peak < 3 * noise:
-        return None
-    on = np.flatnonzero(smooth > noise + (peak - noise) / 2)
-    start, stop = on[0] - width // 2, on[-1] + width // 2
-    if start <= 0 or stop >= len(envelope) - 1:
-        return None                             # cut by the block edge
-    return int(start), int(stop), float((peak - noise) / noise)
+    if noise <= 0 or peak < 2.5 * noise:
+        return []
+    on = np.concatenate(([False], smooth > noise + (peak - noise) / 4,
+                         [False])).astype(np.int8)
+    edges = np.flatnonzero(np.diff(on))
+    runs = []
+    for start, stop in zip(edges[::2], edges[1::2] - 1, strict=True):
+        if runs and start - runs[-1][1] <= 3 * width:
+            runs[-1][1] = stop
+        else:
+            runs.append([start, stop])
+    bursts = []
+    for start, stop in runs:
+        if start < 2 * width or stop > len(envelope) - 1 - 2 * width:
+            continue                            # cut by the block edge
+        level = smooth[start:stop + 1].max()
+        bursts.append((int(start), int(stop), float((level - noise) / noise)))
+    return bursts
+
+
+def _baseband_envelope(block, sample_rate, chip_rate):
+    """Envelope of a block's strongest signal, band-limited to the code.
+
+    The block is shifted so its strongest spectral line -- an OOK
+    burst's carrier -- sits at 0 Hz and low-pass filtered to +-chip_rate
+    (the code's main lobe), which removes most of the noise of a wide
+    sample rate.  The carrier estimate only has to be good to a fraction
+    of that bandwidth, so an SDR's DC spike winning instead does no harm
+    when the carrier is tuned kHz away, as Thrifty does.
+    """
+    spectrum = np.fft.fft(block)
+    carrier = int(np.argmax(np.abs(spectrum)))
+    offsets = np.fft.fftfreq(len(block)) * sample_rate
+    spectrum = np.roll(spectrum, -carrier)
+    spectrum[np.abs(offsets) > chip_rate] = 0
+    return np.abs(np.fft.ifft(spectrum))
 
 
 def identify_card(stream, sample_rate=None, chip_rate=0.999707e6,
@@ -341,9 +399,11 @@ def identify_card(stream, sample_rate=None, chip_rate=0.999707e6,
 
     Needs no template.  A card holds only blocks in which a carrier was
     detected, and a Thrifty transmitter keys its carrier on and off with
-    the code, so the code is the envelope of a burst: the strongest
-    complete burst among the first *max_blocks* blocks is cut out at the
-    code length that fits its duration and passed to :func:`identify`.
+    the code, so the code is the envelope of a burst.  Complete bursts
+    are located in the first *max_blocks* blocks; for each code length
+    they measure, the strongest is cut out and passed to
+    :func:`identify`, and the clearest match wins (then the length most
+    bursts had).
 
     Returns
     -------
@@ -361,63 +421,107 @@ def identify_card(stream, sample_rate=None, chip_rate=0.999707e6,
                          "it with --sample-rate")
     bit_depth = int(header['bit_depth']) if 'bit_depth' in header else None
     sps = rate / chip_rate
-    best = None
+    bursts = {}                                 # bits -> [(strength, ...)]
     for count, (_, _, block) in enumerate(
             card_reader(stream, bit_depth=bit_depth)):
         if count >= max_blocks:
             break
-        envelope = np.abs(np.asarray(block))
-        burst = _find_burst(envelope, sps)
-        if burst is not None and (best is None or burst[2] > best[0]):
-            best = (burst[2], envelope, burst[0], burst[1])
-    if best is None:
-        return [], np.array([]), rate
-    _, envelope, start, stop = best
-    chips = (stop - start) / sps
-    bits = min(range(5, 12), key=lambda n: abs(chips / (2 ** n - 1) - 1))
-    length = int(sps * (2 ** bits - 1))
-    segment = envelope[start:start + length]
-    if len(segment) < length:                   # burst estimate ran long
-        segment = envelope[len(envelope) - length:]
-    return identify(segment, rate, chip_rate), segment, rate
+        envelope = _baseband_envelope(np.asarray(block), rate, chip_rate)
+        for start, stop, strength in _find_bursts(envelope, sps):
+            bits = _code_bits_for((stop - start) / sps)
+            if bits is not None:
+                bursts.setdefault(bits, []).append(
+                    (strength, envelope, (start + stop) // 2))
+    best = ([], np.array([]))
+    best_key = None
+    for bits, found in bursts.items():
+        # A piece of a longer burst can measure like a short code, but
+        # correlates with none of them clearly.
+        _, envelope, middle = max(found, key=lambda b: b[0])
+        length = int(sps * (2 ** bits - 1))
+        if length > len(envelope):
+            continue
+        first = min(max(middle - length // 2, 0), len(envelope) - length)
+        segment = envelope[first:first + length]
+        results = identify(segment, rate, chip_rate)
+        key = (is_clear_match(results), len(found),
+               abs(results[0]['correlation']) if results else 0.0)
+        if best_key is None or key > best_key:
+            best, best_key = (results, segment), key
+    return best[0], best[1], rate
 
 
 def is_clear_match(results):
     """Whether :func:`identify`'s best candidate stands out.
 
     A matched template correlates 0.7-1.0 (noise and chip-edge shape
-    lower it); every other code of a Gold family stays near 65 / 2047
-    ... 0.15.
+    lower it).  Other codes of an 11-bit family stay near 65 / 2047 ...
+    0.15, but a burst is correlated aperiodically, and codes of 31 or 63
+    chips reach 0.3-0.55 against each other -- hence a looser ratio, and
+    a higher floor, for those.
     """
     if not results:
         return False
     best = abs(results[0]['correlation'])
     runner = abs(results[1]['correlation']) if len(results) > 1 else 0.0
+    if results[0]['bits'] <= 6:
+        return best >= 0.65 and best >= 1.6 * runner
     return best >= 0.5 and best >= 2.5 * runner
 
 
 def load_template_file(path):
     """Read a template: ``.npy``, or fastdet's ``.tpl`` (an int16 sample
-    count followed by float32 samples, see scripts/npy_to_tpl.py)."""
+    count followed by float32 samples, see scripts/npy_to_tpl.py).
+
+    Raises
+    ------
+    ValueError
+        When the file is not a non-empty 1-D template.
+    """
     if str(path).endswith('.tpl'):
         with open(path, 'rb') as tpl:
-            count = int(np.fromfile(tpl, dtype=np.int16, count=1)[0])
-            return np.fromfile(tpl, dtype=np.float32, count=count)
-    return np.load(path)
+            header = np.fromfile(tpl, dtype=np.int16, count=1)
+            if len(header) == 0 or int(header[0]) <= 0:
+                raise ValueError("{}: not a .tpl template (no sample "
+                                 "count)".format(path))
+            count = int(header[0])
+            template = np.fromfile(tpl, dtype=np.float32, count=count)
+        if len(template) < count:
+            raise ValueError("{}: truncated .tpl, {} of {} samples".format(
+                path, len(template), count))
+        return template
+    try:
+        template = np.load(path)
+    except (ValueError, EOFError) as exc:
+        raise ValueError("cannot load template {}: {}".format(
+            path, exc)) from None
+    if getattr(template, 'ndim', None) != 1 or len(template) == 0:
+        raise ValueError("{} is not a 1-D sample array".format(path))
+    return template
 
 
 def _print_identification(path, template, results, sample_rate=None,
-                          chip_rate=0.999707e6, from_card=False):
+                          chip_rate=0.999707e6, from_card=False,
+                          filtered=False):
     """Print :func:`identify`'s verdict; True for a clear match.
 
     *from_card*: *template* is a burst cut from a capture, whose start is
     only known to a few chips, so its cyclic shift means nothing.
+    *filtered*: candidates existed, but none of the requested register
+    length or family.
     """
+    if from_card and not len(template):
+        print("{}: no complete burst found in the first blocks: capture "
+              "one transmitter, close enough for a clean burst".format(path))
+        return False
     what = "burst" if from_card else "template"
     print("{}: {} of {} samples".format(path, what, len(template)))
+    if filtered:
+        print("  no code of the requested register length / family fits")
+        return False
     if not results:
-        print("  no code found: no complete burst in the card, or no "
-              "register length fits this template's length")
+        print("  no code found: no register length fits this {}'s "
+              "length at this sample rate".format(what))
         return False
     best = results[0]
     runner = results[1] if len(results) > 1 else None
@@ -528,23 +632,28 @@ def _main():
 
     if args.identify:
         rate = args.sample_rate
-        if args.identify.endswith(('.npy', '.tpl')):
-            template = load_template_file(args.identify)
-            results = identify(template, args.sample_rate, args.chip_rate)
-        else:
-            with open(args.identify, 'rb') as card:
-                try:
+        from_card = not args.identify.endswith(('.npy', '.tpl'))
+        try:
+            if not from_card:
+                template = load_template_file(args.identify)
+                results = identify(template, args.sample_rate,
+                                   args.chip_rate)
+            else:
+                with open(args.identify, 'rb') as card:
                     results, template, rate = identify_card(
                         card, args.sample_rate, args.chip_rate)
-                except ValueError as exc:
-                    parser.error(str(exc))
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        found = bool(results)
         if args.length is not None:
             results = [r for r in results if r['bits'] == args.length]
         if args.family is not None:
-            results = [r for r in results if r['family'] == args.family]
+            # Codes other than 8 and 10 bits are in both families.
+            results = [r for r in results if r['family'] == args.family
+                       or r['bits'] not in LEGACY_TAPS]
         sys.exit(0 if _print_identification(
             args.identify, template, results, rate, args.chip_rate,
-            from_card=not args.identify.endswith(('.npy', '.tpl')))
+            from_card=from_card, filtered=found and not results)
             else 1)
     if args.length is None:
         parser.error("the register length is required (or --identify)")

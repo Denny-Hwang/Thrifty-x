@@ -44,7 +44,10 @@ static int check_header_line(card_reader_t* state, const char* line) {
                                           history, "-h");
     }
     if (strncmp(line, "# arguments:", 12) == 0) {
-        return check_recorded(line, "history_size: ", history, "-h");
+        int ret = check_recorded(line, " block_size: ",
+                                 state->settings.block_size, "-b");
+        return ret ? ret : check_recorded(line, "history_size: ",
+                                          history, "-h");
     }
     return 0;
 }

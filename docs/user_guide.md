@@ -499,8 +499,9 @@ keep the table below internally consistent.
 > ⚠️  `template.npy` **must be generated at the capture's `sample_rate`**.
 > `detect` takes the sample rate and block geometry from the card's
 > `#v2` header, but it cannot correct a template made for another rate:
-> a mismatch produces zero detections (`detect` warns when its template
-> holds no code at the card's sample rate). When you change the
+> a mismatch loses the weak bursts and turns strong ones into false
+> detections with wrong SoAs (`detect` warns when its template holds no
+> code at the card's sample rate). When you change the
 > sample rate, regenerate the template (see [Section 6.5](#65-template-regeneration-when-changing-devices)).
 
 ### 5.4 Frequently Used Airspy CLI Flags
@@ -579,7 +580,7 @@ for 8 and 10 bits, a **family**:
   Thrifty, and Thrifty-X before this was fixed, generated for 8 and 10
   bits.  They are not Gold codes (the 10-bit ones reach 97 of 1023,
   −20.5 dB), but transmitters programmed from `template_generate 10 N`
-  of an earlier release send them, and only a legacy template detects
+  of an earlier release send them, and only a legacy template matches
   those.
 
 Those bounds are periodic.  A burst is correlated once, aperiodically,
@@ -594,7 +595,8 @@ check it on a capture (Section 6.4) rather than assuming it.
 
 The **template** is that code sampled at the receiver's sample rate.
 Detection is performed by FFT-based correlation between captured blocks
-and this template; `detect` logs which code its template holds.
+and this template; `detect` prints which code its template holds at
+the start of every run.
 
 ### 6.2 Theoretical Template
 
@@ -607,8 +609,13 @@ thriftyx template_generate 10 3 --family legacy -o template.npy
 ```
 
 8- and 10-bit codes need `--family`: the same index is a different code
-in each family, and a template for the wrong one detects nothing.  The
-index must be 0 … 2^n (older releases wrapped larger values).
+in each family.  A template for the wrong code or family does not
+simply detect nothing — weak bursts are lost, and strong ones (above
+roughly 25 dB correlation SNR) are "detected" on its correlation
+sidelobes with SoAs off by hundreds of samples.  So a detection count
+does not prove a template right; check the code on a capture
+(Section 6.4).  The index must be 0 … 2^n (older releases wrapped
+larger values).
 
 The output is a clean `{−1, +1}` square wave at the configured
 sample rate. It can be generated **without any hardware**, but it does
@@ -675,12 +682,13 @@ thriftyx gold --identify initial.card
 otherwise.
 
 - A clear match correlates well above 0.5 and several times the
-  runner-up; otherwise it says that no code matches clearly.  Capture
-  one transmitter at a time, close enough for a clean burst.
+  runner-up (less for 5- and 6-bit codes, whose 31 or 63 chips
+  correlate more with each other); otherwise it says that no code
+  matches clearly.  Capture one transmitter at a time, close enough for
+  a clean burst.
 - It also reads a template (`.npy`, or fastdet's `.tpl`): `thriftyx
   gold --identify template.npy --sample-rate 6M` tells which code an
-  existing template holds — the one that currently detects is the
-  best evidence of what the fleet sends.
+  existing template holds.
 - `--family` and a register length narrow the search (`thriftyx gold 10
   --family legacy --identify initial.card`).
 - For a template it also reports the cyclic shift: other than 0, the

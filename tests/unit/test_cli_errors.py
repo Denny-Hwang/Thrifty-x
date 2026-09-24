@@ -169,7 +169,7 @@ def test_load_template_names_its_code(tmp_path, caplog):
     with caplog.at_level(logging.INFO):
         template = detect.load_template(path, sample_rate=6e6)
     assert len(template) == 6139
-    assert 'the 10-bit code 3 of the legacy family' in caplog.text
+    assert 'the 10-bit legacy (not Gold) code 3' in caplog.text
     assert 'WARNING' not in caplog.text
 
 

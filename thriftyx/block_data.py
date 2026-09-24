@@ -270,8 +270,9 @@ def peek_card_header(stream):
             break  # first data line: a headerless (v1) file
     if header and 'block_history' not in header:
         # fastcapture/fastdet cards from before the #v2 line recorded
-        # block_history carry it on the next comment line:
-        # "# arguments: { ..., history_size: 4920 }".
+        # block_history (and, earlier still, block_size) carry them on
+        # the next comment line:
+        # "# arguments: { ..., block_size: 16384, history_size: 4920 }".
         while True:
             line = stream.readline()
             if not line:
@@ -280,9 +281,13 @@ def peek_card_header(stream):
             text = _decode_line(line)
             if not text.startswith('#'):
                 break
-            match = re.search(r'history_size:\s*(\d+)', text)
-            if text.startswith('# arguments:') and match:
-                header['history_size'] = match.group(1)
+            if not text.startswith('# arguments:'):
+                continue
+            for field, key in (('history_size', 'history_size'),
+                               ('block_size', 'arguments_block_size')):
+                match = re.search(field + r':\s*(\d+)', text)
+                if match:
+                    header[key] = match.group(1)
     return header, _ReplayStream(consumed, stream)
 
 

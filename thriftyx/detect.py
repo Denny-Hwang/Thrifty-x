@@ -105,17 +105,20 @@ class Detector:
         return self.next()
 
 
-def load_template(path, sample_rate=None, chip_rate=None):
+def load_template(path, sample_rate=None, chip_rate=None, report=None):
     """Load a template (``.npy``) and check which code it holds.
 
     A template generated for a different sample rate, or for another
-    code or code family than the transmitters send, still "works" -- it
-    just correlates poorly and nothing is detected.  So when the sample
-    rate is known the template's code is identified
-    (:func:`thriftyx.gold.identify`): logged at INFO, so every run
-    records which code it searches for, and a warning when no code
-    matches at this rate (code lengths double with the register length,
-    so a template for half or twice the rate can have a valid length).
+    code or code family than the transmitters send, still "works": it
+    does not match the bursts, so weak ones go undetected and strong
+    ones are "detected" on its cross-correlation sidelobes, with
+    sample-of-arrival values that are off by hundreds of samples.  So
+    when the sample rate is known the template's code is identified
+    (:func:`thriftyx.gold.identify`) and reported -- logged at INFO and
+    passed to *report* (e.g. ``print``), so every run records which code
+    it searches for -- with a warning when no code matches at this rate
+    (code lengths double with the register length, so a template for
+    half or twice the rate can have a valid length).
 
     Raises
     ------
@@ -137,10 +140,15 @@ def load_template(path, sample_rate=None, chip_rate=None):
         results = gold.identify(template, sample_rate, chip_rate)
         if gold.is_clear_match(results):
             best = results[0]
-            logging.info(
-                "template %s holds the %d-bit code %d of the %s family "
-                "(correlation %.2f)", path, best['bits'], best['index'],
-                best['family'], abs(best['correlation']))
+            family = ('Gold' if best['family'] == 'gold'
+                      else 'legacy (not Gold)')
+            message = ("template {} holds the {}-bit {} code {} "
+                       "(correlation {:.2f})".format(
+                           path, best['bits'], family, best['index'],
+                           abs(best['correlation'])))
+            logging.info("%s", message)
+            if report is not None:
+                report(message)
             chips = 2 ** best['bits'] - 1
             if min(best['shift'], chips - best['shift']) > 1:
                 logging.warning(
@@ -317,8 +325,9 @@ def detector_cli(detector_class, parser=None, extra_args=None):
 
     bin_freq = config.sample_rate / config.block_size
     window = normalize_freq_range(config.carrier_window, bin_freq)
-    template = load_template(config.template, config.sample_rate,
-                             config.get('chip_rate'))
+    template = load_template(
+        config.template, config.sample_rate, config.get('chip_rate'),
+        report=None if args.quiet else lambda m: print(m, file=info_out))
 
     settings = DetectorSettings(block_len=config.block_size,
                                 history_len=config.block_history,

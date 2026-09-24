@@ -75,6 +75,11 @@ int main(void) {
         "#v2 bit_depth=12 sample_rate=0 endian=little block_size=16\n"
         "# arguments: { carrier_bin: '0-15', threshold: '0c+5s', "
         "block_size: 16, history_size: 9 }\n") == -7);
+    /* Before 611e320 the #v2 line held no sizes at all. */
+    CHECK(read_first_block(
+        "#v2 bit_depth=12 sample_rate=6000000\n"
+        "# arguments: { carrier_bin: '0-15', threshold: '0c+5s', "
+        "block_size: 32, history_size: 4 }\n") == -7);
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

@@ -141,6 +141,55 @@ def test_c_card_arguments_line_gives_the_history():
     assert (config.block_size, config.block_history) == (16384, 4920)
 
 
+@pytest.mark.parametrize('rate', ['3M', '6M'])
+def test_c_card_with_unknown_rate_keeps_its_arguments_geometry(rate):
+    """fastdet -x cards once wrote sample_rate=0: the '# arguments'
+    geometry must still win over the configured rate's defaults."""
+    config = settings.load({'sample_rate': rate}, None)
+    config = settings.Namespace(config)
+    config.explicit_keys = frozenset({'sample_rate'})
+    config = settings.apply_card_header(
+        config, {'sample_rate': '0', 'block_size': '16384',
+                 'history_size': '4920'})
+    assert (config.block_size, config.block_history) == (16384, 4920)
+
+
+@pytest.mark.parametrize('explicit_history', [False, True])
+def test_c_card_without_block_size_on_v2_line(explicit_history):
+    """Before 611e320 the #v2 line held only bit_depth and sample_rate;
+    both sizes were on '# arguments'."""
+    text = ("#v2 bit_depth=12 sample_rate=3000000\n"
+            "# arguments: { carrier_bin: '0--1', threshold: '100c+2s', "
+            "block_size: 16384, history_size: 4920 }\n")
+    header, _ = block_data.peek_card_header(io.StringIO(text))
+    overrides = {'block_history': 4920} if explicit_history else {}
+    config = _config(explicit=set(overrides), **overrides)  # 6M defaults
+    config = settings.apply_card_header(config, header)
+    assert (config.sample_rate, config.block_size,
+            config.block_history) == (3e6, 16384, 4920)
+
+
+def test_old_python_card_with_explicit_history_gets_its_block_size():
+    """A 3M Python card from before block_size was recorded: --history,
+    as the warning advises, must not break the block size."""
+    config = _config(explicit={'block_history'}, block_history=4920)
+    config = settings.apply_card_header(config, {'sample_rate': '3000000'})
+    assert (config.block_size, config.block_history) == (16384, 4920)
+
+
+def test_recorded_short_history_gives_no_config_advice(caplog):
+    """A card captured before the 11-bit geometry: its header, not the
+    config, set the overlap."""
+    with caplog.at_level(logging.INFO):
+        config = settings.apply_card_header(
+            _config(), {'sample_rate': '6000000', 'block_size': '32768',
+                        'block_history': '12278'})
+    assert config.block_history == 12278
+    assert 'from the config' not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert 'holds codes up to 10 bits' in caplog.text
+
+
 def test_unknown_old_geometry_is_assumed_loudly(caplog):
     """No history anywhere and a block_size the old default rule would
     not have chosen: the old rule's history, with a warning."""
