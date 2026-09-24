@@ -172,6 +172,13 @@ cp ~/thrifty-x/rpi/thriftyx-capture.cfg.example /var/lib/thriftyx/capture.cfg
 $EDITOR /var/lib/thriftyx/capture.cfg   # adjust tuner_freq, gain, etc.
 ```
 
+Keep `sample_rate` the same on every node (the example's `6M`, the
+Airspy Mini default).  The server that combines the nodes' detections
+must use that rate too: `thriftyx tdoa -s 6M`, or `sample_rate: 6M` in
+its `detector.cfg` (`example/detector_mini.cfg` has it).  TDOAs are
+counted in samples, so a different rate on the server scales every
+TDOA and puts every position far off, without an error.
+
 `capture` ignores the file's `rxid` (a `.card` does not record it).
 The receiver id is set when its cards are detected, with `thriftyx
 detect rx1.card -o rx1.toad --rxid 1` or with `-c` and this file.

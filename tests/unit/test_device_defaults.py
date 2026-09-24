@@ -11,12 +11,17 @@ the same rate capture used.
 """
 
 import argparse
+import re
+from pathlib import Path
 
 import pytest
 
 from thriftyx import config_validator, settings, tdoa_est
 from thriftyx.exceptions import ConfigValidationError
 from thriftyx.hal import profiles
+from thriftyx.setting_parsers import metric_float
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 class TestDerivedDefaults:
@@ -79,6 +84,26 @@ class TestTdoaRateFallback:
         assert rate == settings.load({'device_type': 'airspy_r2'})[
             'sample_rate']
         assert "using the airspy_r2 default" in caplog.text
+
+    def test_pi_nodes_capture_at_the_documented_server_rate(self):
+        """Regression: the Pi capture template captured at 3M while the
+        README's server step (and detector_mini.cfg, which it copies to
+        detector.cfg) used 6M -- every TDOA doubled, positions far off,
+        no error.  All of them, and the Mini default, name one rate."""
+        rates = {}
+        for name in ('rpi/thriftyx-capture.cfg.example',
+                     'example/detector_mini.cfg'):
+            with open(REPO / name) as config:
+                values = settings.load(config_file=config)
+            assert config_validator.validate_config(values) == [], name
+            rates[name] = values['sample_rate']
+        readme = (REPO / 'README.md').read_text()
+        cli = re.findall(r'thriftyx tdoa -s (\S+)', readme)
+        assert cli
+        for value in cli:
+            rates['README: tdoa -s ' + value] = metric_float(value)
+        assert set(rates.values()) == \
+            {profiles.AIRSPY_MINI.default_sample_rate}, rates
 
 
 class TestExplicitKeysPlumbing:

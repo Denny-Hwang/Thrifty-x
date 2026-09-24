@@ -237,12 +237,20 @@ thriftyx capture rx0.card --duration 60
 thriftyx detect rx0.card -o rx0.toad --rxid 0
 
 # 3. On the central server, combine .toad files from all receivers.
-#    Each step reads the previous one's default output file:
+#    Each step reads the previous one's default output file.  tdoa -s
+#    must be the rate the receivers captured at (sample_rate in their
+#    config: 6M in detector_mini.cfg and in the Pi nodes'
+#    rpi/thriftyx-capture.cfg.example):
 thriftyx identify rx0.toad rx1.toad rx2.toad   # -> data.toads (adds txid)
 thriftyx match                                 # -> data.match
 thriftyx tdoa -s 6M                            # -> data.tdoa (needs pos-rx.cfg, pos-beacon.cfg)
 thriftyx pos                                   # -> data.pos  (needs pos-rx.cfg)
 ```
+
+All receivers capture at one sample rate, and `tdoa` must be given
+that rate: TDOAs are measured in samples, so any other rate scales
+every TDOA and moves the positions far off without an error (`-s 6M`
+on 3 MSPS captures doubles every TDOA).
 
 Every receiver needs its own `rxid`, set by `detect --rxid N` or by
 `rxid:` in that receiver's `detector.cfg` (the example configs all say

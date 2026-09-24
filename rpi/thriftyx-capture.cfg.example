@@ -17,7 +17,12 @@ device_type:        airspy_mini
 
 # --- RF / sampling ---
 tuner_freq:         433.83M
-sample_rate:        3M           # Mini: 3M or 6M ; R2: 2.5M or 10M
+# Mini: 3M or 6M ; R2: 2.5M or 10M.  6M is the Mini default, the rate of
+# example/detector_mini.cfg.  Every receiver must capture at the same
+# rate, and the server must use it: `thriftyx tdoa -s <this rate>` (or
+# sample_rate in the server's detector.cfg).  A different rate there
+# scales every TDOA and puts the positions far off, with no error.
+sample_rate:        6M
 chip_rate:          0.999707M
 
 # --- Block layout ---
@@ -25,11 +30,12 @@ chip_rate:          0.999707M
 # rate and hold the template of any supported code (up to 11 bits).  A
 # pinned overlap that is too short makes every card uncorrelatable with
 # longer codes -- capture and the config validator warn about it.
-# block_size:       16384
-# block_history:    6206        # 3M default; 12349 at 6M
+# block_size:       32768       # 6M default; 16384 at 3M
+# block_history:    12349       # 6M default; 6206 at 3M
 capture_skip:       100
 
 # --- Carrier detection ---
+# FFT bins of 183.1 Hz with the default blocks at 6M (and at 3M).
 carrier_window:     7 - 110
 carrier_threshold:  14 * snr
 
