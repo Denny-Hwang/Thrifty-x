@@ -141,7 +141,9 @@ while [ "$(_now)" -lt "${END_TS}" ] && [ -z "${INTERRUPTED}" ]; do
     CSIZE=$(stat -c%s "${CARD_FILE}" 2>/dev/null || echo 0)
     echo "${NOW},${UP},${RSS},${TEMP},${THR},${DUSE},${CSIZE}" >> "${SAMPLES_CSV}"
     # In the background: a signal's trap runs at once, not after sleep.
-    sleep "${SAMPLE_INTERVAL_S}" &
+    # Detached from stdout, so a sleep outliving an interrupted run does
+    # not hold `ssh node soak_test.sh` or a `| tee` open until it ends.
+    sleep "${SAMPLE_INTERVAL_S}" >/dev/null 2>&1 &
     wait $!
 done
 

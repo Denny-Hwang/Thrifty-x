@@ -153,8 +153,10 @@ GIT_BIN="$(command -v git)" || die "git not found"
 git() { as_owner "${GIT_BIN}" "$@"; }
 # write_owned TEXT FILE: FILE (in the clone) holds TEXT, owned by OWNER.
 write_owned() {
+    # Written next to the file and renamed over it, so a power loss
+    # leaves the old record or the new one, never an empty file.
     # shellcheck disable=SC2016  # expanded by the inner sh
-    as_owner sh -c 'echo "$1" > "$2"' _ "$1" "$2"
+    as_owner sh -c 'echo "$1" > "$2.tmp" && mv -f "$2.tmp" "$2"' _ "$1" "$2"
 }
 
 # Ensure clean tree — refuse to update on top of local changes.
