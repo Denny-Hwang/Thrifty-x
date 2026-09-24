@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <sys/time.h>
 
@@ -140,6 +142,24 @@ fargs_t* fargs_new() {
     return fargs;
 }
 
+/* Parse a decimal count min..max.  strtoul alone takes "-1" for
+ * ULONG_MAX -- a -h that made fargs_finalize loop forever, a -k that
+ * skipped the whole run -- so anything but digits is refused. */
+static bool parse_count(const char* arg, unsigned long min,
+                        unsigned long max, unsigned long* out) {
+    if (*arg < '0' || *arg > '9') {
+        return false;
+    }
+    char* endptr;
+    errno = 0;
+    unsigned long value = strtoul(arg, &endptr, 10);
+    if (errno != 0 || *endptr != '\0' || value < min || value > max) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
 /* Parse a gain index 0..max, printing why when it is not one. */
 static bool parse_gain_index(const char* arg, int max, const char* stage,
                              int* out) {
@@ -169,7 +189,7 @@ int fargs_finalize(fargs_t *fa) {
             min_block = 2 * fa->history_len;
         }
         size_t block = DEFAULT_BLOCK_LEN;
-        while (block < min_block) {
+        while (block < min_block && block <= MAX_BLOCK_LEN) {
             block *= 2;
         }
         fa->block_len = block;
@@ -190,8 +210,6 @@ int fargs_finalize(fargs_t *fa) {
 int fargs_parse_opt(fargs_t *fargs,
                     int key,
                     char *arg) {
-    char* endptr;
-
     switch (key) {
         case ARGP_KEY_CARD:
             fargs->input_card = true;
@@ -212,34 +230,43 @@ int fargs_parse_opt(fargs_t *fargs,
                 return FARGS_INVALID_VALUE;
             }
             break;
-        case 'b':
-            fargs->block_len = strtoul(arg, &endptr, 10);
-            if (*endptr != '\0' || fargs->block_len < 1) {
-                return FARGS_INVALID_VALUE;
-            }
+        case 'b': {
             /* fastdet's correlation peak index is a uint16_t
              * (corr_detector.cpp), so an FFT longer than 65536 bins
              * would silently wrap peak indices.  Also enforce the
              * documented power-of-two requirement (FFT length). */
-            if (fargs->block_len > MAX_BLOCK_LEN
-                    || (fargs->block_len & (fargs->block_len - 1)) != 0) {
+            unsigned long len;
+            if (!parse_count(arg, 1, MAX_BLOCK_LEN, &len)
+                    || (len & (len - 1)) != 0) {
+                fprintf(stderr, "invalid block length '%s': expected a "
+                        "power of two up to %d\n", arg, MAX_BLOCK_LEN);
                 return FARGS_INVALID_VALUE;
             }
+            fargs->block_len = len;
             fargs->block_len_set = true;
             break;
-        case 'h':
-            fargs->history_len = strtoul(arg, &endptr, 10);
-            if (*endptr != '\0' || fargs->history_len < 1) {
+        }
+        case 'h': {
+            unsigned long len;
+            if (!parse_count(arg, 1, MAX_BLOCK_LEN - 1, &len)) {
+                fprintf(stderr, "invalid history length '%s': expected "
+                        "1-%d\n", arg, MAX_BLOCK_LEN - 1);
                 return FARGS_INVALID_VALUE;
             }
+            fargs->history_len = len;
             fargs->history_len_set = true;
             break;
-        case 'k':
-            fargs->skip = strtoul(arg, &endptr, 10);
-            if (*endptr != '\0') {
+        }
+        case 'k': {
+            unsigned long skip;
+            if (!parse_count(arg, 0, UINT_MAX, &skip)) {
+                fprintf(stderr, "invalid number of blocks to skip '%s': "
+                        "expected 0-%u\n", arg, UINT_MAX);
                 return FARGS_INVALID_VALUE;
             }
+            fargs->skip = (unsigned)skip;
             break;
+        }
         case 'q':
             fargs->silent = true;
             break;
@@ -288,12 +315,15 @@ int fargs_parse_opt(fargs_t *fargs,
             fargs->sdr_sample_rate = (uint32_t)(rate + 0.5);
             break;
         }
-        case 'd':
-            fargs->sdr_dev_index = strtoul(arg, &endptr, 10);
-            if (*endptr != '\0') {
+        case 'd': {
+            unsigned long index;
+            if (!parse_count(arg, 0, UINT32_MAX, &index)) {
+                fprintf(stderr, "invalid device index '%s'\n", arg);
                 return FARGS_INVALID_VALUE;
             }
+            fargs->sdr_dev_index = (uint32_t)index;
             break;
+        }
         default:
             return FARGS_UNKNOWN;
     }

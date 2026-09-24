@@ -23,7 +23,7 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 | Replaying a `.card` (`fastdet --card`) | Block geometry from the arguments | Refused, with the `-b`/`-h` to rerun with, when the card's `#v2` header (or the `# arguments` line of older cards) records a different geometry: it decides every SoA |
 | Device unplugged | Hangs | The reader notices within 1 s (`airspy_is_streaming`), or after 10 s without samples, and exits non-zero so a supervisor restarts it |
 | Output write fails | — | Full disk or a closed pipe ends the run with an error (SIGPIPE is ignored) |
-| Argument checks | — | `-s` must be a rate (1M-10M: libairspy reads values below 100 as a rate *index*), `-f` 24M-1.8G, `-g` 0-14, `-M`/`-V` 0-15 |
+| Argument checks | — | `-s` must be a rate (1M-10M: libairspy reads values below 100 as a rate *index*), `-f` 24M-1.8G, `-g` 0-14, `-M`/`-V` 0-15, `-b` a power of two up to 65536, `-h` 1-65535, `-k` 0-4294967295; counts take digits only (`-h -1` used to hang, `-k -1` to skip the whole run) |
 
 ## Hardware-Independent Components (unchanged)
 
