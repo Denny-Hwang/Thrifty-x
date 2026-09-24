@@ -189,7 +189,8 @@ Payload schema (HTTP POST JSON, every 60 seconds):
   check `service_state` and `journalctl -u thriftyx-capture@rx<RXID>`).
 - `last_block_ts` is the capture timestamp of the newest detected block
   (the last data line of the newest card that has one; `null` when no
-  card under `THRIFTYX_OUT/card` holds a block).  Rotation does not
+  card under `THRIFTYX_OUT/card` holds a block.  Only the last 8 MB of
+  a card, and 32 MB of cards per heartbeat, are searched).  Rotation does not
   refresh it, so while transmitters are on air a value much older than
   their transmit interval means capture is running but detecting
   nothing (antenna, gain, frequency).

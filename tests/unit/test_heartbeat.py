@@ -147,6 +147,68 @@ def test_last_block_ts_long_lines_and_line_being_written(heartbeat,
     assert heartbeat._last_block_ts(cards) == _iso(1_760_000_100)
 
 
+def _count_reads(heartbeat, monkeypatch):
+    """Make the heartbeat's open() count the bytes it reads."""
+    total = [0]
+
+    class Counting:
+        def __init__(self, f):
+            self._f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+
+        def seek(self, *args):
+            return self._f.seek(*args)
+
+        def read(self, *args):
+            data = self._f.read(*args)
+            total[0] += len(data)
+            return data
+
+    monkeypatch.setattr(heartbeat, 'open',
+                        lambda *a, **k: Counting(open(*a, **k)),
+                        raising=False)
+    return total
+
+
+def test_last_block_ts_reads_a_bounded_tail(heartbeat, monkeypatch,
+                                            tmp_path):
+    """Regression: with no parseable data line in the newest card the
+    tail read doubled up to the whole file (a 300 MB card: 868 MB peak,
+    8 s, every minute).  A card whose last _TAIL_MAX bytes hold no
+    block counts as having none."""
+    monkeypatch.setattr(heartbeat, '_TAIL_CHUNK', 1 << 10)
+    monkeypatch.setattr(heartbeat, '_TAIL_MAX', 64 << 10)
+    cards = tmp_path / 'card'
+    detected = 1_760_000_000
+    _card(cards / 'rx0_a.card', [(detected, 100)], age_s=3600)
+    garbage = cards / 'rx0_b.card'
+    garbage.write_bytes((b'x' * 999 + b'\n') * 2000)     # 2 MB, no block
+    total = _count_reads(heartbeat, monkeypatch)
+    assert heartbeat._last_block_ts(cards) == _iso(detected)
+    assert total[0] <= (64 << 10) + (cards / 'rx0_a.card').stat().st_size
+
+
+def test_last_block_ts_scan_has_a_total_budget(heartbeat, monkeypatch,
+                                               tmp_path):
+    monkeypatch.setattr(heartbeat, '_TAIL_CHUNK', 1 << 10)
+    monkeypatch.setattr(heartbeat, '_TAIL_MAX', 64 << 10)
+    monkeypatch.setattr(heartbeat, '_SCAN_MAX', 200 << 10)
+    cards = tmp_path / 'card'
+    _card(cards / 'rx0_old.card', [(1_760_000_000, 100)], age_s=7200)
+    for k in range(10):
+        path = cards / 'rx0_{}.card'.format(k)
+        path.write_bytes((b'x' * 999 + b'\n') * 100)     # 100 kB each
+        os.utime(path, (time.time() - k, time.time() - k))
+    total = _count_reads(heartbeat, monkeypatch)
+    assert heartbeat._last_block_ts(cards) is None
+    assert total[0] <= 200 << 10
+
+
 def test_last_block_ts_without_blocks(heartbeat, monkeypatch, tmp_path):
     cards = tmp_path / 'card'
     assert heartbeat._last_block_ts(cards) is None       # no directory

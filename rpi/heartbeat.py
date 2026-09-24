@@ -128,24 +128,38 @@ def _last_detection_ts(card_dir: Path) -> str | None:
     return _iso(cards[0][0]) if cards else None
 
 
-# Tail read size, doubled until a whole data line fits: one block of
-# 32768 int16 I/Q samples is a ~175 kB line of base64.
+# The tail is read backwards in chunks, doubling from _TAIL_CHUNK: one
+# block of 32768 int16 I/Q samples is a ~175 kB line of base64, so a
+# card holding blocks has one in its first read.  A card whose last
+# _TAIL_MAX bytes hold no complete block line (a corrupt file, one huge
+# line) counts as having none, and one heartbeat reads at most
+# _SCAN_MAX bytes of cards in all: a timer that runs every minute on
+# the capture node must not read hundreds of MB.
 _TAIL_CHUNK = 1 << 18
+_TAIL_MAX = 8 << 20
+_SCAN_MAX = 32 << 20
 
 
-def _last_block_time(path: Path) -> float | None:
-    """Timestamp field of the last complete data line of a card file."""
+def _last_block_time(path: Path, limit: int) -> tuple[float | None, int]:
+    """Timestamp field of the last complete data line of a card file,
+    looking at most `limit` bytes back from its end, and the number of
+    bytes read."""
+    nread = 0
     try:
         with open(path, 'rb') as f:
             size = f.seek(0, os.SEEK_END)
-            chunk = _TAIL_CHUNK
-            while True:
-                start = max(0, size - chunk)
-                f.seek(start)
-                lines = f.read(size - start).split(b'\n')
+            floor = max(0, size - limit)
+            start, chunk, tail = size, _TAIL_CHUNK, b''
+            while start > floor:
+                begin = max(floor, start - chunk)
+                f.seek(begin)
+                data = f.read(start - begin)
+                nread += len(data)
+                tail = data + tail
+                start = begin
+                lines = tail.split(b'\n')
                 # The last piece is empty or a line still being
-                # written; the first is cut unless the read began at
-                # the start of the file.
+                # written; the first is cut unless it starts the file.
                 lines = lines[:-1] if start == 0 else lines[1:-1]
                 for line in reversed(lines):
                     if line[:1] in (b'', b'#'):
@@ -155,12 +169,11 @@ def _last_block_time(path: Path) -> float | None:
                     except ValueError:
                         continue      # tool noise, not a block
                     if math.isfinite(ts):
-                        return ts
-                if start == 0:
-                    return None
+                        return ts, nread
                 chunk *= 2
     except OSError:
-        return None
+        pass
+    return None, nread
 
 
 def _last_block_ts(card_dir: Path) -> str | None:
@@ -172,12 +185,16 @@ def _last_block_ts(card_dir: Path) -> str | None:
     mtime it does not move when capture starts a new, header-only file
     every hour, so it goes stale when the receiver stops detecting
     (antenna, gain, frequency, transmitters off).  None when no card
-    holds a block.
+    holds a block (within the read limits above).
     """
+    budget = _SCAN_MAX
     for _mtime, path in _cards_newest_first(card_dir):
-        ts = _last_block_time(path)
+        if budget <= 0:
+            break
+        ts, nread = _last_block_time(path, min(_TAIL_MAX, budget))
         if ts is not None:
             return _iso(ts)
+        budget -= nread
     return None
 
 
