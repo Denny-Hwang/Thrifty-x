@@ -58,7 +58,9 @@ const fargs_option_t fargs_options[] = {
         "\n('-' for stdin, 'airspy' for libairspy)\n[default: stdin]",
         1},
     {"card", ARGP_KEY_CARD, 0, 0,
-        "Input is a .card file instead of binary data", 1},
+        "Input is a .card file instead of binary data (-b/-h must match "
+        "the geometry its header records; -h is required when it records "
+        "no history)", 1},
     {"wisdom-file", 'm', "<FILE>", 0,
         "Wisfom file to use for FFT calculation"
         "\n[default: don't use wisdom file]", 1},
@@ -131,6 +133,7 @@ fargs_t* fargs_new() {
 
     fargs->sdr_freq = DEFAULT_SDR_FREQ;
     fargs->sdr_sample_rate = DEFAULT_SDR_SAMPLE_RATE;
+    fargs->sdr_sample_rate_set = false;
     fargs->sdr_gain = DEFAULT_SDR_GAIN;
     fargs->sdr_mixer_gain = 0;
     fargs->sdr_vga_gain = 0;
@@ -313,6 +316,7 @@ int fargs_parse_opt(fargs_t *fargs,
                 return FARGS_INVALID_VALUE;
             }
             fargs->sdr_sample_rate = (uint32_t)(rate + 0.5);
+            fargs->sdr_sample_rate_set = true;
             break;
         }
         case 'd': {
@@ -362,10 +366,14 @@ void fargs_print_card_header(fargs_t *fa,
      * to select int16 (12-bit Airspy) sample decoding automatically.
      * endian/block_size/block_history mirror the Python write_card_header
      * so detect can reproduce the block geometry without a config file.
-     * sample_rate=0 means "unknown" (file input); readers ignore it. */
+     * sample_rate: the tuner's, or a file input's when known (-s, or
+     * the rate the input card records -- see fastcard_new); 0 means
+     * "unknown", which readers ignore. */
+    bool rate_known = sdr || fa->sdr_sample_rate_set;
     fprintf(out, "#v2 bit_depth=12 sample_rate=%u endian=little "
             "block_size=%zu block_history=%zu\n",
-            sdr ? fa->sdr_sample_rate : 0, fa->block_len, fa->history_len);
+            rate_known ? fa->sdr_sample_rate : 0,
+            fa->block_len, fa->history_len);
     fprintf(out,
             "# arguments: { carrier_bin: '%d-%d', threshold: '%gc+%gs', "
             "block_size: %zu, history_size: %zu }\n",

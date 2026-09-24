@@ -60,3 +60,9 @@ Examples:
  - Read samples from a `.card` file, output detections to a `.toad` file:
 
     fastdet --card -i rx.card -o rx.toad
+
+   The card's header decides the geometry: `-b`/`-h` must match what it
+   records (fastdet says what to rerun with), and a card that records
+   no history (Python cards from before it was recorded) needs `-h`.
+   Every block is read (`-k` does not apply), and a card written with
+   `-x` records the replayed card's sample rate.
