@@ -16,6 +16,7 @@ Match detections from the same transmitter detected by multiple receivers.
 import argparse
 
 from thriftyx import toads_data
+from thriftyx import util
 
 
 def match_toads(toads, window, min_match=2):
@@ -133,8 +134,7 @@ def _main():
     parser.add_argument('input', nargs='?',
                         type=argparse.FileType('r'), default='data.toads',
                         help=".toads data (\'-\' streams from stdin)")
-    parser.add_argument('-o', '--output', dest='output',
-                        type=argparse.FileType('w'), default='data.match',
+    parser.add_argument('-o', '--output', dest='output', default='data.match',
                         help="output file (\'-\' for stdout)")
     parser.add_argument('-w', '--window', dest='window', type=float,
                         default=0.2,
@@ -147,23 +147,26 @@ def _main():
                         action="store_true")
     args = parser.parse_args()
 
-    toads = toads_data.load_toads(args.input)
-    toads.sort(key=lambda x: x.timestamp)
-    matches, misses, collisions = match_toads(toads,
-                                              args.window,
-                                              args.num_matches)
+    with util.info_to_stderr(args.output):
+        toads = toads_data.load_toads(args.input)
+        toads.sort(key=lambda x: x.timestamp)
+        matches, misses, collisions = match_toads(toads,
+                                                  args.window,
+                                                  args.num_matches)
 
-    if args.verbose:
-        for idx1, idx2 in collisions:
-            print("Multiple detections for RX %d and TX %d: "
-                  "detection #%d and #%d collides." %
-                  (toads[idx1].rxid, toads[idx1].txid, idx1, idx2))
+        if args.verbose:
+            for idx1, idx2 in collisions:
+                print("Multiple detections for RX %d and TX %d: "
+                      "detection #%d and #%d collides." %
+                      (toads[idx1].rxid, toads[idx1].txid, idx1, idx2))
 
-    print("Number of matches:", len(matches))
-    print("Number of misses:", len(misses))
-    print("Number of collisions:", len(collisions))
+        print("Number of matches:", len(matches))
+        print("Number of misses:", len(misses))
+        print("Number of collisions:", len(collisions))
 
-    save_matches(matches, args.output)
+    # Opened only now, so a failed run leaves an earlier output intact.
+    with util.open_output(args.output) as output:
+        save_matches(matches, output)
 
 
 if __name__ == "__main__":
