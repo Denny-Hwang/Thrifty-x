@@ -202,8 +202,9 @@ def _open_new(path):
 
 
 def _pattern_repeats(pattern, rotate, now=None, rotations=1000):
-    """Whether the strftime *pattern* names two files alike when
-    rotating every *rotate* seconds -- e.g. ``rx0_%Y%m%d.card`` hourly.
+    """Whether the strftime *pattern* gives consecutive files the same
+    name when rotating every *rotate* seconds -- e.g.
+    ``rx0_%Y%m%d.card`` hourly.
 
     Checked over the next *rotations* boundaries in UTC: local time
     repeats an hour when daylight saving time ends, which
