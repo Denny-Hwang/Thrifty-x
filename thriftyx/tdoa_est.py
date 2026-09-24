@@ -110,21 +110,35 @@ def estimate_model_quality(model, detection_pairs):
     return snr
 
 
+def _centred_soas(detection_pairs, beacon_sdoa):
+    """Beacon SoAs relative to the first beacon pair's, for the fit.
+
+    SoAs count samples since the capture started (2e11 after a day at
+    2.4 Msps), and a polynomial in values that large is ill-conditioned:
+    TDOA errors grew with uptime, to 2.7 m after 100 days.  Returns
+    ``(ref0, ref1, soa1at0, soa0)``: the models fit ``soa0 - ref0``
+    against ``soa1 - ref1 + beacon_sdoa`` and evaluate a mobile pair at
+    ``det0.soa - ref0`` and ``det1.soa - ref1``.
+    """
+    soa0 = np.array([d[0].soa for d in detection_pairs])
+    soa1 = np.array([d[1].soa for d in detection_pairs])
+    ref0, ref1 = soa0[0], soa1[0]
+    return ref0, ref1, soa1 - ref1 + np.array(beacon_sdoa), soa0 - ref0
+
+
 def build_model_poly(detection_pairs, beacon_sdoa, nominal_sample_rate, deg=2):
     if len(detection_pairs) < deg + 1:
         # not enough beacon transmissions
         return None
 
-    soa0 = np.array([d[0].soa for d in detection_pairs])
-    soa1 = np.array([d[1].soa for d in detection_pairs])
-    soa1at0 = soa1 + np.array(beacon_sdoa)
+    ref0, ref1, soa1at0, soa0 = _centred_soas(detection_pairs, beacon_sdoa)
     coef = np.polyfit(soa1at0, soa0, deg)
     fit = np.poly1d(coef)
     # residuals = soa0 - fit(soa1at0)
     # print(np.mean(residuals))
 
     def evaluate(det0, det1):
-        return (det0.soa - fit(det1.soa)) / nominal_sample_rate
+        return ((det0.soa - ref0) - fit(det1.soa - ref1)) / nominal_sample_rate
 
     return evaluate
 
@@ -135,9 +149,7 @@ def build_model_weighted_poly(detection_pairs, beacon_sdoa,
         # not enough beacon transmissions
         return None
 
-    soa0 = np.array([d[0].soa for d in detection_pairs])
-    soa1 = np.array([d[1].soa for d in detection_pairs])
-    soa1at0 = soa1 + np.array(beacon_sdoa)
+    ref0, ref1, soa1at0, soa0 = _centred_soas(detection_pairs, beacon_sdoa)
 
     def evaluate(det0, det1):
         # # Option 1: weight on min energy
@@ -155,7 +167,7 @@ def build_model_weighted_poly(detection_pairs, beacon_sdoa,
         # weights = weights / np.max(weights)
 
         # Option 3: weight on "distance" from mobile unit detection
-        weights = np.sqrt(1. / (np.abs(soa0 - det0.soa)))
+        weights = np.sqrt(1. / (np.abs(soa0 - (det0.soa - ref0))))
         weights = weights / np.max(weights)
         weights = np.sqrt(weights)
         weights = (weights + 2) / 3
@@ -165,7 +177,8 @@ def build_model_weighted_poly(detection_pairs, beacon_sdoa,
         coef = np.polyfit(soa1at0, soa0, deg, w=weights)
         fit = np.poly1d(coef)
 
-        return (det0.soa - fit(det1.soa)) / nominal_sample_rate
+        return (((det0.soa - ref0) - fit(det1.soa - ref1))
+                / nominal_sample_rate)
 
     return evaluate
 

@@ -29,15 +29,17 @@ def _dist(a, b):
     return float(np.hypot(a[0] - b[0], a[1] - b[1]))
 
 
-def _sample_index(rxid, t):
-    """Receiver *rxid*'s sample counter at true time *t*."""
+def _sample_index(rxid, t, uptime=0.0):
+    """Receiver *rxid*'s sample counter at true time *t*, in a capture
+    that has been running for *uptime* seconds at t = 0."""
     if rxid == 0:
-        return FS * t
+        return FS * (uptime + t)
     # Offset, +20 ppm frequency error and a drifting rate.
-    return 1_234_567.25 + FS * (1 + 20e-6) * t + 0.5 * FS * 3e-6 * t ** 2
+    return (1_234_567.25 + FS * (1 + 20e-6) * (uptime + t)
+            + 0.5 * FS * 3e-6 * t ** 2)
 
 
-def _detections():
+def _detections(uptime=0.0):
     detections, matches = [], []
     emissions = ([(BEACON, BEACON_POS[BEACON], 0.05 * i) for i in range(20)]
                  + [(MOBILE, MOBILE_POS, 0.025 + 0.05 * i)
@@ -48,7 +50,7 @@ def _detections():
             arrival = t_emit + _dist(pos, rx) / C
             info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
             detections.append(DetectionResult(
-                arrival, 0, _sample_index(rxid, arrival), None, info,
+                arrival, 0, _sample_index(rxid, arrival, uptime), None, info,
                 rxid=rxid, txid=txid))
             group.append(len(detections) - 1)
         matches.append(group)
@@ -69,6 +71,25 @@ def test_mobile_tdoa_matches_geometry():
     got = np.array([g.tdoas['tdoa'][0] for g in groups])
     # 1e-10 s = 3 cm: the quadratic model captures this clock exactly.
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+@pytest.mark.parametrize('model', [tdoa_est.build_model_poly,
+                                   tdoa_est.build_model_weighted_poly])
+@pytest.mark.parametrize('days', [7, 30, 100])
+def test_precision_does_not_decay_with_uptime(days, model):
+    """Regression: the clock model was fitted to the raw SoAs, which
+    count samples since the capture started (5e12 after 10 days at
+    6 Msps), and the ill-conditioned fit put the TDOAs 0.4 m off after
+    7 days and 15 m after 30.  Fitted relative to the window's first
+    beacon, the TDOAs are as precise as the SoAs' float64 steps allow."""
+    detections, matches = _detections(uptime=days * 86400.0)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS,
+        model_builder=model)
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    soa_step = np.spacing(max(d.soa for d in detections)) / FS
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10 + 4 * soa_step)
 
 
 def test_beacon_geometry_is_applied():
