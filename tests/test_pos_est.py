@@ -131,6 +131,66 @@ def test_solve_numerically_behind_every_corner(corner, origin):
             np.testing.assert_allclose(position, tx_pos, atol=0.01)
 
 
+@pytest.mark.parametrize('rx_pos, tx_pos', [
+    ({0: [0, 0, 0], 1: [1000, 0, 10], 2: [0, 1000, 30], 3: [500, 500, 80]},
+     [432.6, 102, 20.3]),
+    ({0: [0, 0, 0], 1: [1000, 0, 10], 2: [0, 1000, 30], 3: [500, 500, 80]},
+     [128, 812.8, 33.1]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500512, 4000823]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500939, 4000020]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500056, 4000026]),
+])
+def test_solve_numerically_keeps_the_fit_inside_the_array(rx_pos, tx_pos):
+    """Regression: a start beyond a receiver found the mirror solution,
+    which fits exact TDOAs as well as the true position does, and won
+    the tie: these tags inside a 3-D array came out 150-210 m above it,
+    those inside a 3-receiver array (UTM coordinates) 1.5-7 km away."""
+    tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+    position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+    np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
+def test_starts_beyond_the_receivers_only_when_needed(monkeypatch):
+    """The starts beyond the receivers made pos 3 times slower; a fit
+    well inside the array does not need them."""
+    calls = []
+    least_squares = pos_est.scipy.optimize.least_squares
+
+    def counting(*args, **kwargs):
+        calls.append(args[1])
+        return least_squares(*args, **kwargs)
+
+    monkeypatch.setattr(pos_est.scipy.optimize, 'least_squares', counting)
+    rx_pos = {0: [0, 0], 1: [1200, 0], 2: [0, 1000], 3: [1200, 1000]}
+    for tx_pos, solves in (([400, 300], 2), ([-100, -100], 2 + 4)):
+        calls.clear()
+        position, _ = pos_est.solve_numerically(
+            gen_tdoa_data(rx_pos, tx_pos), rx_pos)
+        np.testing.assert_allclose(position, tx_pos, atol=0.01)
+        assert len(calls) == solves, tx_pos
+
+
+def test_1d_solve_steps_onto_a_receiver():
+    """Regression: with 3 or more receivers in 1-D, a Gauss-Newton step
+    often lands exactly on a receiver, where the Jacobian was 0/0: scipy
+    raised ValueError and the whole `pos` run aborted.  A tag beyond the
+    outermost receiver has the same TDOAs as that receiver's position,
+    which is where it is placed."""
+    rx_pos = {0: [0.0], 1: [500.0], 2: [1200.0]}
+    for tx, want in ((1500.0, 1200.0), (800.0, 800.0), (500.0, 500.0),
+                     (-300.0, 0.0)):
+        (x,), _ = pos_est.solve_numerically(gen_tdoa_data(rx_pos, [tx]),
+                                            rx_pos)
+        assert x == pytest.approx(want, abs=0.01), tx
+    groups = [(4, 1.0, 3, gen_tdoa_data(rx_pos, [1500.0]))]
+    positions = pos_est.solve(groups, rx_pos)
+    assert positions['x'][0] == pytest.approx(1200.0, abs=0.01)
+    assert np.isfinite(positions['dop'][0])
+
+
 def test_solve_skips_a_receiver_without_coordinates(capsys):
     """Regression: a .tdoa row naming a receiver missing from pos-rx.cfg
     crashed pos with a bare KeyError."""

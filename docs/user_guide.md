@@ -1126,9 +1126,10 @@ Receiver and beacon coordinates live in `pos-rx.cfg` and
 frame).  Every line in both files has the same number of coordinates:
 with `id: x y z` the tag's height is solved too, which needs at least
 4 receivers; `id: x` gives a 1-D position along the line of the
-receivers and needs at least 2.  A receiver pair that never heard a
-beacon together gets no TDOA (counted as a failure), while the other
-pairs are estimated.
+receivers and needs at least 2 (a tag beyond the outermost receiver has
+that receiver's TDOAs, and is placed there).  A receiver pair that
+never heard a beacon together gets no TDOA (counted as a failure),
+while the other pairs are estimated.
 End-to-end multi-receiver documentation will be added as the
 integration testing matures.
 
