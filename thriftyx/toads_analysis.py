@@ -228,10 +228,10 @@ def plot_column_histogram_matrix(splits, column, bins=10):
 
 def plot_offset_hist2d(splits):
     def plot(ax, detections):
-        # each timestamp bin = 2.5 minutes
-        tbins = (np.max(detections['timestamp']) -
-                 np.min(detections['timestamp'])) / 150
-        tbins = max(tbins, 1)
+        # each timestamp bin = 2.5 minutes (hist2d needs a whole number)
+        span = (np.max(detections['timestamp']) -
+                np.min(detections['timestamp']))
+        tbins = max(int(round(span / 150)), 1)
 
         ax.hist2d(detections['offset'], detections['timestamp'], [10, tbins])
         ax.set_xlabel('Time')
