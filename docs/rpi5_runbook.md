@@ -89,12 +89,19 @@ echo "exit=$?"   # 0=PASS, 1=FAIL, 2=setup error
 ```
 
 Automatic determination criteria (can be overridden with environment variables):
+- The soak ran its full duration: not interrupted (Ctrl-C, `kill`, the
+  scope stopped, a hangup without `nohup`), and capture ran at least
+  `SOAK_DURATION_S` minus 60 s (`SOAK_TOLERANCE_S`).  Capture exits 0
+  when stopped, so its exit code alone does not show a cut-short run.
 - Capture exit code == 0
 - `vcgencmd get_throttled` is `0x0` for the entire run
 - Peak CPU temperature ≤ 80°C (`MAX_TEMP_C`)
-- RSS memory growth rate ≤ 10% (median of the early vs. late portions, `MAX_MEM_GROWTH_PCT`)
+- RSS memory growth rate ≤ 10% (median of the early vs. late portions, `MAX_MEM_GROWTH_PCT`);
+  with fewer than 20 samples it is not judged and `summary.txt` says so
 - Disk free ≥ 10% (`MIN_DISK_FREE_PCT`)
 - `.card` file header integrity
+- The card holds at least one detected block (`MIN_CARD_BLOCKS`; run
+  the soak with the transmitters on air, or set it to 0)
 
 When you want to run it manually:
 
