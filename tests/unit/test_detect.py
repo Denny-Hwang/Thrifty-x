@@ -135,6 +135,17 @@ def test_first_block_failure_keeps_the_previous_output(monkeypatch,
     assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'
 
 
+def test_empty_input_keeps_the_previous_output(monkeypatch, tmp_path,
+                                               caplog):
+    """`capture - -c bad.cfg | detect - -o rx0.toad`: a capture that
+    fails at once sends nothing, and detect emptied rx0.toad."""
+    (tmp_path / 'rx0.toad').write_text('previous\n')
+    _run_detect(monkeypatch, tmp_path, '-o', 'rx0.toad', header=False)
+    assert (tmp_path / 'rx0.card').stat().st_size == 0
+    assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'
+    assert 'input is empty' in caplog.text
+
+
 def test_output_streams_once_the_first_block_passed(monkeypatch, tmp_path):
     (tmp_path / 'rx0.toad').write_text('previous\n')
     with pytest.raises(FileFormatError, match='block 1 holds'):

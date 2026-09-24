@@ -318,6 +318,11 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     output_path, mode = ((args.output, 'w') if args.append is None
                          else (args.append, 'a'))
     info_out = sys.stderr if output_path == '-' else sys.stdout
+    # Nothing at all to read (`capture ... - | detect - -o rx0.toad`
+    # whose capture failed at once) is no run either: the previous
+    # output stays.
+    peek = getattr(args.input, 'peek', None)
+    empty_input = peek is not None and not peek(1)
 
     if args.raw:
         blocks = block_reader(args.input, config.block_size,
@@ -366,8 +371,12 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                 # Output summary line
                 print(summary_liner(detected, result), file=info_out)
         if output_file is None and output_path is not None:
-            # A card without blocks: this run found nothing.
-            stack.enter_context(open(output_path, mode))
+            if empty_input:
+                logging.warning("the input is empty; %s is left as it was",
+                                output_path)
+            else:
+                # A card without blocks: this run found nothing.
+                stack.enter_context(open(output_path, mode))
     _check_yield(carriers, correlated, config.template,
                  getattr(args.input, 'name', None))
 
