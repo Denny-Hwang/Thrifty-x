@@ -31,13 +31,31 @@ void print_fcomplex(fcomplex* array, size_t len) {
 ///
 /// CorrDetector
 ///
+
+// The correlation length, once the template is known to fit the block.
+// Checked before any buffer is sized from it: an empty template made it
+// block_len + 1, and detect() then read and wrote past the end of the
+// block_len-point IFFT output.
+static size_t checked_corr_len(size_t block_len, size_t template_len) {
+    if (template_len == 0) {
+        throw std::runtime_error("the template is empty (0 samples)");
+    }
+    if (template_len > block_len) {
+        std::ostringstream msg;
+        msg << "the template (" << template_len << " samples) is longer "
+            << "than the block (" << block_len << ")";
+        throw std::runtime_error(msg.str());
+    }
+    return block_len - template_len + 1;
+}
+
 CorrDetector::CorrDetector(const vector<float> &template_samples,
                            size_t block_len,
                            size_t history_len,
                            float corr_thresh_const,
                            float corr_thresh_snr)
         : len_(block_len),
-          corr_len_(block_len - template_samples.size() + 1),
+          corr_len_(checked_corr_len(block_len, template_samples.size())),
           thresh_const_(corr_thresh_const),
           thresh_snr_(corr_thresh_snr),
           template_fft_conj_(block_len),
@@ -147,6 +165,17 @@ double CorrDetector::interpolate_gaussian(float* peak_power) {
     return offset;
 }
 
+double CorrDetector::interpolate_gaussian(float* power, size_t len,
+                                          size_t peak_idx) {
+    // A peak at either end of power[] has only one neighbour.  Like the
+    // Python gaussian_interpolation, fall back to the sample itself
+    // instead of reading outside the array.
+    if (peak_idx == 0 || peak_idx + 1 >= len) {
+        return 0;
+    }
+    return interpolate_gaussian(&power[peak_idx]);
+}
+
 float CorrDetector::estimate_noise(float peak_power, float signal_energy) {
     float signal_corr_energy = signal_energy * template_energy_;
     float noise_power = (signal_corr_energy - peak_power) / len_;
@@ -193,8 +222,13 @@ CorrDetection CorrDetector::detect(const complex<float> *shifted_fft,
     // Detection verdict
     bool detected = (peak_power > threshold);
 
+    // The search window starts at index 0 (and ends at corr_len_) when
+    // history_len is template_len - 1 or template_len, so the peak can
+    // be the first or last correlation value.
     float* corr_power_peak = &corr_power_.data()[peak_idx];
-    double offset = detected ? interpolate_gaussian(corr_power_peak) : 0;
+    double offset = detected
+        ? interpolate_gaussian(corr_power_.data(), corr_len_, peak_idx)
+        : 0;
 
     CorrDetection det;
     det.detected = detected;
@@ -207,11 +241,11 @@ CorrDetection CorrDetector::detect(const complex<float> *shifted_fft,
 }
 
 CorrDetection CorrDetector::detect(const fastcard_data_t &carrier_det) {
-    // Frequency sync: roll
+    // Frequency sync: roll (argmax is unsigned: negate it as an int)
     roll(shifted_fft_.data(),
          carrier_det.fft,
          len_,
-         -carrier_det.detection.argmax);
+         -(int)carrier_det.detection.argmax);
 
     float signal_energy = carrier_det.detection.fft_sum / len_;
 
@@ -253,16 +287,26 @@ vector<float> load_template(string filename) {
         uint16_t length;
         // TODO: proper error handling for read
         ifs.read((char*)&length, 2);
+        // As thriftyx's gold.load_template_file: a zero count is an
+        // empty .npy run through npy_to_tpl.py, or a zero-filled file.
+        if (length == 0) {
+            throw std::runtime_error(
+                "Failed to load template '" + filename
+                + "': sample count is 0 (not a .tpl template)");
+        }
 
         // read data
         vector<float> data(length);
-        ifs.read((char*)&data[0], length*sizeof(float));
+        ifs.read((char*)data.data(), length*sizeof(float));
 
         return data;
 
     } catch (std::ios_base::failure& e) {
+        // A short read leaves errno as it was: say what happened.
         stringstream ss;
-        ss << "Failed to load template: " << strerror(errno);
+        ss << "Failed to load template '" << filename << "': "
+           << (ifs.is_open() && ifs.eof() ? "the file is truncated"
+                                          : strerror(errno));
         throw std::runtime_error(ss.str());
     }
 }

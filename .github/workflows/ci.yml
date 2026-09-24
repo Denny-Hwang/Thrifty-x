@@ -87,11 +87,13 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: cmake --build build/${{ matrix.target }} --config Release -j
       - name: C unit tests
-        # Ring-buffer and timestamp-queue tests, including the exact-size put that used to
-        # deadlock live Airspy capture.  test_circbuf aborts itself on a
-        # hang, so a regression fails instead of stalling the runner.
-        if: matrix.target == 'fastcapture'
-        run: ctest --test-dir build/fastcapture --output-on-failure
+        # fastcapture: ring-buffer and timestamp-queue tests, including
+        # the exact-size put that used to deadlock live Airspy capture
+        # (test_circbuf aborts itself on a hang, so a regression fails
+        # instead of stalling the runner), and the carrier search.
+        # fastdet: correlator edges, `-x -` card output, and an install
+        # into a scratch prefix (binary RPATH, fastdet.pc).
+        run: ctest --test-dir build/${{ matrix.target }} --output-on-failure
       - name: Smoke-check binary output
         # Both CLIs use argp, so --help exits 0.  This step must FAIL
         # when the binary is missing or --help crashes — no `|| true`.
@@ -99,6 +101,14 @@ jobs:
           BIN=build/${{ matrix.target }}/${{ matrix.target == 'fastcapture' && 'fastcapture' || 'fastdet' }}
           test -x "$BIN"
           "$BIN" --help >/dev/null
+      - name: Smoke-check the installed fastdet
+        # What an operator runs: the build-tree binary's RUNPATH hides a
+        # libfastdet.so the installed one cannot find.  No ldconfig
+        # first: the binary must not depend on the loader cache.
+        if: matrix.target == 'fastdet'
+        run: |
+          sudo cmake --install build/fastdet --prefix /usr/local
+          env -u LD_LIBRARY_PATH /usr/local/bin/fastdet --help >/dev/null
       - name: Functional round-trip check (int16 v2 card format)
         # Guards the int16 file-reader layout: raw int16 -> card must
         # reproduce the input samples exactly, and the C card reader

@@ -152,6 +152,12 @@ int main(int argc, char **argv) {
     if (fargs_finalize(args.get()) != 0) {
         return 64;  // EX_USAGE, as argp exits for a bad option
     }
+    if (output_file == "-" && card_output_file == "-") {
+        // Interleaved .toad and card lines: neither reader can use them.
+        cerr << "fastdet: -o and -x cannot both write to stdout ('-')"
+             << endl;
+        return 64;
+    }
 
     // Before any library creates a thread, so all of them inherit the
     // blocked signal mask.
@@ -166,7 +172,11 @@ int main(int argc, char **argv) {
         CFile card(card_output_file);
         CFile info;
         if (!args->silent) {
-            info.open((out.file() == stdout) ? stderr : stdout);
+            // Status lines mixed into a .toad ('-o -') or a card
+            // ('-x -') on stdout make it unreadable, as fastcapture
+            // knows (fastcard_cli.c).
+            info.open((out.file() == stdout || card.file() == stdout)
+                      ? stderr : stdout);
         }
 
         vector<float> template_samples = load_template(template_file);
