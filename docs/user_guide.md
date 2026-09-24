@@ -709,10 +709,11 @@ thriftyx gold --identify initial.card
 otherwise.
 
 - A clear match correlates well above 0.5 and several times the
-  runner-up (less for 5- and 6-bit codes, whose 31 or 63 chips
-  correlate more with each other); otherwise it says that no code
+  runner-up (less when either is a 5- or 6-bit code, whose 31 or 63
+  chips correlate more with anything); otherwise it says that no code
   matches clearly.  Capture one transmitter at a time, close enough for
-  a clean burst.
+  a clean burst.  Samples the capture lost and zero-filled are
+  ignored, as are bursts next to them.
 - It also reads a template (`.npy`, or fastdet's `.tpl`): `thriftyx
   gold --identify template.npy --sample-rate 6M` tells which code an
   existing template holds.
