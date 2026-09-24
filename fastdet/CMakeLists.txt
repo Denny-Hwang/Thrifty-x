@@ -88,12 +88,22 @@ add_library(fastdet
             fastcard_wrappers.cpp)
 
 # FIXME: corr_detector should be independent from fastcard
+# All of the fastcapture archive goes into libfastdet.so, not only the
+# members fastdet's own code calls: the installed headers
+# (fastcard_wrappers.h includes fargs.h, fastcard.h, fft.h) declare
+# fargs_new, fargs_finalize, ..., and a program linked the way
+# fastdet.pc says (-lfastdet) needs them from here -- as fastdet_bin
+# does.  Public: volk, which AlignedArray calls inline.
 target_link_libraries (fastdet
+                       PRIVATE
+                       -Wl,--whole-archive
                        ${FASTCARD_LIBRARIES}
-                       ${VOLK_LIBRARIES}
+                       -Wl,--no-whole-archive
                        ${AIRSPY_LIBRARIES}
                        ${FFTW3F_LIBRARIES}
-                       m)
+                       m
+                       PUBLIC
+                       ${VOLK_LIBRARIES})
 
 add_executable(fastdet_bin fastdet.cpp)
 target_link_libraries (fastdet_bin fastdet)
@@ -141,5 +151,6 @@ if(BUILD_TESTING)
                      -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
                      -DFASTCAPTURE_PC_DIR=${FASTCAPTURE_PC_DIR}
                      -DCXX=${CMAKE_CXX_COMPILER}
+                     "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}"
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 endif()

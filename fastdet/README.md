@@ -32,6 +32,11 @@ The installed `fastdet` finds `libfastdet.so` in `<prefix>/lib` by
 itself (its RPATH is `$ORIGIN/../lib`), for any `--prefix`.  `ldconfig`
 refreshes the loader cache for other programs that link `libfastdet`;
 they can build with `pkg-config --cflags --libs fastdet`.
+`libfastdet.so` carries the whole fastcapture library, so what the
+installed headers declare (`CorrDetector`, `CarrierDetector` and the
+`fargs_new` / `fargs_parse_opt` / `fargs_finalize` that set up its
+`fargs_t`) links from `-lfastdet` alone; the `install` test builds and
+runs such a program.
 
 
 ### Usage

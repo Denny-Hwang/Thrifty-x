@@ -45,7 +45,7 @@ These components operate on float FFT data and have no hardware dependency:
 ```bash
 cmake -S . -B build          # Release (optimised) unless CMAKE_BUILD_TYPE is set
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # ring-buffer, timestamp, argument, card-reader and carrier-search unit tests
+ctest --test-dir build --output-on-failure   # ring-buffer, timestamp, argument, card-reader and carrier-search unit tests, and an install check
 sudo cmake --install build
 ```
 
@@ -56,6 +56,11 @@ input never skips blocks (`-k` does not apply).
 
 Configuration fails if libairspy, FFTW3f or volk are not found by
 pkg-config.
+
+`libfastcapture` is installed as a static archive only, so
+`fastcapture.pc` lists its dependencies as public: `pkg-config --cflags
+--libs fastcapture` is a complete compile and link line for a program
+on the installed headers (the `install` test builds one).
 
 ## .card File Format
 

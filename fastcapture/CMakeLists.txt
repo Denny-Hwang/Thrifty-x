@@ -104,6 +104,16 @@ if(BUILD_TESTING)
     add_executable(test_cardet tests/test_cardet.c cardet.c)
     target_link_libraries(test_cardet ${VOLK_LIBRARIES})
     add_test(NAME cardet COMMAND test_cardet)
+
+    # Installs into a scratch prefix under the build tree (no root) and
+    # builds a program on the installed headers with fastcapture.pc.
+    add_test(NAME install
+             COMMAND ${CMAKE_COMMAND}
+                     -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                     -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-install
+                     -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
+                     -DCC=${CMAKE_C_COMPILER}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 endif()
 
 # Installation
@@ -122,7 +132,8 @@ install(FILES
     lib/base64.h
     DESTINATION include)
 
-# pkg-config file
+# pkg-config file.  Threads::Threads' flag (none where libc has them).
+set(FASTCAPTURE_PC_THREAD_LIBS "${CMAKE_THREAD_LIBS_INIT}")
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/fastcard.pc.in
     ${CMAKE_CURRENT_BINARY_DIR}/fastcapture.pc
