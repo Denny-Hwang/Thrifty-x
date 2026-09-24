@@ -336,19 +336,25 @@ def _code_bits_for(chips):
 
 
 def _lost_samples(block, min_run):
-    """Mask of the samples in runs of at least *min_run* exact zeros.
+    """Mask of the samples capture lost: runs of at least *min_run*
+    exact zeros, in a block whose other samples are rarely zero.
 
     Capture zero-fills samples lost in transit, and block 0 of an Airspy
     capture without --skip starts with a zero history.  Received noise
-    is not exactly zero for that long.
+    is not exactly zero for that long -- unless it is below an LSB: when
+    a quarter or more of the other samples are zero too (a card with
+    little or no noise, whose off chips and gaps between bursts are
+    zero), zero runs are silence, and nothing is masked.
     """
-    zero = np.concatenate(([0], (np.asarray(block) == 0).astype(np.int8),
-                           [0]))
+    is_zero = np.asarray(block) == 0
+    zero = np.concatenate(([0], is_zero.astype(np.int8), [0]))
     edges = np.flatnonzero(np.diff(zero))
-    lost = np.zeros(len(block), dtype=bool)
+    lost = np.zeros(len(is_zero), dtype=bool)
     for start, stop in zip(edges[::2], edges[1::2], strict=True):
         if stop - start >= min_run:
             lost[start:stop] = True
+    if lost.all() or is_zero[~lost].mean() >= 0.25:
+        lost[:] = False
     return lost
 
 

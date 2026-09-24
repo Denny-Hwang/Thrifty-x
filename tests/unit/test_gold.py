@@ -441,14 +441,14 @@ def test_clear_match_ratio_depends_on_both_codes(others, clear):
 _LOSSY_RATE, _LOSSY_BLOCK, _LOSSY_HISTORY = 2.4e6, 16384, 4920
 
 
-def _lossy_card(seed, lost):
+def _lossy_card(seed, lost, noise=0.035):
     import io
     from thriftyx.block_data import card_writer, write_card_header
     rng = np.random.default_rng(seed)
     step = _LOSSY_BLOCK - _LOSSY_HISTORY
     envelope = (generate(8, 17, _LOSSY_RATE / 0.999707e6, 'legacy') + 1) / 2
     total = 20 * step + _LOSSY_HISTORY
-    stream = (rng.normal(size=total) + 1j * rng.normal(size=total)) * 0.035
+    stream = (rng.normal(size=total) + 1j * rng.normal(size=total)) * noise
     starts = range(3000, total - len(envelope), int(1.37 * step))
     for start in starts:
         n = np.arange(start, start + len(envelope))
@@ -457,7 +457,7 @@ def _lossy_card(seed, lost):
     if lost == 'gap':
         gap = starts[2] + len(envelope) + 500
         stream[gap:gap + 6000] = 0
-    else:
+    elif lost == 'history':
         stream = np.concatenate([np.zeros(_LOSSY_HISTORY), stream])
     buf = io.StringIO()
     write_card_header(buf, bit_depth=12, sample_rate=int(_LOSSY_RATE),
@@ -481,6 +481,22 @@ def test_identify_card_ignores_lost_samples(lost, seed):
     assert (results[0]['family'], results[0]['bits'],
             results[0]['index']) == ('legacy', 8, 17)
     assert is_clear_match(results)
+
+
+@pytest.mark.parametrize('noise_lsb', [0.0, 0.2, 0.5])   # int16 LSBs
+@pytest.mark.parametrize('lost', [None, 'gap'])
+def test_identify_card_on_a_silent_card(noise_lsb, lost):
+    """With (almost) no noise, the off chips and the gaps between bursts
+    are runs of exact zeros too: taken for lost samples, they hid every
+    burst."""
+    from thriftyx.block_data import AIRSPY_INT16_FULL_SCALE
+    from thriftyx.gold import identify_card, is_clear_match
+    for seed in range(3):
+        results = identify_card(_lossy_card(
+            seed, lost, noise=noise_lsb / AIRSPY_INT16_FULL_SCALE))[0]
+        assert (results[0]['family'], results[0]['bits'],
+                results[0]['index']) == ('legacy', 8, 17)
+        assert is_clear_match(results)
 
 
 def test_shared_codes_belong_to_the_legacy_family_too(monkeypatch, capsys):
