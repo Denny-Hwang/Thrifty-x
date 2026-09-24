@@ -654,6 +654,14 @@ The extracted template has continuous (not just `±1`) values that
 encode the analog frontend's pulse shaping, filter ripple, and group
 delay — i.e. a true matched filter for *this* receiver chain.
 
+`template_extract` cuts the template from a complete burst whose
+correlation peak lies within 0.2 samples of a whole sample.  It never
+uses the partial detection a burst also leaves in the neighbouring
+block (that would give a template starting part-way into the code): if
+no complete burst qualifies it fails and asks for a longer capture.
+The output is replaced only once extraction succeeds, so `-o` may name
+the template it reads (`--template template.npy -o template.npy`).
+
 Indicative correlation SNR improvement on real captures:
 
 | Template | RTL-SDR | Airspy Mini | Airspy R2 |
@@ -813,7 +821,10 @@ The dispatch table lives in `thriftyx/cli.py`.
 
 ### Common options
 
-- `-o / --output` — write to a file instead of stdout.
+- `-o / --output` — write to a file instead of stdout.  `detect` and
+  `template_extract` open it only once the input, template and settings
+  have loaded (`template_extract` only once it has a template to
+  write), so a run that fails leaves an existing file as it was.
 - `-a / --append` — append to an existing output file (`detect` only).
 - `--quiet` — suppress per-block status output (`detect`).
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,

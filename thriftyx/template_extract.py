@@ -29,6 +29,9 @@ Usage example:
 
 
 import argparse
+import contextlib
+import os
+import sys
 
 import numpy as np
 
@@ -39,15 +42,30 @@ from thriftyx.setting_parsers import normalize_freq_range
 
 
 MAX_OFFSET = 0.2
+# Least correlation energy, relative to the strongest detection, of a
+# block to extract from.  The block before or after a burst also
+# detects it from part of the code (see identify.py), at a few percent
+# of the full burst's energy and on a misaligned lag: a template cut
+# there starts part-way into the code.
+MIN_RELATIVE_ENERGY = 0.5
 
 
-def best_detection(detections, max_offset):
-    """Get block with largest corr peak and offset less than `max_offset`."""
+def best_detection(detections, max_offset,
+                   min_relative_energy=MIN_RELATIVE_ENERGY):
+    """Get block with largest corr peak and offset less than `max_offset`.
+
+    Only a complete burst qualifies: its correlation energy must be at
+    least *min_relative_energy* times the strongest detection's.
+    """
     best_result = None
     best_fft = None
+    max_energy = 0.0
 
     for detected, result, fft, _ in detections:
-        if detected and abs(result.corr_info.offset) <= max_offset:
+        if not detected:
+            continue
+        max_energy = max(max_energy, result.corr_info.energy)
+        if abs(result.corr_info.offset) <= max_offset:
             if (best_result is None or
                     result.corr_info.energy > best_result.corr_info.energy):
                 best_result = result
@@ -61,6 +79,15 @@ def best_detection(detections, max_offset):
             "index and, for 8 and 10 bits, --family) at the data's sample "
             "rate: `thriftyx gold --identify CAPTURE.card` reports the "
             "code".format(max_offset))
+    if best_result.corr_info.energy < min_relative_energy * max_energy:
+        raise DetectionError(
+            "no complete burst peaked within {} samples of a whole "
+            "sample: the best block with |offset| <= {} (#{}) has only "
+            "{:.0%} of the strongest detection's energy, a burst cut by "
+            "the block edge.  Capture for longer (e.g. --duration 30) to "
+            "get more bursts".format(
+                max_offset, max_offset, best_result.block,
+                best_result.corr_info.energy / max_energy))
     best_signal = np.fft.ifft(best_fft)
     return best_signal, best_result
 
@@ -72,6 +99,23 @@ def extract_template(signal, result, template_len):
     cut *= 2 / (np.mean(cut) + np.std(cut))
     cut = cut - np.mean(cut)  # OOK -> bipolar signal
     return cut
+
+
+def _save_replacing(path, array):
+    """Save *array* to *path* (.npy) only once it is complete.
+
+    Written next to *path* and renamed over it, so a failure leaves an
+    existing file -- often the working template -- as it was.
+    """
+    tmp = '{}.{}.tmp'.format(path, os.getpid())
+    try:
+        with open(tmp, 'wb') as output:
+            np.save(output, array)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def plot(signal, template, offset):
@@ -94,8 +138,10 @@ def _main():
     parser.add_argument('input',
                         type=argparse.FileType('rb'), default='-',
                         help="input data ('-' streams from stdin)")
-    parser.add_argument('-o', '--output', type=argparse.FileType('wb'),
-                        default='capture.npy', help="Output file (.npy)")
+    # A path, not an open file: argparse would truncate it before the
+    # template (possibly the same file) is even read.
+    parser.add_argument('-o', '--output', default='capture.npy',
+                        help="Output file (.npy; '-' for stdout)")
     parser.add_argument('-p', '--plot', action='store_true',
                         help="Plot base template and extracted template.")
 
@@ -127,12 +173,18 @@ def _main():
     full_signal, result = best_detection(detections, MAX_OFFSET)
     signal = extract_template(full_signal, result, len(template))
 
-    np.save(args.output, signal)
+    info_out = sys.stdout
+    if args.output == '-':
+        np.save(sys.stdout.buffer, signal)
+        info_out = sys.stderr
+    else:
+        _save_replacing(args.output, signal)
     print("Captured template from block #{} (timestamp: {:.6f}): "
           "offset={:+.3f}; corr_ampl={}".format(result.block,
                                                 result.timestamp,
                                                 result.corr_info.offset,
-                                                result.corr_info.energy))
+                                                result.corr_info.energy),
+          file=info_out)
     if args.plot:
         plot(signal, template, result.corr_info.offset)
 

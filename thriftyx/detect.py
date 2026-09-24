@@ -10,6 +10,7 @@
 
 
 import argparse
+import contextlib
 import logging
 import sys
 from collections import namedtuple
@@ -294,12 +295,13 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                         help="input data is raw binary data")
     parser.add_argument('--quiet', dest='quiet', action='store_true',
                         help="do not write anything to standard output")
+    # Paths, not open files: argparse would truncate the output before
+    # the template and settings are checked, and a failed run would wipe
+    # the previous run's detections.
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-o', '--output', dest='output',
-                       type=argparse.FileType('w'),
                        help="Output file (.toad) ('-' for stdout)")
     group.add_argument('-a', '--append', dest='append',
-                       type=argparse.FileType('a'),
                        help="Output file to append to (.toad)")
 
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
@@ -313,8 +315,9 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     if extra_args is not None:
         kwargs = {arg: args[arg] for arg in extra_args}
 
-    output_file = args.output if args.append is None else args.append
-    info_out = sys.stderr if output_file == sys.stdout else sys.stdout
+    output_path, mode = ((args.output, 'w') if args.append is None
+                         else (args.append, 'a'))
+    info_out = sys.stderr if output_path == '-' else sys.stdout
 
     if args.raw:
         blocks = block_reader(args.input, config.block_size,
@@ -343,16 +346,26 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                                          config.block_size,
                                          add_dt=True)
 
-    carriers = correlated = 0
-    for detected, result in detections:
-        carriers += result.corr_info is not None
-        correlated += bool(detected)
-        if detected and output_file is not None:
-            print(result.serialize(), file=output_file)
+    with contextlib.ExitStack() as stack:
+        # Opened only now that the template and settings are known good.
+        # Detections are written as they are found, so a streamed input
+        # fills the file while it runs.
+        output_file = None
+        if output_path == '-':
+            output_file = sys.stdout
+        elif output_path is not None:
+            output_file = stack.enter_context(open(output_path, mode))
 
-        if not args.quiet:
-            # Output summary line
-            print(summary_liner(detected, result), file=info_out)
+        carriers = correlated = 0
+        for detected, result in detections:
+            carriers += result.corr_info is not None
+            correlated += bool(detected)
+            if detected and output_file is not None:
+                print(result.serialize(), file=output_file)
+
+            if not args.quiet:
+                # Output summary line
+                print(summary_liner(detected, result), file=info_out)
     _check_yield(carriers, correlated, config.template,
                  getattr(args.input, 'name', None))
 

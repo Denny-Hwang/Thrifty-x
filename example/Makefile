@@ -10,6 +10,11 @@
 
 all: rx.toads_analysis
 
+# A recipe that fails part-way must not leave a target that looks up to
+# date (e.g. a half-written .toad would drop that receiver's detections
+# from every later step until its .card changes).
+.DELETE_ON_ERROR:
+
 TOAD_FILES 		:= $(patsubst cards/%.card, toad/%.toad, $(wildcard cards/*.card))
 
 toad/%.toad: cards/%.card detector.cfg
