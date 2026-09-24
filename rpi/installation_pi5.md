@@ -190,6 +190,11 @@ expire old data while capture keeps running.  It restarts capture 10 s
 after any exit except a configuration error (exit status 78), which
 leaves the unit `failed` until `capture.cfg` is fixed.
 
+The commands below set up receiver `rx0`; on the other nodes use their
+own ID (`thriftyx-capture@rx1`, `/etc/default/thriftyx-capture@rx1`,
+...), one capture instance per node.  `update_node.sh` restarts the
+instance whose `/etc/default/thriftyx-capture@<rxid>` file exists.
+
 ```bash
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.service /etc/systemd/system/
 sudo cp ~/thrifty-x/rpi/systemd/thriftyx-capture@.env.example /etc/default/thriftyx-capture@rx0

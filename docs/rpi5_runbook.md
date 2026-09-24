@@ -23,8 +23,8 @@ chronyc tracking
 vcgencmd measure_temp
 vcgencmd get_throttled       # 0x0 means normal
 
-# Airspy recognition
-python3 -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list_airspy_serials())"
+# Airspy recognition (thriftyx is installed only in the project venv)
+~/thrifty-x/.venv/bin/python -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list_airspy_serials())"
 ```
 
 ---
@@ -47,11 +47,13 @@ python3 -c "from thriftyx.hal.airspy_mini import list_airspy_serials; print(list
 
 ### 2.2 Disk shortage
 - Whether the cron `cleanup_old_captures.sh` ran: `journalctl -t thriftyx-cleanup`
-- Temporary measure: `find /var/lib/thriftyx/card -type f -mtime +1 -delete`
-  (safe while capture runs: it writes a new hourly file and never
-  reopens old ones)
-- Change the retention policy: set `CARD_RETENTION_DAYS=N` (and the other
-  limits) in `/etc/default/thriftyx-cleanup`; the next hourly run applies it.
+- Temporary measure: `find /var/lib/thriftyx/card -type f -mmin +1440 -delete`
+  deletes cards more than a day old (safe while capture runs: it writes
+  a new hourly file and never reopens old ones).  Not `-mtime +1`: find
+  rounds ages down to whole days, so that keeps two days.
+- Change the retention policy: set `CARD_RETENTION_DAYS=N` (whole days,
+  at least 1; and the other limits) in `/etc/default/thriftyx-cleanup`;
+  the next hourly run applies it.
   Its `THRIFTYX_OUT` must match the capture unit's.
 
 ### 2.3 Throttling/heat
@@ -155,8 +157,11 @@ Payload schema (HTTP POST JSON, every 60 seconds):
 
 - `disk_pct` is for `THRIFTYX_OUT`; `cpu_temp_c` and `throttled` are
   `null` where `vcgencmd` is unavailable.
-- `service_state` is `systemctl is-active` of the capture unit
-  (`active`, `activating`, `failed`, ...).
+- `service_state` is what `systemctl is-active` prints for the capture
+  unit, `thriftyx-capture@rx<RXID>.service` unless `THRIFTYX_UNIT` is
+  set: `active`, `activating` (also while waiting to restart after a
+  crash), `failed` (e.g. exit 78, a bad `capture.cfg`), `inactive`, ...;
+  `unknown` only when systemctl gives no answer.
 - `last_detection_ts` is the modification time of the newest `.card`
   file: the last write, which is a detection or, just after an hourly
   rotation, the new file's header.  A value more than ~2 h old while
@@ -183,7 +188,18 @@ Recommended: `rpi/update_node.sh` (idempotent wrapper, automatic rollback).
 
 ```bash
 sudo install -m 755 ~/thrifty-x/rpi/update_node.sh /usr/local/bin/
-ssh rx0 'sudo /usr/local/bin/update_node.sh'
+ssh rx1 'sudo /usr/local/bin/update_node.sh'
+```
+
+The script restarts the node's capture instance: the one with an
+`/etc/default/thriftyx-capture@<rxid>` file (`thriftyx-capture@rx1` on
+rx1).  If a node has none or several, it stops with exit 3 before
+pulling; name the instance on sudo's command line (sudo drops variables
+exported by the caller):
+
+```bash
+ssh rx1 'sudo THRIFTYX_RXID=1 /usr/local/bin/update_node.sh'
+# or: sudo THRIFTYX_SERVICE=thriftyx-capture@rx1.service /usr/local/bin/update_node.sh
 ```
 
 Behavior:
@@ -191,22 +207,27 @@ Behavior:
 2. No changes after `git fetch` → exit 0 (no-op)
 3. `git merge --ff-only` fails → exit without affecting the service
 4. `pip install` with the extras the venv already has (`fft` only if
-   pyfftw is installed; override with `PIP_EXTRAS=...`)
+   pyfftw is installed; override with `PIP_EXTRAS=...`).  If it fails
+   (e.g. PyPI unreachable), go back to the previous SHA and reinstall
+   it, without restarting the service → exit 1
 5. Refresh installed copies of the repo's systemd units and
    `update_node.sh` / `cleanup_old_captures.sh` (only files already
    installed; `daemon-reload` when a unit changed)
 6. `restart`, then after 30 seconds the service must be active **with
    the same PID and no automatic restarts** (a crash-looping release
    looks `active` most of the time)
-7. Failure at any step → automatic rollback of code, package, units and
-   scripts to the previous SHA + restart
+7. Failure in step 5 or 6 → automatic rollback of code, package, units
+   and scripts to the previous SHA + restart
 8. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
 
 Exit codes:
 - `0` up to date or update succeeded
-- `1` update failed but rollback succeeded (running on the old version)
+- `1` update failed, node back on the old version (if even the old
+  version's reinstall failed, the log says so; the service was never
+  restarted and still runs it, so re-run the update once pip works)
 - `2` both update and rollback failed (immediate human intervention required)
-- `3` setup error (working tree dirty, no venv, etc.)
+- `3` setup error (working tree dirty, no venv, capture instance
+  unknown, etc.)
 
 Manual procedure (for reference):
 

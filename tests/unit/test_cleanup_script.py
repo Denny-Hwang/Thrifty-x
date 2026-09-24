@@ -59,6 +59,39 @@ def test_expires_by_type_and_reports(tmp_path):
     assert 'deleted 1 card, 1 toad, 1 log file(s)' in log
 
 
+@pytest.mark.parametrize('days', [1, 7])
+def test_retention_is_days_not_days_plus_one(tmp_path, days):
+    """Regression: `find -mtime +N` rounds an age down to whole days, so
+    a file was deleted only once N+1 days old (CARD_RETENTION_DAYS=1
+    kept two days of cards)."""
+    root = tmp_path / 'data'
+    kept = _file(root / 'card' / 'rx0_kept.card', days - 1 / 24)
+    gone = _file(root / 'card' / 'rx0_gone.card', days + 1 / 24)
+    result, log = _run(tmp_path, root, CARD_RETENTION_DAYS=days,
+                       DISK_WARN_PCT=100, DISK_PURGE_PCT=101)
+    assert result.returncode == 0, result.stderr
+    assert kept.exists() and not gone.exists()
+    assert 'deleted 1 card, 0 toad, 0 log file(s)' in log
+
+
+@pytest.mark.parametrize('setting', ['CARD_RETENTION_DAYS',
+                                     'TOAD_RETENTION_DAYS',
+                                     'LOG_RETENTION_DAYS'])
+@pytest.mark.parametrize('value', ['0', '-1', '1.5', '7d', 'days'])
+def test_bad_retention_is_refused(tmp_path, setting, value):
+    """0 or a value that is not a whole number of days is a config error,
+    not "expire everything" (it would take the file being written)."""
+    root = tmp_path / 'data'
+    files = [_file(root / sub / name, 40) for sub, name in
+             [('card', 'rx0.card'), ('toad', 'rx0.toad'),
+              ('log', 'capture.log')]]
+    result, log = _run(tmp_path, root, DISK_WARN_PCT=100,
+                       DISK_PURGE_PCT=101, **{setting: value})
+    assert result.returncode == 2, result.stderr
+    assert setting in log
+    assert all(f.exists() for f in files)
+
+
 def test_nothing_to_do_is_quiet(tmp_path):
     root = tmp_path / 'data'
     _file(root / 'card' / 'rx0.card', 1)

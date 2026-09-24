@@ -44,14 +44,26 @@ if [ ! -d "${ROOT}" ]; then
     say "ROOT '${ROOT}' is not a directory (data disk not mounted?)"
     exit 2
 fi
+# Retention is a whole number of days, at least 1: 0 or a stray value
+# must not become "expire everything", the card being written included.
+check_days() {
+    [[ "$2" =~ ^[0-9]+$ ]] && [ "$((10#$2))" -ge 1 ] && return 0
+    say "$1='$2' is not a whole number of days (at least 1)"
+    exit 2
+}
+check_days CARD_RETENTION_DAYS "${CARD_DAYS}"
+check_days TOAD_RETENTION_DAYS "${TOAD_DAYS}"
+check_days LOG_RETENTION_DAYS "${LOG_DAYS}"
 
 cd "${ROOT}"
 
 # expire DIR PATTERN DAYS: delete matching files older than DAYS and
-# print how many.
+# print how many.  Ages are compared in minutes: `-mtime +N` rounds an
+# age down to whole days and so kept files for N+1 days.
 expire() {
     [ -d "$1" ] || { echo 0; return 0; }
-    find "$1" -type f -name "$2" -mtime "+$3" -print -delete | wc -l
+    find "$1" -type f -name "$2" -mmin "+$((10#$3 * 1440))" -print -delete \
+        | wc -l
 }
 N_CARD="$(expire card '*.card' "${CARD_DAYS}")"
 N_TOAD="$(expire toad '*.toad' "${TOAD_DAYS}")"
