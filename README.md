@@ -523,10 +523,12 @@ Existing `.card` files captured with the **original** Thrifty (v1
 format, 8-bit unsigned interleaved I/Q, no header) are recognised by
 their missing `#v2` header and decoded as 8-bit.  A v1 card does not
 record how it was captured, so process it with the RTL-SDR settings it
-was captured with:
+was captured with (`-z`: the config's `template: template.npy` is
+looked up in the current directory, not next to the config):
 
 ```bash
-thriftyx detect old_rtlsdr_data.card -o detections.toad -c example/detector.cfg
+thriftyx detect old_rtlsdr_data.card -o detections.toad \
+    -c example/detector.cfg -z example/template.npy
 ```
 
 The `block_data` module promotes 8-bit unsigned to the same complex64
