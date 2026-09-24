@@ -160,21 +160,32 @@ Payload schema (HTTP POST JSON, every 60 seconds):
   "throttled": "0x0",
   "service_state": "active",
   "last_detection_ts": "2026-05-06T12:34:50Z",
+  "last_block_ts": "2026-05-06T12:34:49Z",
   "version": "0.1.0"
 }
 ```
 
-- `disk_pct` is for `THRIFTYX_OUT`; `cpu_temp_c` and `throttled` are
-  `null` where `vcgencmd` is unavailable.
+- `disk_pct` is the use of `THRIFTYX_OUT`'s filesystem as `df` reports
+  it (used / (used + available), rounded up; root's reserved blocks
+  count as full), the figure the cleanup job's `DISK_*_PCT` thresholds
+  are compared with.  `cpu_temp_c` and `throttled` are `null` where
+  `vcgencmd` is unavailable.
 - `service_state` is what `systemctl is-active` prints for the capture
   unit, `thriftyx-capture@rx<RXID>.service` unless `THRIFTYX_UNIT` is
   set: `active`, `activating` (also while waiting to restart after a
   crash), `failed` (e.g. exit 78, a bad `capture.cfg`), `inactive`, ...;
   `unknown` only when systemctl gives no answer.
 - `last_detection_ts` is the modification time of the newest `.card`
-  file: the last write, which is a detection or, just after an hourly
-  rotation, the new file's header.  A value more than ~2 h old while
-  transmitters are on air means capture is running but detecting
+  file: the last write, which is a detection or, after each hourly
+  rotation, the new file's header.  It therefore never ages past about
+  an hour while capture runs, detections or not; a value more than
+  ~65 min old means capture is not writing at all (hung or stopped —
+  check `service_state` and `journalctl -u thriftyx-capture@rx<RXID>`).
+- `last_block_ts` is the capture timestamp of the newest detected block
+  (the last data line of the newest card that has one; `null` when no
+  card under `THRIFTYX_OUT/card` holds a block).  Rotation does not
+  refresh it, so while transmitters are on air a value much older than
+  their transmit interval means capture is running but detecting
   nothing (antenna, gain, frequency).
 
 Heartbeats are sent every 60 s; alert when none has arrived for 3

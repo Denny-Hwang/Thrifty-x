@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import os
 import shutil
 import socket
@@ -61,11 +62,20 @@ def _read_throttled() -> str | None:
 
 
 def _disk_pct(path: str) -> int | None:
+    """Use% as df and cleanup_old_captures.sh compute it.
+
+    used / (used + available to non-root users), rounded up: the blocks
+    reserved for root count as unavailable, so a disk the capture user
+    can no longer write to reads 100, not ~95 (used / total).
+    """
     try:
-        usage = shutil.disk_usage(path)
-        return int(round(usage.used * 100 / usage.total))
+        usage = shutil.disk_usage(path)   # .free is f_bavail
     except OSError:
         return None
+    size = usage.used + usage.free
+    if size <= 0:
+        return None
+    return -(-usage.used * 100 // size)
 
 
 def _service_state(unit: str) -> str:
@@ -81,24 +91,94 @@ def _service_state(unit: str) -> str:
     return result.stdout.strip() or 'unknown'
 
 
+def _iso(ts: float) -> str | None:
+    try:
+        return _dt.datetime.fromtimestamp(ts, tz=_dt.timezone.utc) \
+            .isoformat(timespec='seconds').replace('+00:00', 'Z')
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _cards_newest_first(card_dir: Path) -> list[tuple[float, Path]]:
+    """(mtime, path) of the .card files, newest first.  A file deleted
+    meanwhile (the cleanup job) is skipped."""
+    cards = []
+    try:
+        for path in card_dir.glob('*.card'):
+            try:
+                cards.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return sorted(cards, reverse=True)
+
+
 def _last_detection_ts(card_dir: Path) -> str | None:
     """mtime of the newest .card file, as an ISO-8601 UTC string.
 
-    Strictly this is the time of the last *write* to a card file — a
-    proxy for "the capture pipeline is still producing detections",
-    not the timestamp of an individual detection.  The JSON key name
-    is kept for compatibility with existing consumers.
+    The time of the last *write* to a card file: a detected block or,
+    after an hourly rotation, the new file's header.  So it shows that
+    capture is writing (stale by more than a rotation period: capture
+    hung or stopped), not that it detects anything -- see
+    :func:`_last_block_ts`.  The key name is kept for existing
+    consumers.
     """
+    cards = _cards_newest_first(card_dir)
+    return _iso(cards[0][0]) if cards else None
+
+
+# Tail read size, doubled until a whole data line fits: one block of
+# 32768 int16 I/Q samples is a ~175 kB line of base64.
+_TAIL_CHUNK = 1 << 18
+
+
+def _last_block_time(path: Path) -> float | None:
+    """Timestamp field of the last complete data line of a card file."""
     try:
-        files = list(card_dir.glob('*.card'))
+        with open(path, 'rb') as f:
+            size = f.seek(0, os.SEEK_END)
+            chunk = _TAIL_CHUNK
+            while True:
+                start = max(0, size - chunk)
+                f.seek(start)
+                lines = f.read(size - start).split(b'\n')
+                # The last piece is empty or a line still being
+                # written; the first is cut unless the read began at
+                # the start of the file.
+                lines = lines[:-1] if start == 0 else lines[1:-1]
+                for line in reversed(lines):
+                    if line[:1] in (b'', b'#'):
+                        continue
+                    try:
+                        ts = float(line.split(None, 1)[0])
+                    except ValueError:
+                        continue      # tool noise, not a block
+                    if math.isfinite(ts):
+                        return ts
+                if start == 0:
+                    return None
+                chunk *= 2
     except OSError:
         return None
-    if not files:
-        return None
-    newest = max(files, key=lambda p: p.stat().st_mtime)
-    return _dt.datetime.fromtimestamp(
-        newest.stat().st_mtime, tz=_dt.timezone.utc
-    ).isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def _last_block_ts(card_dir: Path) -> str | None:
+    """Capture time of the newest detected block, ISO-8601 UTC.
+
+    A card holds a ``#v2`` header, then one ``timestamp block_idx
+    samples`` line per detected block; this is the timestamp of the
+    last such line in the newest card that has one.  Unlike the file
+    mtime it does not move when capture starts a new, header-only file
+    every hour, so it goes stale when the receiver stops detecting
+    (antenna, gain, frequency, transmitters off).  None when no card
+    holds a block.
+    """
+    for _mtime, path in _cards_newest_first(card_dir):
+        ts = _last_block_time(path)
+        if ts is not None:
+            return _iso(ts)
+    return None
 
 
 def _version() -> str:
@@ -125,6 +205,7 @@ def build_payload() -> dict:
         'throttled': _read_throttled(),
         'service_state': _service_state(unit),
         'last_detection_ts': _last_detection_ts(Path(out_root) / 'card'),
+        'last_block_ts': _last_block_ts(Path(out_root) / 'card'),
         'version': _version(),
     }
 
