@@ -39,6 +39,10 @@ find_package(Volk)
 # fftw3f) must be linked explicitly by every consumer.
 pkg_check_modules(AIRSPY REQUIRED libairspy)
 pkg_check_modules(FFTW3F REQUIRED fftw3f)
+# pthreads: the fastcapture archive linked in whole below brings
+# sigthread, circbuf and stamp_queue, which call pthread_* -- a separate
+# libpthread before glibc 2.34 (e.g. Raspberry Pi OS Bullseye).
+find_package(Threads REQUIRED)
 
 if(NOT FASTCARD_FOUND)
     message(FATAL_ERROR "Fastcard required to compile fastdet")
@@ -102,6 +106,7 @@ target_link_libraries (fastdet
                        ${AIRSPY_LIBRARIES}
                        ${FFTW3F_LIBRARIES}
                        m
+                       Threads::Threads
                        PUBLIC
                        ${VOLK_LIBRARIES})
 
