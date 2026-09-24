@@ -31,7 +31,7 @@ from thriftyx import carrier_detect
 from thriftyx import carrier_sync
 from thriftyx import soa_estimator
 from thriftyx import util
-from thriftyx.setting_parsers import normalize_freq_range
+from thriftyx import config_validator
 
 
 def _time_shift(samples, shift):
@@ -1177,7 +1177,7 @@ def _main():
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template', 'bit_depth',
-                    'freq_shift_method', 'soa_interpolation']
+                    'freq_shift_method', 'soa_interpolation', 'chip_rate']
     config, args = load_args(parser, setting_keys)
 
     if args.raw:
@@ -1190,8 +1190,8 @@ def _main():
     bit_depth = (config.bit_depth
                  if args.raw or 'bit_depth' in config.explicit_keys else 8)
 
-    window = normalize_freq_range(config.carrier_window,
-                                  config.sample_rate / config.block_size)
+    window = config_validator.carrier_bins(
+        config.carrier_window, config.sample_rate, config.block_size)
 
     cmds = [c.strip() for c in args.plot.split(',') if c.strip()]
     known = set(_PLOT_COMMAND_STRINGS) | set(_FIGURE_COMMAND_STRINGS)

@@ -8,9 +8,10 @@ import sys
 import numpy as np
 import pytest
 
-from thriftyx import detect, gold
+from thriftyx import block_data, detect, gold
 from thriftyx.detect import Detector, DetectorSettings
-from thriftyx.exceptions import TemplateError
+from thriftyx.exceptions import (ConfigValidationError, FileFormatError,
+                                 TemplateError)
 from thriftyx.signal_utils import Signal
 from thriftyx.template_generate import resample
 
@@ -66,10 +67,20 @@ def test_detector_no_signal(detector_settings):
 
 # --- output file --------------------------------------------------------------
 
-def _run_detect(monkeypatch, tmp_path, *args):
+def _run_detect(monkeypatch, tmp_path, *args, blocks=(), header=True):
+    """Run detect on a card of *blocks*: a 12-bit v2 card, or without
+    *header* an 8-bit v1 card, given its geometry as options."""
     card = tmp_path / 'rx0.card'
-    card.write_text('#v2 bit_depth=12 sample_rate=6000000 endian=little '
-                    'block_size=32768 block_history=12349\n')
+    with open(card, 'w') as stream:
+        if header:
+            stream.write('#v2 bit_depth=12 sample_rate=6000000 '
+                         'endian=little block_size=32768 '
+                         'block_history=12349\n')
+        else:
+            args += ('-s', '6M', '-b', '32768', '-y', '12349')
+        for idx, block in enumerate(blocks):
+            block_data.card_writer(stream, 100.0 + idx, idx, block,
+                                   bit_depth=12 if header else 8)
     np.save(tmp_path / 'template.npy',
             resample(gold.gold(10, 0, 'gold'), 6e6 / 0.999707e6))
     monkeypatch.chdir(tmp_path)
@@ -103,3 +114,42 @@ def test_output_is_written_once_setup_succeeds(monkeypatch, tmp_path,
     (tmp_path / 'rx0.toad').write_text('previous\n')
     _run_detect(monkeypatch, tmp_path, option, 'rx0.toad')
     assert (tmp_path / 'rx0.toad').read_text() == expected
+
+
+def _noise(size=32768):
+    rng = np.random.default_rng(size)
+    return (0.01 * (rng.normal(size=size) + 1j * rng.normal(size=size))
+            ).astype(np.complex64)
+
+
+@pytest.mark.parametrize('option', ['-o', '-a'])
+def test_first_block_failure_keeps_the_previous_output(monkeypatch,
+                                                       tmp_path, option):
+    """-o was opened before the first block: a card failing there (a
+    12-bit card that lost its header, read as 8-bit, has blocks twice
+    too long) emptied the previous run's .toad."""
+    (tmp_path / 'rx0.toad').write_text('previous\n')
+    with pytest.raises(FileFormatError, match='block 0 holds 65536'):
+        _run_detect(monkeypatch, tmp_path, option, 'rx0.toad',
+                    blocks=[_noise(2 * 32768)], header=False)
+    assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'
+
+
+def test_output_streams_once_the_first_block_passed(monkeypatch, tmp_path):
+    (tmp_path / 'rx0.toad').write_text('previous\n')
+    with pytest.raises(FileFormatError, match='block 1 holds'):
+        _run_detect(monkeypatch, tmp_path, '-o', 'rx0.toad',
+                    blocks=[_noise(), _noise(1000)], header=False)
+    assert (tmp_path / 'rx0.toad').read_text() == ''
+
+
+@pytest.mark.parametrize('option', ['-o', '-a'])
+def test_window_outside_the_fft_is_a_config_error(monkeypatch, tmp_path,
+                                                  option):
+    """A carrier bin the detector cannot index raised ValueError, with a
+    traceback, on the first block -- after -o emptied the .toad."""
+    (tmp_path / 'rx0.toad').write_text('previous\n')
+    with pytest.raises(ConfigValidationError, match='carrier_window'):
+        _run_detect(monkeypatch, tmp_path, option, 'rx0.toad',
+                    '--carrier-window', '1000-40000', blocks=[_noise()])
+    assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'

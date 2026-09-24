@@ -732,7 +732,12 @@ def add_argparse_arguments(parser, keys, definitions=None):
         if key not in definitions:
             raise SettingKeyError("Unknown key: {}".format(key))
         setting = definitions[key]
-        if len(setting.args):
+        # A command's own short option wins (template_extract's -p is
+        # --plot, not --chip-rate): the setting keeps its long one.
+        taken = getattr(parser, '_option_string_actions', {})
+        option_strings = [arg for arg in setting.args
+                          if arg.startswith('--') or arg not in taken]
+        if len(option_strings):
             # argparse %-formats help text; a literal '%' (e.g. "25%")
             # would crash --help.
             help_str = str(setting.description).replace('%', '%%')
@@ -743,12 +748,12 @@ def add_argparse_arguments(parser, keys, definitions=None):
             if setting.parser is setting_parsers.parse_bool:
                 # `--packing` alone means true; `--packing false` and
                 # `--packing=true` also work.
-                parser.add_argument(*setting.args, dest=key, nargs='?',
+                parser.add_argument(*option_strings, dest=key, nargs='?',
                                     const='true', type=_bool_flag_value,
                                     help=help_str + " (a bare flag means "
                                     "true)")
             else:
-                parser.add_argument(*setting.args, dest=key,
+                parser.add_argument(*option_strings, dest=key,
                                     type=str,
                                     help=help_str)
 

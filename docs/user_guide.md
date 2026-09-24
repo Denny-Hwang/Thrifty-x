@@ -399,7 +399,8 @@ milli, not mega: `chip_rate: 0.999707m` is rejected, since no template
 fits that many samples per chip.  `carrier_window` is in FFT bins
 unless it ends in `Hz`: `50-60kHz` is 50 to 60 kHz, but `50-60k` is
 bins 50 000 to 60 000.  That lies beyond the 32768-bin FFT at 6 Msps,
-where capture refuses it, but inside the 65536-bin FFT at 10 Msps,
+where capture (and `detect`, `template_extract`, `analyze_detect`)
+refuse it with status 78, but inside the 65536-bin FFT at 10 Msps,
 where it is only warned about (past Nyquist) and capture searches the
 wrong frequencies; `20-30k` there draws no warning at all.
 `carrier_window` and threshold expressions are parsed by
@@ -842,9 +843,10 @@ The dispatch table lives in `thriftyx/cli.py`.
   `template_extract` write the file only once their results are
   complete (`template_extract` reports a missing directory first), so a
   failed run leaves an existing file untouched.  `detect` opens it once
-  the input, template and settings have loaded -- a run that fails to
-  start keeps the old file -- and then streams detections into it, so
-  an error part-way through a card leaves a partial file.  For these
+  the first block has been processed -- a run that fails to start, or
+  on the card's first block (e.g. a 12-bit card that lost its header),
+  keeps the old file -- and then streams detections into it, so an
+  error part-way through a card leaves a partial file.  For these
   six commands `-o -` writes to stdout, and progress lines go to stderr
   instead.  `template_generate` and `template_extract` default to
   `template.npy` and `capture.npy`.

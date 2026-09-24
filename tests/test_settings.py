@@ -230,3 +230,14 @@ def test_chip_rate_is_checked_against_the_device_sample_rate():
     config = io.StringIO("device_type: airspy_r2\nchip_rate: 11M\n")
     with pytest.raises(ConfigValidationError, match='chip_rate'):
         settings.load(None, config)
+
+
+def test_a_commands_short_option_wins():
+    """template_extract and analyze_detect use -p for --plot, which the
+    chip_rate setting also claims: adding chip_rate to their settings
+    raised argparse's conflicting-option error."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--plot', action='store_true')
+    settings.add_argparse_arguments(parser, ['chip_rate', 'sample_rate'])
+    args = parser.parse_args(['-p', '--chip-rate', '1M', '-s', '6M'])
+    assert (args.plot, args.chip_rate, args.sample_rate) == (True, '1M', '6M')

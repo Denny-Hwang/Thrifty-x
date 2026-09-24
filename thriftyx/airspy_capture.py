@@ -31,12 +31,10 @@ import time
 import numpy as np
 
 from thriftyx import settings as settings_module
-from thriftyx import setting_parsers
 from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
 from thriftyx.hal.profiles import get_profile
 from thriftyx.carrier_detect import detect as carrier_detect_block
-from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import (EXIT_CONFIG, DeviceNotFoundError,
                                   DeviceConfigError, DeviceCaptureError,
                                   ConfigValidationError)
@@ -65,24 +63,6 @@ def _stdout_is_tty():
         return sys.stdout.isatty()
     except (AttributeError, ValueError):
         return False
-
-
-def _carrier_bins(carrier_window, sample_rate, block_size):
-    """``carrier_window`` in FFT bins, checked against the block size.
-
-    A bin the carrier detector cannot index would otherwise stop capture
-    on its first block, after the output file was created.
-    ``validate_config`` rejects such a window too; this guards callers
-    that skip it.
-    """
-    window = setting_parsers.normalize_freq_range(
-        carrier_window, sample_rate / block_size)
-    try:
-        fft_range_index(window[0], window[1], block_size)
-    except ValueError as exc:
-        raise ConfigValidationError(
-            "carrier_window: {}".format(exc)) from None
-    return window
 
 
 class CardSink:
@@ -376,8 +356,8 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     either; ``duration`` in *extra_args* stops it the same way.  Exits
     with fastcard's status when that is not 0.
     """
-    window = _carrier_bins(config.carrier_window, config.sample_rate,
-                           int(config.block_size))
+    window = config_validator.carrier_bins(
+        config.carrier_window, config.sample_rate, int(config.block_size))
     constant, snr, stddev = config.carrier_threshold
     if stddev != 0:
         print("Warning: fastcard does not support 'stddev' in threshold "
@@ -476,7 +456,8 @@ def _capture_rtlsdr(config, extra_args, output):
     bit_depth = 8
     thresh_coeffs = config.carrier_threshold
 
-    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
+    window = config_validator.carrier_bins(config.carrier_window, sample_rate,
+                                           block_size)
 
     # Determine input source
     if input_path and input_path != '-':
@@ -628,7 +609,8 @@ def _capture_airspy(config, extra_args, output):
     duration = extra_args.get('duration')
     thresh_coeffs = config.carrier_threshold
 
-    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
+    window = config_validator.carrier_bins(config.carrier_window, sample_rate,
+                                           block_size)
 
     # Resolve device selector.  ``airspy_serial`` (hex/decimal) takes
     # precedence; otherwise ``--device-index`` selects by enumeration order.
