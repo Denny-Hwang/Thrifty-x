@@ -38,7 +38,10 @@ rx.toads_analysis: rx.toads detector.cfg
 rx.match: rx.toads detector.cfg
 	thriftyx match rx.toads -o rx.match
 
-# tdoa reads the receivers' sample_rate from detector.cfg.
+# tdoa reads the receivers' sample_rate from detector.cfg: it must be
+# the rate the cards were captured at (6M for detector_mini.cfg and the
+# Pi nodes' rpi/thriftyx-capture.cfg.example).  Any other rate scales
+# every TDOA and position, without an error.
 rx.tdoa: rx.toads rx.match pos-beacon.cfg pos-rx.cfg detector.cfg
 	thriftyx tdoa rx.toads rx.match -o rx.tdoa \
 		-b pos-beacon.cfg -r pos-rx.cfg

@@ -172,6 +172,13 @@ cp ~/thrifty-x/rpi/thriftyx-capture.cfg.example /var/lib/thriftyx/capture.cfg
 $EDITOR /var/lib/thriftyx/capture.cfg   # adjust tuner_freq, gain, etc.
 ```
 
+Keep `sample_rate` the same on every node (the example's `6M`, the
+Airspy Mini default).  The server that combines the nodes' detections
+must use that rate too: `thriftyx tdoa -s 6M`, or `sample_rate: 6M` in
+its `detector.cfg` (`example/detector_mini.cfg` has it).  TDOAs are
+counted in samples, so a different rate on the server scales every
+TDOA and puts every position far off, without an error.
+
 `capture` ignores the file's `rxid` (a `.card` does not record it).
 The receiver id is set when its cards are detected, with `thriftyx
 detect rx1.card -o rx1.toad --rxid 1` or with `-c` and this file.
@@ -235,8 +242,10 @@ sudo $EDITOR /etc/default/thriftyx-cleanup   # THRIFTYX_OUT must match the captu
 ```
 
 Default policy: delete `.card` files older than 7 days and `.toad` and
-`.log` files older than 30 days under `THRIFTYX_OUT`, and purge the oldest
-cards when the disk passes 90 %.  Change it in
+`.log` files older than 30 days under `THRIFTYX_OUT` (soak runs'
+`soak/<run>/capture.card` and logs included; copy a soak card elsewhere
+to keep it), and when the disk passes 90 % purge the oldest cards,
+soak cards included, until it is below 80 %.  Change it in
 `/etc/default/thriftyx-cleanup`; cron passes no environment, so that
 file is the only place the job reads settings from.  Each run that
 deletes something, and any failure, is logged:

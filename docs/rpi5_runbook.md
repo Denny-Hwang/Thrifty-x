@@ -88,13 +88,26 @@ sudo systemctl stop thriftyx-capture@rx0
 echo "exit=$?"   # 0=PASS, 1=FAIL, 2=setup error
 ```
 
+The cleanup job treats `soak/` like `card/`: a soak's `capture.card`
+expires with `CARD_RETENTION_DAYS` (and is purged, oldest first with
+the capture cards, when the disk passes `DISK_PURGE_PCT`), its logs
+with `LOG_RETENTION_DAYS`; `summary.txt` and `samples.csv` stay.  Copy
+a soak card elsewhere if it must be kept longer.
+
 Automatic determination criteria (can be overridden with environment variables):
+- The soak ran its full duration: not interrupted (Ctrl-C, `kill`, the
+  scope stopped, a hangup without `nohup`), and capture ran at least
+  `SOAK_DURATION_S` minus 60 s (`SOAK_TOLERANCE_S`).  Capture exits 0
+  when stopped, so its exit code alone does not show a cut-short run.
 - Capture exit code == 0
 - `vcgencmd get_throttled` is `0x0` for the entire run
 - Peak CPU temperature ≤ 80°C (`MAX_TEMP_C`)
-- RSS memory growth rate ≤ 10% (median of the early vs. late portions, `MAX_MEM_GROWTH_PCT`)
+- RSS memory growth rate ≤ 10% (median of the early vs. late portions, `MAX_MEM_GROWTH_PCT`);
+  with fewer than 20 samples it is not judged and `summary.txt` says so
 - Disk free ≥ 10% (`MIN_DISK_FREE_PCT`)
 - `.card` file header integrity
+- The card holds at least one detected block (`MIN_CARD_BLOCKS`; run
+  the soak with the transmitters on air, or set it to 0)
 
 When you want to run it manually:
 
@@ -153,21 +166,33 @@ Payload schema (HTTP POST JSON, every 60 seconds):
   "throttled": "0x0",
   "service_state": "active",
   "last_detection_ts": "2026-05-06T12:34:50Z",
+  "last_block_ts": "2026-05-06T12:34:49Z",
   "version": "0.1.0"
 }
 ```
 
-- `disk_pct` is for `THRIFTYX_OUT`; `cpu_temp_c` and `throttled` are
-  `null` where `vcgencmd` is unavailable.
+- `disk_pct` is the use of `THRIFTYX_OUT`'s filesystem as `df` reports
+  it (used / (used + available), rounded up; root's reserved blocks
+  count as full), the figure the cleanup job's `DISK_*_PCT` thresholds
+  are compared with.  `cpu_temp_c` and `throttled` are `null` where
+  `vcgencmd` is unavailable.
 - `service_state` is what `systemctl is-active` prints for the capture
   unit, `thriftyx-capture@rx<RXID>.service` unless `THRIFTYX_UNIT` is
   set: `active`, `activating` (also while waiting to restart after a
   crash), `failed` (e.g. exit 78, a bad `capture.cfg`), `inactive`, ...;
   `unknown` only when systemctl gives no answer.
 - `last_detection_ts` is the modification time of the newest `.card`
-  file: the last write, which is a detection or, just after an hourly
-  rotation, the new file's header.  A value more than ~2 h old while
-  transmitters are on air means capture is running but detecting
+  file: the last write, which is a detection or, after each hourly
+  rotation, the new file's header.  It therefore never ages past about
+  an hour while capture runs, detections or not; a value more than
+  ~65 min old means capture is not writing at all (hung or stopped —
+  check `service_state` and `journalctl -u thriftyx-capture@rx<RXID>`).
+- `last_block_ts` is the capture timestamp of the newest detected block
+  (the last data line of the newest card that has one; `null` when no
+  card under `THRIFTYX_OUT/card` holds a block.  Only the last 8 MB of
+  a card, and 32 MB of cards per heartbeat, are searched).  Rotation does not
+  refresh it, so while transmitters are on air a value much older than
+  their transmit interval means capture is running but detecting
   nothing (antenna, gain, frequency).
 
 Heartbeats are sent every 60 s; alert when none has arrived for 3
@@ -213,30 +238,59 @@ node once with `ssh rxN 'sudo THRIFTYX_RXID=N /usr/local/bin/update_node.sh'`
 (the old script honours `THRIFTYX_RXID` and installs the new one); after
 that the plain command works.
 
+A dropped SSH connection does not stop the update halfway: the script
+ignores the hangup, and its output also goes to the journal
+(`journalctl -t update_node` shows how a run you lost sight of ended).
+To detach it from the session entirely, run it as a transient unit:
+
+```bash
+ssh rx1 'sudo systemd-run --collect --unit=thriftyx-update /usr/local/bin/update_node.sh'
+ssh rx1 'journalctl -u thriftyx-update -f'
+```
+
 Behavior:
 1. Must run as root (for `systemctl`); git and pip run as the clone's owner
-2. No changes after `git fetch` → exit 0 (no-op)
-3. `git merge --ff-only` fails → exit without affecting the service
-4. `pip install` with the extras the venv already has (`fft` only if
+2. The node only moves forward along `origin/master`.  A clone whose
+   HEAD is not an ancestor of it — a local commit, or origin rewound by
+   a force push — is refused → exit 1, service untouched (the message
+   gives the `git reset --hard origin/master` that follows origin).
+   Roll the fleet back by pushing a revert commit, not a force push.
+3. Nothing new after `git fetch` and HEAD is the recorded last known
+   good SHA → exit 0 (no-op).  An earlier run that was cut short
+   (power loss, kill) leaves HEAD different from that record or
+   `~/thrifty-x/.update_pending` behind; the next run finishes it
+   (steps 5-8, even with nothing new to pull) instead of calling the
+   node up to date.  A node without the record (never updated by this
+   script) is verified the same way once, restarting capture.
+4. `git merge --ff-only` fails → exit without affecting the service
+5. `pip install` with the extras the venv already has (`fft` only if
    pyfftw is installed; override with `PIP_EXTRAS=...`).  If it fails
    (e.g. PyPI unreachable), go back to the previous SHA and reinstall
-   it, without restarting the service → exit 1
-5. Refresh installed copies of the repo's systemd units and
+   it, without restarting the service → exit 1, on every run for as
+   long as pip keeps failing.  Only when an earlier cut-short run had
+   already got to steps 6-8 (the pending marker records how far a run
+   got) does an install failure need the full rollback of step 8.
+6. Refresh installed copies of the repo's systemd units and
    `update_node.sh` / `cleanup_old_captures.sh` (only files already
    installed; `daemon-reload` when a unit changed)
-6. `restart`, then after 30 seconds the service must be active **with
+7. `restart`, then after 30 seconds the service must be active **with
    the same PID and no automatic restarts** (a crash-looping release
    looks `active` most of the time)
-7. Failure in step 5 or 6 → automatic rollback of code, package, units
-   and scripts to the previous SHA + restart
-8. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
+8. Failure in step 6 or 7 → automatic rollback of code, package, units
+   and scripts to the last known good SHA + restart and health check
+9. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
 
 Exit codes:
-- `0` up to date or update succeeded
-- `1` update failed, node back on the old version (if even the old
-  version's reinstall failed, the log says so; the service was never
-  restarted and still runs it, so re-run the update once pip works)
-- `2` both update and rollback failed (immediate human intervention required)
+- `0` up to date, update succeeded, or an unfinished update finished
+- `1` update failed, node back on the last known good version (if even
+  the old version's reinstall failed, the log says so; the service was
+  never restarted and still runs it, so re-run the update once pip
+  works); or refused because the clone is ahead of or diverged from
+  origin (service untouched)
+- `2` units or service were changed, and both update and rollback
+  failed (the log names the rollback step that failed), or there was
+  no other known good version to go back to (immediate human
+  intervention required)
 - `3` setup error (working tree dirty, no venv, capture instance
   unknown, etc.)
 

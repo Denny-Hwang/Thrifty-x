@@ -4,7 +4,8 @@ dynamic = ["version"]
 description = "Airspy-based TDOA positioning system for wildlife tracking — fork of Thrifty by SW Krüger"
 readme = "README.md"
 requires-python = ">= 3.10"
-license = {text = "GPL-3.0-only"}
+license = "GPL-3.0-only"
+license-files = ["LICENSE.txt", "NOTICE"]
 authors = [
     {name = "Schalk Willem Krüger"},
     {name = "Sungjoo Hwang"},
@@ -26,7 +27,8 @@ thriftyx = "thriftyx.cli:_main"
 thrifty = "thriftyx.cli:_main"
 
 [build-system]
-requires = ["setuptools>=67"]
+# 77: SPDX `license` string and `license-files` (PEP 639).
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

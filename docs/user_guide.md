@@ -379,7 +379,7 @@ A reproducible procedure that works for both Airspy devices:
 | Zero detections | Gain too low | Raise LNA first |
 | Noise field >> 10 in capture status line | Gain too high | Lower VGA first |
 | Sporadic correlation hits in odd bins | IMD (LNA too high) | Lower LNA |
-| Histogram piles up beyond ±8 000 (Airspy int16) | ADC near full scale; libairspy's int16 path saturates above about half scale | Lower the whole chain |
+| Histogram piles up beyond about ±15 000 (Airspy int16) | ADC near full scale (±16 384); libairspy's int16 path is linear up to about ±16 000 and distorts at the very top, so act at about 93 % of full scale | Lower the whole chain |
 | `gain = 0.00 dB` displayed (RTL-SDR) | Cosmetic display only | Ignore |
 
 ---
@@ -771,6 +771,8 @@ thriftyx capture rx0.card --duration 30
 thriftyx detect rx0.card -o rx0.toad
 
 # 7. Identify transmitter IDs → .toads
+#    (with several receivers: one run over all of their .toad files,
+#    e.g. `thriftyx identify rx0.toad rx1.toad rx2.toad`; Section 11)
 thriftyx identify rx0.toad -o rx0.toads
 
 # 8. Statistics and analysis
@@ -1109,10 +1111,15 @@ The high-level architecture (carried over from the original Thrifty):
 Pipeline stages (CLI commands):
 
 ```
-*.toads  →  thriftyx match    → .match
-.toads + .match  →  thriftyx tdoa  -r pos-rx.cfg -b pos-beacon.cfg → .tdoa
-.tdoa  →  thriftyx pos  -r pos-rx.cfg → .pos
+rx*.toad (every receiver)  →  thriftyx identify  → data.toads
+data.toads  →  thriftyx match  → data.match
+data.toads + data.match  →  thriftyx tdoa  -r pos-rx.cfg -b pos-beacon.cfg → data.tdoa
+data.tdoa  →  thriftyx pos  -r pos-rx.cfg → data.pos
 ```
+
+`identify` runs once over all receivers' `.toad` files and writes one
+merged `.toads`; `match` takes that single file (per-receiver `.toads`
+files cannot be matched with each other).
 
 Each receiver's detections must carry its own `rxid` (`detect --rxid
 N`, or `rxid:` in its `detector.cfg`; Section 5.2), and that `rxid` is

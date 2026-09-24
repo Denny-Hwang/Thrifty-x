@@ -4,7 +4,10 @@
 # Runs `thriftyx capture` for SOAK_DURATION_S seconds, samples node
 # health every SAMPLE_INTERVAL_S into a CSV, then auto-judges PASS/FAIL
 # against documented thresholds.  Designed to be run unattended (nohup,
-# tmux, or systemd-run --scope).
+# tmux, or systemd-run --scope).  A soak that does not run its full
+# duration -- the script interrupted (Ctrl-C, kill, the scope stopped,
+# a hangup without nohup) or capture ending early, even with exit
+# status 0 -- is a FAIL.
 #
 # Usage:
 #   sudo systemctl stop thriftyx-capture@rx0
@@ -18,9 +21,16 @@
 
 set -uo pipefail
 
+# Output to a pipe whose reader is gone (`ssh` without -t losing the
+# connection, a dead `| tee`) must not kill the run before it writes
+# summary.txt: a failed echo is harmless.
+trap '' PIPE
+
 # ---------- Tunables ----------
 SOAK_DURATION_S="${SOAK_DURATION_S:-86400}"           # 24 h
 SAMPLE_INTERVAL_S="${SAMPLE_INTERVAL_S:-60}"
+# Capture must run at least SOAK_DURATION_S - SOAK_TOLERANCE_S seconds.
+SOAK_TOLERANCE_S="${SOAK_TOLERANCE_S:-60}"
 RXID="${THRIFTYX_RXID:-0}"
 HOME_DIR="${THRIFTYX_HOME:-$HOME/thrifty-x}"
 OUT_ROOT="${THRIFTYX_OUT:-/var/lib/thriftyx}"
@@ -33,6 +43,10 @@ MAX_TEMP_C="${MAX_TEMP_C:-80}"                          # peak CPU temp
 MAX_MEM_GROWTH_PCT="${MAX_MEM_GROWTH_PCT:-10}"          # RSS end vs early
 MIN_DISK_FREE_PCT="${MIN_DISK_FREE_PCT:-10}"            # always >= 10% free
 MAX_DISK_GROWTH_MB="${MAX_DISK_GROWTH_MB:-0}"           # 0 = no upper bound
+# Detected blocks the card must hold: the soak runs with the site's
+# transmitters on air, so none means the receive chain is not working.
+# 0 soaks without transmitters.
+MIN_CARD_BLOCKS="${MIN_CARD_BLOCKS:-1}"
 # ------------------------------
 
 if [ ! -f "${CONFIG}" ]; then
@@ -56,23 +70,38 @@ SUMMARY="${RUN_DIR}/summary.txt"
 echo "soak: run dir = ${RUN_DIR}"
 echo "soak: duration = ${SOAK_DURATION_S}s, sample = ${SAMPLE_INTERVAL_S}s"
 
+# Seconds since boot: elapsed time immune to clock steps (chrony).
+_now() { awk '{print int($1)}' /proc/uptime 2>/dev/null || date +%s; }
+
+# If the script is interrupted, stop capture and judge the run a FAIL
+# (capture exits 0 on SIGINT/SIGTERM, so its status does not show it).
+# SIGTERM, not SIGINT: a background job of a non-interactive shell
+# starts with SIGINT ignored, so until capture installs its handler
+# (imports, device open) a SIGINT would leave it running the whole
+# --duration.  SIGTERM stops it at any point.
+INTERRUPTED=""
+CAP_PID=""
+CAP_RC=""
+# shellcheck disable=SC2329  # invoked by the traps below
+on_signal() {
+    INTERRUPTED="$1"
+    kill -TERM "${CAP_PID}" 2>/dev/null || true
+}
+trap 'on_signal SIGINT' INT
+trap 'on_signal SIGTERM' TERM
+trap 'on_signal SIGHUP' HUP
+
 # Start capture in background
+START_TS=$(_now)
 "${HOME_DIR}/.venv/bin/thriftyx" capture "${CARD_FILE}" \
     --config "${CONFIG}" \
     --duration "${SOAK_DURATION_S}" \
     >"${STDOUT_LOG}" 2>"${STDERR_LOG}" &
 CAP_PID=$!
+# A signal that came before CAP_PID was known stopped nothing yet.
+[ -z "${INTERRUPTED}" ] || kill -TERM "${CAP_PID}" 2>/dev/null
 echo "${CAP_PID}" > "${RUN_DIR}/pid"
 echo "soak: capture pid = ${CAP_PID}"
-
-# Trap: if soak.sh itself is killed, kill capture too
-cleanup() {
-    if kill -0 "${CAP_PID}" 2>/dev/null; then
-        kill -INT "${CAP_PID}" 2>/dev/null || true
-        wait "${CAP_PID}" 2>/dev/null || true
-    fi
-}
-trap cleanup INT TERM
 
 # CSV header
 echo "ts,uptime_s,rss_kb,cpu_temp_c,throttled,disk_used_pct,card_size_b" \
@@ -98,10 +127,9 @@ _get_throttled() {
 }
 
 # Sampling loop
-START_TS=$(date +%s)
 END_TS=$((START_TS + SOAK_DURATION_S + 30))   # +30s grace
 
-while [ "$(date +%s)" -lt "${END_TS}" ]; do
+while [ "$(_now)" -lt "${END_TS}" ] && [ -z "${INTERRUPTED}" ]; do
     if ! kill -0 "${CAP_PID}" 2>/dev/null; then
         break    # capture exited
     fi
@@ -113,16 +141,47 @@ while [ "$(date +%s)" -lt "${END_TS}" ]; do
     DUSE=$(df --output=pcent "${OUT_ROOT}" 2>/dev/null | tail -1 | tr -dc '0-9')
     CSIZE=$(stat -c%s "${CARD_FILE}" 2>/dev/null || echo 0)
     echo "${NOW},${UP},${RSS},${TEMP},${THR},${DUSE},${CSIZE}" >> "${SAMPLES_CSV}"
-    sleep "${SAMPLE_INTERVAL_S}"
+    # In the background: a signal's trap runs at once, not after sleep.
+    # Detached from stdout, so a sleep outliving an interrupted run does
+    # not hold `ssh node soak_test.sh` or a `| tee` open until it ends.
+    sleep "${SAMPLE_INTERVAL_S}" >/dev/null 2>&1 &
+    SLEEP_PID=$!
+    # Wake at the next sample or as soon as capture exits, whichever is
+    # first (wait -n with ids and -p: bash >= 5.1), so the run's length
+    # is capture's own, not rounded up to the next sample.  -p leaves
+    # DONE_PID unset when a trapped signal cuts the wait short.
+    wait -n -p DONE_PID "${SLEEP_PID}" "${CAP_PID}"
+    WAIT_RC=$?
+    if [ "${DONE_PID:-}" = "${CAP_PID}" ]; then
+        CAP_RC=${WAIT_RC}
+    fi
+    kill "${SLEEP_PID}" 2>/dev/null || true
 done
 
-wait "${CAP_PID}"
-CAP_RC=$?
-echo "soak: capture exit code = ${CAP_RC}"
+# A trapped signal also cuts `wait` short (status > 128) while capture
+# is still stopping: wait again for its real exit status.
+while [ -z "${CAP_RC}" ]; do
+    wait "${CAP_PID}"
+    CAP_RC=$?
+    if [ "${CAP_RC}" -gt 128 ] && kill -0 "${CAP_PID}" 2>/dev/null; then
+        CAP_RC=""
+    fi
+done
+ELAPSED=$(( $(_now) - START_TS ))
+echo "soak: capture exit code = ${CAP_RC} after ${ELAPSED}s"
 
 # ---------- Auto-judge ----------
 fail=0
 reasons=()
+
+# 0. the soak ran its full duration
+if [ -n "${INTERRUPTED}" ]; then
+    fail=1; reasons+=("soak interrupted by ${INTERRUPTED} after ${ELAPSED}s")
+fi
+if [ "${ELAPSED}" -lt $((SOAK_DURATION_S - SOAK_TOLERANCE_S)) ]; then
+    fail=1
+    reasons+=("capture ran ${ELAPSED}s of the ${SOAK_DURATION_S}s soak")
+fi
 
 # 1. capture exit code
 if [ "${CAP_RC}" -ne 0 ]; then
@@ -142,11 +201,12 @@ if awk -v p="${PEAK_TEMP}" -v m="${MAX_TEMP_C}" 'BEGIN{exit !(p > m)}'; then
 fi
 
 # 4. memory growth — compare median of first 10 samples vs last 10
+# (n/a with fewer than 20 samples: not judged, and the summary says so)
 MEM_GROWTH=$(awk -F, '
     NR==1 {next}
     $3!="" {n++; v[n]=$3+0}
     END {
-        if (n < 20) {print "0"; exit}
+        if (n < 20) {print "n/a"; exit}
         head=0; for (i=1;i<=10;i++) head+=v[i]; head/=10
         tail=0; for (i=n-9;i<=n;i++) tail+=v[i]; tail/=10
         if (head==0) {print "0"; exit}
@@ -175,23 +235,43 @@ fi
 if [ ! -s "${CARD_FILE}" ]; then
     fail=1; reasons+=("card file empty or missing: ${CARD_FILE}")
 else
-    HEAD=$(head -c 3 "${CARD_FILE}")
-    if [ "${HEAD}" != "#v2" ] \
-            && ! head -1 "${CARD_FILE}" | grep -qE '^[0-9.]+ [0-9]+ '; then
+    # No pipeline: with pipefail, `head | grep -q` could fail on head's
+    # EPIPE (SIGPIPE is ignored) and call a good card corrupt.
+    FIRST=""
+    IFS= read -r FIRST < "${CARD_FILE}" || true
+    if [ "${FIRST:0:3}" != "#v2" ] \
+            && ! [[ "${FIRST}" =~ ^[0-9.]+\ [0-9]+\  ]]; then
         fail=1; reasons+=("card file header looks corrupt")
     fi
 fi
 
+# 7. detections: a card holding only its header detected nothing
+if [ "${MIN_CARD_BLOCKS}" -gt 0 ] && [ -s "${CARD_FILE}" ]; then
+    CARD_BLOCKS=$(grep -c -m "${MIN_CARD_BLOCKS}" -v -e '^#' -e '^$' \
+                  "${CARD_FILE}")
+    if [ "${CARD_BLOCKS}" -lt "${MIN_CARD_BLOCKS}" ]; then
+        fail=1
+        r="card holds ${CARD_BLOCKS} detected block(s) < MIN_CARD_BLOCKS"
+        reasons+=("${r}=${MIN_CARD_BLOCKS} (transmitters on air?)")
+    fi
+fi
+
 # ---------- Summary ----------
+# Written to the file first: a vanished terminal must not cut it short.
 {
     echo "Thrifty-X 24h soak summary"
     echo "rxid=${RXID} run=${STAMP}"
     echo "duration_s=${SOAK_DURATION_S} sample_s=${SAMPLE_INTERVAL_S}"
+    echo "elapsed_s=${ELAPSED}"
+    [ -z "${INTERRUPTED}" ] || echo "interrupted_by=${INTERRUPTED}"
     echo "capture_exit_code=${CAP_RC}"
     if ! command -v vcgencmd >/dev/null 2>&1; then
         # Without vcgencmd the throttle check can never fail — say so
         # instead of letting an unmonitored signal look like a pass.
         echo "WARNING: vcgencmd not available — throttle flags were NOT monitored"
+    fi
+    if [ "${MEM_GROWTH}" = "n/a" ]; then
+        echo "WARNING: fewer than 20 RSS samples — memory growth was NOT judged"
     fi
     echo "peak_cpu_temp_c=${PEAK_TEMP}"
     echo "rss_growth_pct=${MEM_GROWTH}"
@@ -204,6 +284,7 @@ fi
         echo "RESULT: FAIL"
         for r in "${reasons[@]}"; do echo "  - ${r}"; done
     fi
-} | tee "${SUMMARY}"
+} > "${SUMMARY}"
+cat "${SUMMARY}"
 
 exit "${fail}"

@@ -7,6 +7,11 @@
 # environment: THRIFTYX_OUT must match the capture unit's, and the
 # *_RETENTION_DAYS / DISK_*_PCT values set the policy.  Anything unset
 # falls back to the defaults below.
+#
+# Cards under card/ and soak/<run>/ (rpi/soak_test.sh) expire after
+# CARD_RETENTION_DAYS and are both candidates for the disk-full purge;
+# .toad files under toad/ and .log files under log/ and soak/<run>/
+# expire after their own retention.
 
 set -euo pipefail
 
@@ -62,6 +67,29 @@ check_days CARD_RETENTION_DAYS "${CARD_DAYS}" || CARD_DAYS=
 check_days TOAD_RETENTION_DAYS "${TOAD_DAYS}" || TOAD_DAYS=
 check_days LOG_RETENTION_DAYS "${LOG_DAYS}" || LOG_DAYS=
 
+# Disk thresholds are whole percentages from 1 to 100, warn <= purge.
+# A bad value ("90%" say) made the `[` comparisons fail inside `if`,
+# which silently turned the purge off.  It is logged, the default is
+# used instead, and the exit status is 2.
+check_pct() {
+    [[ "$2" =~ ^0*([0-9]{1,3})$ ]] && [ "${BASH_REMATCH[1]}" -ge 1 ] \
+        && [ "${BASH_REMATCH[1]}" -le 100 ] && return 0
+    say "$1='$2' is not a whole percentage from 1 to 100; using $3"
+    STATUS=2
+    return 1
+}
+check_pct DISK_WARN_PCT "${DISK_WARN_PCT}" 80 || DISK_WARN_PCT=80
+check_pct DISK_PURGE_PCT "${DISK_PURGE_PCT}" 90 || DISK_PURGE_PCT=90
+DISK_WARN_PCT=$((10#${DISK_WARN_PCT}))
+DISK_PURGE_PCT=$((10#${DISK_PURGE_PCT}))
+if [ "${DISK_WARN_PCT}" -gt "${DISK_PURGE_PCT}" ]; then
+    say "DISK_WARN_PCT=${DISK_WARN_PCT} is above" \
+        "DISK_PURGE_PCT=${DISK_PURGE_PCT}; using 80 and 90"
+    DISK_WARN_PCT=80
+    DISK_PURGE_PCT=90
+    STATUS=2
+fi
+
 cd "${ROOT}"
 
 # expire DIR PATTERN DAYS: delete matching files older than DAYS (none
@@ -73,30 +101,41 @@ expire() {
     find "$1" -type f -name "$2" -mmin "+$((10#$3 * 1440))" -print -delete \
         | wc -l
 }
-N_CARD="$(expire card '*.card' "${CARD_DAYS}")"
+N_CARD=$(( $(expire card '*.card' "${CARD_DAYS}") \
+            + $(expire soak '*.card' "${CARD_DAYS}") ))
 N_TOAD="$(expire toad '*.toad' "${TOAD_DAYS}")"
-N_LOG="$(expire log '*.log' "${LOG_DAYS}")"
+N_LOG=$(( $(expire log '*.log' "${LOG_DAYS}") \
+           + $(expire soak '*.log' "${LOG_DAYS}") ))
 N_PURGED=0
 
-USE_PCT="$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')"
+disk_pct() { df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9'; }
+USE_PCT="$(disk_pct)"
 if [ "${USE_PCT}" -ge "${DISK_PURGE_PCT}" ]; then
     say "disk ${USE_PCT}% >= ${DISK_PURGE_PCT}% — emergency purge oldest .card files"
-    # Delete oldest .card files until below warn threshold
-    while [ "$(df --output=pcent "${ROOT}" | tail -1 | tr -dc '0-9')" -ge "${DISK_WARN_PCT}" ]; do
-        [ -d card ] || break
-        # awk 'NR==1' (not `head -1`) so the whole stream is consumed:
-        # with `set -o pipefail`, head exiting early would kill sort
-        # with SIGPIPE (status 141) and `set -e` would abort the purge
-        # exactly when the disk is full of card files (>~1500 entries).
-        # `|| true` also tolerates a find error mid-loop (e.g. the
-        # directory disappearing) instead of aborting the script.
-        OLDEST="$(find card -type f -name '*.card' -mmin "+${ACTIVE_GRACE_MIN}" \
-                  -printf '%T@ %p\n' 2>/dev/null \
-                  | sort -n | awk 'NR==1 {print $2}')" || true
-        [ -z "${OLDEST}" ] && break
-        rm -f "${OLDEST}"
-        N_PURGED=$((N_PURGED + 1))
+    PURGE_DIRS=()
+    for dir in card soak; do
+        if [ -d "${dir}" ]; then PURGE_DIRS+=("${dir}"); fi
     done
+    # Delete the oldest cards, capture and soak alike, until below the
+    # warn threshold.  NUL-terminated "mtime<TAB>path" records keep any
+    # file name whole (`awk '{print $2}'` cut a name at its first space;
+    # rm -f of the cut name "succeeded", nothing was freed and the loop
+    # never ended).  The list is walked once, so a card that cannot be
+    # deleted, or whose deletion frees nothing, cannot loop forever.
+    if [ "${#PURGE_DIRS[@]}" -gt 0 ]; then
+        while IFS=$'\t' read -r -d '' _ path; do
+            [ "$(disk_pct)" -ge "${DISK_WARN_PCT}" ] || break
+            rm -f -- "${path}" || true
+            if [ -e "${path}" ]; then
+                say "cannot delete ${path}"
+                STATUS=2
+                continue
+            fi
+            N_PURGED=$((N_PURGED + 1))
+        done < <(find "${PURGE_DIRS[@]}" -type f -name '*.card' \
+                      -mmin "+${ACTIVE_GRACE_MIN}" -printf '%T@\t%p\0' \
+                      2>/dev/null | LC_ALL=C sort -z -n)
+    fi
 elif [ "${USE_PCT}" -ge "${DISK_WARN_PCT}" ]; then
     say "disk ${USE_PCT}% >= ${DISK_WARN_PCT}% — warning"
 fi
