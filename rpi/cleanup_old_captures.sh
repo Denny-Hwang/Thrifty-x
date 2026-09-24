@@ -44,24 +44,32 @@ if [ ! -d "${ROOT}" ]; then
     say "ROOT '${ROOT}' is not a directory (data disk not mounted?)"
     exit 2
 fi
-# Retention is a whole number of days, at least 1: 0 or a stray value
-# must not become "expire everything", the card being written included.
+# Retention is a whole number of days from 1 to 36500: 0, a stray value
+# or one so large that N x 1440 minutes overflows must not become
+# "expire everything", the card being written included.  A bad value
+# skips only that expiry: the rest, the emergency purge included, still
+# runs, and the exit status is 2.
+STATUS=0
 check_days() {
-    [[ "$2" =~ ^[0-9]+$ ]] && [ "$((10#$2))" -ge 1 ] && return 0
-    say "$1='$2' is not a whole number of days (at least 1)"
-    exit 2
+    [[ "$2" =~ ^0*([0-9]{1,5})$ ]] && [ "${BASH_REMATCH[1]}" -ge 1 ] \
+        && [ "${BASH_REMATCH[1]}" -le 36500 ] && return 0
+    say "$1='$2' is not a whole number of days from 1 to 36500;" \
+        "not expiring those files"
+    STATUS=2
+    return 1
 }
-check_days CARD_RETENTION_DAYS "${CARD_DAYS}"
-check_days TOAD_RETENTION_DAYS "${TOAD_DAYS}"
-check_days LOG_RETENTION_DAYS "${LOG_DAYS}"
+check_days CARD_RETENTION_DAYS "${CARD_DAYS}" || CARD_DAYS=
+check_days TOAD_RETENTION_DAYS "${TOAD_DAYS}" || TOAD_DAYS=
+check_days LOG_RETENTION_DAYS "${LOG_DAYS}" || LOG_DAYS=
 
 cd "${ROOT}"
 
-# expire DIR PATTERN DAYS: delete matching files older than DAYS and
-# print how many.  Ages are compared in minutes: `-mtime +N` rounds an
-# age down to whole days and so kept files for N+1 days.
+# expire DIR PATTERN DAYS: delete matching files older than DAYS (none
+# when DAYS is empty) and print how many.  Ages are compared in minutes:
+# `-mtime +N` rounds an age down to whole days and so kept files for
+# N+1 days.
 expire() {
-    [ -d "$1" ] || { echo 0; return 0; }
+    [ -n "$3" ] && [ -d "$1" ] || { echo 0; return 0; }
     find "$1" -type f -name "$2" -mmin "+$((10#$3 * 1440))" -print -delete \
         | wc -l
 }
@@ -98,3 +106,4 @@ if [ $((N_CARD + N_TOAD + N_LOG + N_PURGED)) -gt 0 ]; then
         "past retention; purged ${N_PURGED} card file(s) for space;" \
         "disk now $(df --output=pcent "${ROOT}" | tail -1 | tr -d ' ')"
 fi
+exit "${STATUS}"

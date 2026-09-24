@@ -52,9 +52,11 @@ vcgencmd get_throttled       # 0x0 means normal
   a new hourly file and never reopens old ones).  Not `-mtime +1`: find
   rounds ages down to whole days, so that keeps two days.
 - Change the retention policy: set `CARD_RETENTION_DAYS=N` (whole days,
-  at least 1; and the other limits) in `/etc/default/thriftyx-cleanup`;
+  1 to 36500; and the other limits) in `/etc/default/thriftyx-cleanup`;
   the next hourly run applies it.
-  Its `THRIFTYX_OUT` must match the capture unit's.
+  Its `THRIFTYX_OUT` must match the capture unit's.  A value outside
+  that range, `0` included, is logged and leaves those files to the
+  disk-usage purge alone: check the journal after changing it.
 
 ### 2.3 Throttling/heat
 - Normal: `get_throttled` = `0x0`
@@ -201,6 +203,15 @@ exported by the caller):
 ssh rx1 'sudo THRIFTYX_RXID=1 /usr/local/bin/update_node.sh'
 # or: sudo THRIFTYX_SERVICE=thriftyx-capture@rx1.service /usr/local/bin/update_node.sh
 ```
+
+A node whose installed `/usr/local/bin/update_node.sh` predates this
+instance lookup (every node but rx0 set up before it) restarts
+`thriftyx-capture@rx0` instead, fails with exit 2, and its rollback
+reinstalls the old script.  The `install` line above does not help: it
+copies from the node's clone, still on the old commit.  Update such a
+node once with `ssh rxN 'sudo THRIFTYX_RXID=N /usr/local/bin/update_node.sh'`
+(the old script honours `THRIFTYX_RXID` and installs the new one); after
+that the plain command works.
 
 Behavior:
 1. Must run as root (for `systemctl`); git and pip run as the clone's owner
