@@ -75,8 +75,14 @@ def _receiver_stream(rxid, code, rng):
         keyed = np.zeros(len(chips))
         keyed[on] = code[chips[on]]
         phase = rng.uniform(0, 2 * np.pi)
-        carrier = np.exp(2j * np.pi * CARRIER_HZ[txid] * n[span] / FS + phase)
+        # Unit magnitude: the phase belongs inside the imaginary unit
+        # (outside it scaled each burst by e**phase, up to 535x, and
+        # clipped the int16 samples).
+        carrier = np.exp(1j * (2 * np.pi * CARRIER_HZ[txid] * n[span] / FS
+                               + phase))
         sig[span] += AMPLITUDE * keyed * carrier
+    # Bursts at AMPLITUDE plus noise: far from full scale, nothing clips.
+    assert np.max(np.abs(sig)) < 2 * AMPLITUDE
     return complex_to_raw(sig.astype(np.complex64), bit_depth=12)
 
 
