@@ -37,10 +37,10 @@ import sys
 
 import numpy as np
 
+from thriftyx import config_validator
 from thriftyx import detect
 from thriftyx import settings
 from thriftyx.exceptions import DetectionError
-from thriftyx.setting_parsers import normalize_freq_range
 
 
 MAX_OFFSET = 0.2
@@ -191,14 +191,14 @@ def _main():
     setting_keys = ['device_type', 'sample_rate', 'block_size', 'block_history',
                     'carrier_window', 'carrier_threshold',
                     'corr_threshold', 'template', 'bit_depth',
-                    'freq_shift_method', 'soa_interpolation']
+                    'freq_shift_method', 'soa_interpolation', 'chip_rate']
     config, args = settings.load_args(parser, setting_keys)
     if args.output != '-':
         _check_output_dir(args.output)
     blocks, config = detect.open_card(args.input, config)
 
-    bin_freq = config.sample_rate / config.block_size
-    window = normalize_freq_range(config.carrier_window, bin_freq)
+    window = config_validator.carrier_bins(
+        config.carrier_window, config.sample_rate, config.block_size)
     template = detect.load_template(config.template, config.sample_rate,
                                     config.get('chip_rate'))
 

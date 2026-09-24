@@ -25,7 +25,7 @@ from thriftyx import util
 from thriftyx.block_data import block_reader, card_reader, peek_card_header
 from thriftyx.exceptions import FileFormatError, TemplateError
 from thriftyx.carrier_sync import DefaultSynchronizer
-from thriftyx.setting_parsers import normalize_freq_range
+from thriftyx import config_validator
 from thriftyx.soa_estimator import SoaEstimator
 
 
@@ -318,6 +318,11 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     output_path, mode = ((args.output, 'w') if args.append is None
                          else (args.append, 'a'))
     info_out = sys.stderr if output_path == '-' else sys.stdout
+    # Nothing at all to read (`capture ... - | detect - -o rx0.toad`
+    # whose capture failed at once) is no run either: the previous
+    # output stays.
+    peek = getattr(args.input, 'peek', None)
+    empty_input = peek is not None and not peek(1)
 
     if args.raw:
         blocks = block_reader(args.input, config.block_size,
@@ -326,8 +331,8 @@ def detector_cli(detector_class, parser=None, extra_args=None):
     else:
         blocks, config = open_card(args.input, config)
 
-    bin_freq = config.sample_rate / config.block_size
-    window = normalize_freq_range(config.carrier_window, bin_freq)
+    window = config_validator.carrier_bins(
+        config.carrier_window, config.sample_rate, config.block_size)
     template = load_template(
         config.template, config.sample_rate, config.get('chip_rate'),
         report=None if args.quiet else lambda m: print(m, file=info_out))
@@ -347,17 +352,16 @@ def detector_cli(detector_class, parser=None, extra_args=None):
                                          add_dt=True)
 
     with contextlib.ExitStack() as stack:
-        # Opened only now that the template and settings are known good.
-        # Detections are written as they are found, so a streamed input
-        # fills the file while it runs.
-        output_file = None
-        if output_path == '-':
-            output_file = sys.stdout
-        elif output_path is not None:
-            output_file = stack.enter_context(open(output_path, mode))
-
+        # Opened only once the first block has been processed: a card
+        # that fails on it (a lost header's bit depth or geometry) keeps
+        # the previous run's detections.  Detections are then written
+        # as they are found, so a streamed input fills the file while it
+        # runs.
+        output_file = sys.stdout if output_path == '-' else None
         carriers = correlated = 0
         for detected, result in detections:
+            if output_file is None and output_path is not None:
+                output_file = stack.enter_context(open(output_path, mode))
             carriers += result.corr_info is not None
             correlated += bool(detected)
             if detected and output_file is not None:
@@ -366,6 +370,13 @@ def detector_cli(detector_class, parser=None, extra_args=None):
             if not args.quiet:
                 # Output summary line
                 print(summary_liner(detected, result), file=info_out)
+        if output_file is None and output_path is not None:
+            if empty_input:
+                logging.warning("the input is empty; %s is left as it was",
+                                output_path)
+            else:
+                # A card without blocks: this run found nothing.
+                stack.enter_context(open(output_path, mode))
     _check_yield(carriers, correlated, config.template,
                  getattr(args.input, 'name', None))
 

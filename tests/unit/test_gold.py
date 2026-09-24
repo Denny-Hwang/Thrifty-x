@@ -410,6 +410,95 @@ def test_short_codes_are_identified(bits, idx, rate):
         assert is_clear_match(results)
 
 
+@pytest.mark.parametrize('idx', [32, 65, 76, 79, 83])
+def test_longer_codes_are_identified_without_a_rate(idx):
+    """Without --sample-rate the 7-bit template is also read as a 5- or
+    6-bit code at 2 or 4 times the samples per chip, which correlates
+    0.4-0.42: as the runner-up it failed the 2.5x ratio."""
+    from thriftyx.gold import is_clear_match
+    template = generate(7, idx, 2.4e6 / 0.999707e6, 'gold').astype(float)
+    results = identify(template, None)
+    assert (results[0]['bits'], results[0]['index']) == (7, idx)
+    assert is_clear_match(results)
+
+
+@pytest.mark.parametrize('others, clear', [
+    ([(5, 0.42), (7, 0.2)], True),     # a short code's chance level
+    ([(5, 0.6)], False),               # a short code as good as that
+    ([(5, 0.4), (7, 0.37)], False),    # another 7-bit code too close
+    ([(9, 0.37)], False),
+])
+def test_clear_match_ratio_depends_on_both_codes(others, clear):
+    from thriftyx.gold import is_clear_match
+    results = [{'bits': 7, 'correlation': 0.9}] + [
+        {'bits': bits, 'correlation': -corr} for bits, corr in others]
+    assert is_clear_match(results) == clear
+
+
+# A 12-bit card at 2.4 MSPS cut from one stream (8-bit legacy code 17
+# bursts, carrier blocks only), with samples capture lost and
+# zero-filled: 6000 after the third burst, or block 0's history.
+_LOSSY_RATE, _LOSSY_BLOCK, _LOSSY_HISTORY = 2.4e6, 16384, 4920
+
+
+def _lossy_card(seed, lost, noise=0.035):
+    import io
+    from thriftyx.block_data import card_writer, write_card_header
+    rng = np.random.default_rng(seed)
+    step = _LOSSY_BLOCK - _LOSSY_HISTORY
+    envelope = (generate(8, 17, _LOSSY_RATE / 0.999707e6, 'legacy') + 1) / 2
+    total = 20 * step + _LOSSY_HISTORY
+    stream = (rng.normal(size=total) + 1j * rng.normal(size=total)) * noise
+    starts = range(3000, total - len(envelope), int(1.37 * step))
+    for start in starts:
+        n = np.arange(start, start + len(envelope))
+        stream[n] += 0.2 * envelope * np.exp(
+            2j * np.pi * (20e3 / _LOSSY_RATE * n + rng.uniform()))
+    if lost == 'gap':
+        gap = starts[2] + len(envelope) + 500
+        stream[gap:gap + 6000] = 0
+    elif lost == 'history':
+        stream = np.concatenate([np.zeros(_LOSSY_HISTORY), stream])
+    buf = io.StringIO()
+    write_card_header(buf, bit_depth=12, sample_rate=int(_LOSSY_RATE),
+                      block_size=_LOSSY_BLOCK, block_history=_LOSSY_HISTORY)
+    for k in range(20):
+        lo, hi = k * step, k * step + _LOSSY_BLOCK
+        if any(s + len(envelope) > lo and s < hi for s in starts):
+            card_writer(buf, float(k), k,
+                        stream[lo:hi].astype(np.complex64), bit_depth=12)
+    return io.BytesIO(buf.getvalue().encode())
+
+
+@pytest.mark.parametrize('lost, seed', [('gap', 0), ('gap', 1), ('gap', 2),
+                                        ('history', 2), ('history', 6)])
+def test_identify_card_ignores_lost_samples(lost, seed):
+    """The noise level was a low percentile of a block's envelope, which
+    fell in the zeros: plain noise then made "bursts" far stronger than
+    the real ones, and a wrong code won."""
+    from thriftyx.gold import identify_card, is_clear_match
+    results = identify_card(_lossy_card(seed, lost))[0]
+    assert (results[0]['family'], results[0]['bits'],
+            results[0]['index']) == ('legacy', 8, 17)
+    assert is_clear_match(results)
+
+
+@pytest.mark.parametrize('noise_lsb', [0.0, 0.2, 0.5])   # int16 LSBs
+@pytest.mark.parametrize('lost', [None, 'gap'])
+def test_identify_card_on_a_silent_card(noise_lsb, lost):
+    """With (almost) no noise, the off chips and the gaps between bursts
+    are runs of exact zeros too: taken for lost samples, they hid every
+    burst."""
+    from thriftyx.block_data import AIRSPY_INT16_FULL_SCALE
+    from thriftyx.gold import identify_card, is_clear_match
+    for seed in range(3):
+        results = identify_card(_lossy_card(
+            seed, lost, noise=noise_lsb / AIRSPY_INT16_FULL_SCALE))[0]
+        assert (results[0]['family'], results[0]['bits'],
+                results[0]['index']) == ('legacy', 8, 17)
+        assert is_clear_match(results)
+
+
 def test_shared_codes_belong_to_the_legacy_family_too(monkeypatch, capsys):
     from thriftyx import gold as gold_module
     template = str(REPO / 'example' / 'template.npy')

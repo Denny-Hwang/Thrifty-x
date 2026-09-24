@@ -264,6 +264,7 @@ def test_rotation_pattern_without_directory(tmp_path, monkeypatch):
     (['out.card', '--rotate', '3600'], 'strftime'),
     (['-', '--rotate', '3600'], 'output file'),
     (['x_%H.card', '--rotate', '0'], 'positive'),
+    (['x_%Y%m%d.card', '--rotate', '60'], 'same name'),
 ])
 def test_rotate_validation(monkeypatch, tmp_path, capsys, argv, message):
     monkeypatch.chdir(tmp_path)
@@ -275,6 +276,38 @@ def test_rotate_validation(monkeypatch, tmp_path, capsys, argv, message):
     assert excinfo.value.code == EXIT_CONFIG
     assert message in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('pattern, rotate, repeats', [
+    ('rx0_%Y%m%dT%H%M%S.card', 1, False),
+    ('rx0_%Y%m%dT%H%M%S.card', 0.5, True),
+    ('%Y%m%d/rx0_%H%M%S.card', 3600, False),
+    # Hourly files named by the hour: local time repeats an hour when
+    # daylight saving time ends, which the .1 suffix covers.
+    ('rx0_%Y%m%d_%H.card', 3600, False),
+    ('rx0_%Y%m%d_%H.card', 1800, True),
+    ('rx0_%Y%m%d.card', 86400, False),
+    ('rx0_%Y%m%d.card', 60, True),
+    ('rx0_%H%M.card', 90, False),
+    ('rx0_%H%M.card', 45, True),
+    ('rx0_%Y%m.card', 30 * 86400, True),   # a 31-day month holds two
+])
+def test_rotation_pattern_must_name_every_file(pattern, rotate, repeats):
+    """A pattern coarser than the interval tried .1 ... .998 suffixes and
+    then stopped capture with a bare FileExistsError 999 files later
+    (about 16 hours for daily names and --rotate 60) -- and again on
+    every restart."""
+    assert ac._pattern_repeats(pattern, rotate, now=1790000000) == repeats
+
+
+def test_exhausted_suffixes_are_explained(tmp_path):
+    (tmp_path / 'rx0.card').touch()
+    for n in range(1, 1000):
+        (tmp_path / 'rx0.{}.card'.format(n)).touch()
+    with pytest.raises(FileExistsError) as excinfo:
+        ac._open_new(str(tmp_path / 'rx0.card'))
+    assert excinfo.value.filename == str(tmp_path / 'rx0.card')
+    assert '.999' in excinfo.value.strerror
 
 
 def _rtl_capture(monkeypatch, tmp_path, data, **overrides):
@@ -332,3 +365,42 @@ def test_rtl_noise_detects_no_carrier(tmp_path, capsys, skip):
     assert blocks == 3
     assert _cards(out.getvalue()) == []
     assert 'block #' not in capsys.readouterr().err
+
+
+# Inputs short of the first block: 2 history pairs (4 bytes), or one
+# skipped block, then 6 new pairs (12 bytes).
+@pytest.mark.parametrize('size, skip', [(0, 0), (4, 0), (15, 0), (0, 1),
+                                        (12, 1), (23, 1)])
+def test_rtl_input_without_a_block_keeps_the_old_card(monkeypatch, tmp_path,
+                                                      capsys, size, skip):
+    """`rtl_sdr ... - | thriftyx capture rx0.card --input -` with no
+    dongle replaced rx0.card with a bare header and exited 0."""
+    card = tmp_path / 'rx0.card'
+    card.write_text('#v2 bit_depth=8\nprevious run\n')
+    raw = tmp_path / 'iq.u8'
+    raw.write_bytes(bytes(size))
+    with pytest.raises(SystemExit) as excinfo:
+        ac._capture_rtlsdr(_config(device_type='rtlsdr', tuner_gain=0.0,
+                                   sample_rate=2_400_000,
+                                   capture_skip=skip),
+                           Namespace({'duration': None, 'input': str(raw)}),
+                           ac._card_sink_for(str(card)))
+    assert excinfo.value.code == 1
+    assert 'input ended' in capsys.readouterr().err
+    assert card.read_text() == '#v2 bit_depth=8\nprevious run\n'
+
+
+def test_rtl_card_is_replaced_once_a_block_arrives(monkeypatch, tmp_path):
+    card = tmp_path / 'rx0.card'
+    card.write_text('previous run\n')
+    raw = tmp_path / 'iq.u8'
+    raw.write_bytes(bytes(range(16)))       # history + exactly one block
+    monkeypatch.setattr(ac, 'carrier_detect_block',
+                        lambda *_a, **_k: (False, 1, 10.0, 1.0))
+    blocks = ac._capture_rtlsdr(
+        _config(device_type='rtlsdr', tuner_gain=0.0, sample_rate=2_400_000),
+        Namespace({'duration': None, 'input': str(raw)}),
+        ac._card_sink_for(str(card)))
+    assert blocks == 1
+    assert card.read_text().startswith('#v2 bit_depth=8 sample_rate=2400000')
+    assert _cards(card.read_text()) == []
