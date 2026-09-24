@@ -85,13 +85,23 @@ def solve_numerically(tdoa_array, rx_pos):
     min_bounds = np.amin(rx_coords, axis=0) - MAX_DIST
     max_bounds = np.amax(rx_coords, axis=0) + MAX_DIST
 
+    unknown = set(uniq_rx.tolist()) - set(rx_pos)
+    if unknown:
+        raise EstimationError("no coordinates for receiver(s) {}".format(
+            ', '.join(map(str, sorted(unknown)))))
     rx0 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx0']])
     rx1 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx1']])
 
-    # Start inside the bounds, which a fixed point near the origin is not
-    # for receivers more than MAX_DIST from it (e.g. UTM coordinates);
-    # the offset keeps it off a receiver, where the Jacobian is undefined.
-    x0 = np.mean(rx_coords, axis=0) + 0.1
+    # The solver stops in the local minimum nearest its start, so solve
+    # from two starts and keep the better fit: near the origin, which some
+    # tags just outside the array need (from the centroid, the path to a
+    # tag behind a corner receiver ends in that receiver's cusp), and the
+    # receivers' centroid, which is inside the bounds even for receivers
+    # more than MAX_DIST from the origin (e.g. UTM coordinates).  The 0.1
+    # offsets keep a start off a receiver, where the Jacobian is undefined.
+    starts = [np.full(dims, 0.1), np.mean(rx_coords, axis=0) + 0.1]
+    starts = [x0 for x0 in starts
+              if np.all(x0 >= min_bounds) and np.all(x0 <= max_bounds)]
 
     def model(pos):
         # position relative to {rx0, rx1}
@@ -111,9 +121,12 @@ def solve_numerically(tdoa_array, rx_pos):
         dist1 = np.linalg.norm(pos_rx1, axis=1)
         return pos_rx0 / dist0[:, None] - pos_rx1 / dist1[:, None]
 
-    res = scipy.optimize.least_squares(model, x0,
-                                       jac=jac,
-                                       bounds=(min_bounds, max_bounds))
+    res = None
+    for x0 in starts:
+        candidate = scipy.optimize.least_squares(
+            model, x0, jac=jac, bounds=(min_bounds, max_bounds))
+        if res is None or candidate.cost < res.cost:
+            res = candidate
 
     # TODO: also return residual or a measure of the quality or confidence of
     #       the estimate

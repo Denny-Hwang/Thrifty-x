@@ -401,13 +401,15 @@ def load_pos_config(file_):
     return positions
 
 
-def _resolve_sample_rate(cli_value, config_path):
+def _resolve_sample_rate(cli_value, config_path,
+                         affected="TDOA and position estimates"):
     """Resolve the receivers' nominal sample rate for TDOA estimation.
 
     Resolution order: ``--sample-rate`` > ``sample_rate`` in the config
     file > the default for its ``device_type`` (the same default capture
     used, from :mod:`thriftyx.hal.profiles`).  The last case is warned
-    about, since a wrong rate scales every TDOA and position.
+    about, since a wrong rate scales every TDOA and position; the warning
+    names *affected* as the figures that would be wrong.
     """
     if cli_value is not None:
         return float(cli_value)
@@ -431,9 +433,9 @@ def _resolve_sample_rate(cli_value, config_path):
     if 'sample_rate' not in explicit:
         _logging.warning(
             "--sample-rate not specified and %s sets no sample_rate; "
-            "using the %s default of %.4g Hz. TDOA and position estimates "
-            "are wrong if the receivers captured at another rate.",
-            cfg_path, values['device_type'], rate)
+            "using the %s default of %.4g Hz. %s are wrong if the "
+            "receivers captured at another rate.",
+            cfg_path, values['device_type'], rate, affected)
     return rate
 
 

@@ -67,6 +67,20 @@ def test_jumps_of_either_sign_are_found(ppm0, ppm1):
     assert list(beacon_analysis.find_discontinuities(soa)) == [20, 44]
 
 
+@pytest.mark.parametrize('rx, steps, size', [
+    (1, range(27, 32), 16384),       # a burst of dropped USB transfers
+    (0, range(27, 32), -16384),
+    (1, range(27, 37, 2), 5),        # every other step
+])
+def test_runs_of_jumps_are_found(rx, steps, size):
+    """Regression: jumps in 5 of the 9 steps around one set the local
+    (median) rate, and the jumps it covered were missed."""
+    soa = _soas(-11.29, -4.6)
+    for k in steps:
+        soa[k + 1:, rx] += size
+    assert list(beacon_analysis.find_discontinuities(soa)) == list(steps)
+
+
 def _analysis_input(soa):
     detections = [
         toads_data.DetectionResult(
@@ -114,15 +128,19 @@ def test_nothing_to_fit_is_an_estimation_error():
         beacon_analysis.analyze(detections, np.array([]), FS)
 
 
-def test_cli_sample_rate(tmp_path, monkeypatch, capsys):
-    soa = _soas(-11.29, -4.6, noise=0.5)
-    monkeypatch.chdir(tmp_path)
+def _write_cli_input(tmp_path, soa):
     (tmp_path / 'data.toads').write_text(''.join(
         '{} 0 {:.6f} 0 {:.6f} 0 0.0 100.0 1.0 0 0.0 100.0 1.0\n'.format(
             rx, 10.0 + i, soa[i, rx])
         for i in range(len(soa)) for rx in (0, 1)))
     (tmp_path / 'data.match').write_text(''.join(
         '{} {}\n'.format(2 * i, 2 * i + 1) for i in range(len(soa))))
+
+
+def test_cli_sample_rate(tmp_path, monkeypatch, capsys):
+    soa = _soas(-11.29, -4.6, noise=0.5)
+    monkeypatch.chdir(tmp_path)
+    _write_cli_input(tmp_path, soa)
     stds = []
     for rate in ('2.4M', '10M'):
         monkeypatch.setattr(sys, 'argv', ['analyze_beacon', '--deg', '1',
@@ -130,3 +148,16 @@ def test_cli_sample_rate(tmp_path, monkeypatch, capsys):
         beacon_analysis._main()
         stds.append(_printed_std(capsys.readouterr().out))
     assert stds[0] == pytest.approx(10 / 2.4 * stds[1], rel=0.01)
+
+
+def test_cli_default_rate_warning_names_the_residuals(tmp_path, monkeypatch,
+                                                      caplog):
+    """The fallback warning, shared with tdoa, spoke of TDOA and position
+    estimates."""
+    soa = _soas(-11.29, -4.6, noise=0.5)
+    monkeypatch.chdir(tmp_path)
+    _write_cli_input(tmp_path, soa)
+    monkeypatch.setattr(sys, 'argv', ['analyze_beacon', '--deg', '1'])
+    beacon_analysis._main()
+    assert 'The residuals in metres are wrong' in caplog.text
+    assert 'position' not in caplog.text

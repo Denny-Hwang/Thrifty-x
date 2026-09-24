@@ -171,6 +171,8 @@ def test_map_receivers_without_offset_line_use_zero():
 
 @pytest.mark.parametrize('line, match', [
     ('1: 49 - 51 kHz', 'FFT bins, not Hz'),
+    ('1: 49 - 51k', 'FFT bins, not Hz'),
+    ('1: 100 - 105 M', 'FFT bins, not Hz'),
     ('1: 18300Hz - 18700Hz', 'invalid line'),
     ('1: 49k - 51k', 'invalid line'),
     ('one: 100 - 105', 'invalid line'),
@@ -178,7 +180,8 @@ def test_map_receivers_without_offset_line_use_zero():
 ])
 def test_map_errors_name_the_line(line, match):
     """Ranges with a Hz unit (which the guide used to promise) and
-    malformed lines raised bare ValueErrors."""
+    malformed lines raised bare ValueErrors; an SI prefix without the
+    unit ('51k') was multiplied into the bins."""
     stream = io.StringIO('0: 10 - 20\n' + line + '\n')
     stream.name = 'freqmap.cfg'
     with pytest.raises(ConfigError, match=match) as excinfo:

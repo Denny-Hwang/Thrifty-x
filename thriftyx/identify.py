@@ -22,6 +22,7 @@ import errno
 import glob
 import itertools
 import logging
+import re
 
 import numpy as np
 
@@ -284,9 +285,10 @@ def load_freqmap(file_):
                 "{}: invalid line '{}: {}' (expected 'txid: start - stop' "
                 "in FFT bins, or '@rxid: offset')".format(
                     name, key, value)) from None
-        if unit_hz:
+        if unit_hz or re.search(r'[kKmM]\s*$', value):
             # identify knows neither the sample rate nor the block size
-            # that would convert Hz to bins.
+            # that would convert Hz to bins ('105k' is 105 kHz, not
+            # 105000 bins).
             raise ConfigError(
                 "{}: '{}: {}': give the range in FFT bins, not Hz "
                 "(bin = Hz * block_size / sample_rate)".format(

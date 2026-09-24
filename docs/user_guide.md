@@ -967,13 +967,13 @@ thriftyx identify --map freqmap.cfg rx0.toad rx1.toad rx2.toad -o data.toads
 The map is parsed by `thriftyx.identify.load_freqmap`.  Ranges are in
 FFT bins only: identify does not know the sample rate and block size
 that convert Hz (`bin = Hz * block_size / sample_rate`), so a range with
-a `Hz` unit, or a line that does not parse, stops identify with an
-error naming the line.  Each TX range is shifted by the receiver's
-`@rxid` offset (0 without one) before being checked.  A detection whose
-`carrier_bin + carrier_offset` falls outside every TX range gets
-`txid = -1` (sentinel for "unidentified") and is dropped from the
-`.toads` output by `filter_duplicates`. A warning is logged for
-each unidentified detection.
+a `Hz` unit or a `k`/`M` prefix, or a line that does not parse, stops
+identify with an error naming the line.  Each TX range is shifted by
+the receiver's `@rxid` offset (0 without one) before being checked.  A
+detection whose `carrier_bin + carrier_offset` falls outside every TX
+range gets `txid = -1` (sentinel for "unidentified") and is dropped
+from the `.toads` output by `filter_duplicates`. A warning is logged
+for each unidentified detection.
 
 The auto-classifier is fine for ad-hoc inspection runs but the
 explicit map is the recommended production workflow.
@@ -1085,9 +1085,10 @@ Receiver and beacon coordinates live in `pos-rx.cfg` and
 `pos-beacon.cfg`, one `id: x y` line each (metres, any Cartesian
 frame).  Every line in both files has the same number of coordinates:
 with `id: x y z` the tag's height is solved too, which needs at least
-4 receivers; `id: x` with exactly 2 receivers gives a 1-D position
-between them.  A receiver pair that never heard a beacon together gets
-no TDOA (counted as a failure), while the other pairs are estimated.
+4 receivers; `id: x` gives a 1-D position along the line of the
+receivers and needs at least 2.  A receiver pair that never heard a
+beacon together gets no TDOA (counted as a failure), while the other
+pairs are estimated.
 End-to-end multi-receiver documentation will be added as the
 integration testing matures.
 

@@ -71,6 +71,14 @@ def test_solve_1d_takes_receivers_from_the_tdoa_row():
         assert x == pytest.approx(tx), rx_pos
 
 
+def test_1d_with_three_receivers():
+    """`id: x` coordinates need at least 2 receivers, not exactly 2."""
+    rx_pos = {0: [0.0], 1: [1500.0], 2: [3000.0]}
+    groups = [(0, 1.0, 3, gen_tdoa_data(rx_pos, [400.0]))]
+    positions = pos_est.solve(groups, rx_pos)
+    assert positions['x'][0] == pytest.approx(400.0, abs=0.01)
+
+
 def test_solve_1d_rejects_unknown_receiver():
     with pytest.raises(pos_est.EstimationError, match=r'\(0, 2\)'):
         pos_est.solve_1d(_row(0, 2, 0.0), {0: [0.0], 1: [10.0]})
@@ -88,6 +96,31 @@ def test_solve_numerically_far_from_the_origin(offset):
     tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
     position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
     np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
+@pytest.mark.parametrize('tx_pos', [(-100, 1600), (-200, 1700),
+                                    (1600, -100), (750, 750)])
+def test_solve_numerically_just_outside_the_array(tx_pos):
+    """Regression: starting only at the receivers' centroid, the solver
+    stopped in the cusp of the corner receiver in front of these tags,
+    152-303 m off, where the start near the origin finds them."""
+    rx_pos = {0: [0, 0], 1: [1500, 0], 2: [0, 1500], 3: [1500, 1500]}
+    tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+    position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+    np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
+def test_solve_skips_a_receiver_without_coordinates(capsys):
+    """Regression: a .tdoa row naming a receiver missing from pos-rx.cfg
+    crashed pos with a bare KeyError."""
+    rx_pos = dict(RX_POS)
+    groups = [(7, 1.0, 3, gen_tdoa_data(RX_POS, TX_POS))]
+    del rx_pos[2]
+    with pytest.raises(pos_est.EstimationError,
+                       match=r'no coordinates for receiver\(s\) 2'):
+        pos_est.solve_numerically(groups[0][3], rx_pos)
+    assert len(pos_est.solve(groups, rx_pos)) == 0
+    assert 'Failed to estimate group #7' in capsys.readouterr().out
 
 
 def test_underdetermined_names_the_receivers_needed():

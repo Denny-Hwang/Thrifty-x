@@ -13,9 +13,10 @@ Analyze the difference in SOA of a beacon between two receivers.
 """
 
 
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.ndimage
 
 from thriftyx import matchmaker
 from thriftyx import tdoa_est
@@ -25,6 +26,11 @@ from thriftyx.setting_parsers import metric_float
 
 
 SPEED_OF_LIGHT = 2.997e8
+
+# Largest departure of the receivers' relative clock rate from its median
+# over a capture that is still drift: crystals are tens of ppm apart,
+# which the median takes out, and drift by a few ppm with temperature.
+MAX_RATE_DRIFT = 100e-6
 
 
 def plot(soa0, residuals, discontinuities, sample_rate, avg_snr=None):
@@ -70,6 +76,16 @@ def plot(soa0, residuals, discontinuities, sample_rate, avg_snr=None):
     plt.subplots_adjust(top=0.90)
 
 
+def _local_median(values, size=9):
+    """Median of the *size* values around each of *values*, ignoring NaNs
+    (NaN where all are), with the ends mirrored."""
+    windows = np.lib.stride_tricks.sliding_window_view(
+        np.pad(values, size // 2, mode='reflect'), size)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)   # all-NaN window
+        return np.nanmedian(windows, axis=1)
+
+
 def find_discontinuities(soa):
     """Indices i where the SDOA jumps between beacon match i and i+1.
 
@@ -80,6 +96,13 @@ def find_discontinuities(soa):
     change.  A step that departs from the local rate by more than the
     noise (10 MADs, and at least one sample) is a jump in one receiver's
     sample count.
+
+    The local rate is the median of the 9 steps around a step, which
+    jumps in most of them would set.  So a step whose rate departs from
+    the median of all steps by more than MAX_RATE_DRIFT is a jump too,
+    and the jumps found are left out of the local rates and the search
+    repeated until it finds no more.  Smaller jumps in 5 or more of 9
+    consecutive steps are still missed.
 
     Parameters
     ----------
@@ -93,10 +116,16 @@ def find_discontinuities(soa):
         return np.array([], dtype=int)
     with np.errstate(divide='ignore', invalid='ignore'):
         rate = dsdoa / dsoa0
-    local_rate = scipy.ndimage.median_filter(rate, size=9, mode='mirror')
-    deviation = np.abs(dsdoa - local_rate * dsoa0)
-    noise = 1.4826 * np.median(deviation)
-    return np.where(deviation > max(10 * noise, 1.0))[0]
+    jumps = np.abs(rate - np.median(rate)) > MAX_RATE_DRIFT
+    while not jumps.all():
+        local_rate = _local_median(np.where(jumps, np.nan, rate))
+        deviation = np.abs(dsdoa - local_rate * dsoa0)
+        noise = 1.4826 * np.median(deviation[~jumps])
+        found = jumps | (deviation > max(10 * noise, 1.0))
+        if np.array_equal(found, jumps):
+            break
+        jumps = found
+    return np.flatnonzero(jumps)
 
 
 def analyze(detections, matches, sample_rate, deg=2):
@@ -221,7 +250,8 @@ def _main():
                              "[default: detector.cfg]")
 
     args = parser.parse_args()
-    sample_rate = tdoa_est._resolve_sample_rate(args.sample_rate, args.config)
+    sample_rate = tdoa_est._resolve_sample_rate(
+        args.sample_rate, args.config, affected="The residuals in metres")
 
     toads = toads_data.load_toads(args.toads)
     detections = toads_data.toads_array(toads, with_ids=True)

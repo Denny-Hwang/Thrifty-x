@@ -6,7 +6,7 @@
 import io
 import sys
 
-from thriftyx import cli
+from thriftyx import cli, toads_data
 from thriftyx.matchmaker import load_matches, save_matches
 
 
@@ -61,3 +61,27 @@ def test_failed_match_keeps_the_previous_output(tmp_path, monkeypatch):
     (tmp_path / 'data.match').write_text('0 1\n')
     assert _match_cli(monkeypatch) == 1
     assert (tmp_path / 'data.match').read_text() == '0 1\n'
+
+
+def test_match_on_a_toad_file_is_an_error(tmp_path, monkeypatch, capsys):
+    """A .toad record is one field short of a .toads record; every line
+    used to be skipped with a warning and match wrote no matches."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'rx0.toad').write_text(''.join(
+        '0 10.{} {} 1.0 0 0.0 100.0 1.0 0 0.0 100.0 1.0\n'.format(i, i)
+        for i in range(3)))
+    (tmp_path / 'data.match').write_text('0 1\n')
+    assert _match_cli(monkeypatch, 'rx0.toad') == 1
+    err = capsys.readouterr().err
+    assert 'rx0.toad: no .toads records (a .toad file?)' in err
+    assert 'skipped line' not in err
+    assert (tmp_path / 'data.match').read_text() == '0 1\n'
+
+
+def test_short_lines_among_records_are_skipped(caplog):
+    stream = io.StringIO('0 1 10.0 0 1.0 0 0.0 100.0 1.0 0 0.0 100.0 1.0\n'
+                         '\n'
+                         '0 1 10.1\n')
+    assert len(toads_data.load_toads(stream)) == 1
+    assert 'skipped line #3' in caplog.text
+    assert 'skipped line #2' not in caplog.text

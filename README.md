@@ -258,12 +258,12 @@ in metres in any local Cartesian frame (UTM works too; `-r` / `-b`
 choose other files).  Every line in both files has the same number of
 coordinates: `id: x y` gives 2-D positions and needs at least 3
 receivers; `id: x y z` also solves the tag's height and needs at least
-4; `id: x` with exactly 2 receivers places the tag on the line between
-them.  `tdoa -s` is the receivers' sample rate; without it `tdoa` reads
-`sample_rate` from `detector.cfg`, then falls back to the `device_type`
-default with a warning.  A receiver pair that never heard a beacon
-together gets no TDOA (it is counted as a failure); the other pairs
-are still estimated.
+4; `id: x` gives a 1-D position along the line of the receivers and
+needs at least 2.  `tdoa -s` is the receivers' sample rate; without it
+`tdoa` reads `sample_rate` from `detector.cfg`, then falls back to the
+`device_type` default with a warning.  A receiver pair that never
+heard a beacon together gets no TDOA (it is counted as a failure); the
+other pairs are still estimated.
 
 `detect`, `analyze_detect` and `template_extract` take the sample rate,
 block geometry and bit depth from the card's `#v2` header, so a card
