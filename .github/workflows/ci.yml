@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+# `shell: bash` runs steps as `bash -eo pipefail`.  GitHub's default for
+# a step without one is `bash -e`, under which `cmd | tee ...` takes
+# tee's exit status and a failing cmd passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   lint:
     runs-on: ubuntu-latest
