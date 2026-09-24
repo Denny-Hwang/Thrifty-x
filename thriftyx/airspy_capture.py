@@ -790,12 +790,14 @@ def capture_cli(args=None):
     Supports all device types:
       - RTL-SDR:     thriftyx capture output.card --device-type rtlsdr
                      rtl_sdr -f 162M -s 2.4M - | \
-                         thriftyx capture output.card --device-type rtlsdr
+                         thriftyx capture output.card --device-type rtlsdr \
+                         --input -
       - Airspy Mini: thriftyx capture output.card --device-type airspy_mini
       - Airspy R2:   thriftyx capture output.card --device-type airspy_r2
 
-    For RTL-SDR, the ``fastcard`` binary is used when available.  If it is
-    not installed, a Python-based carrier detection fallback is used.
+    For RTL-SDR, the ``fastcard`` binary is used when available and no
+    ``--input`` is given.  Otherwise a Python-based carrier detection
+    fallback reads ``--input`` (default: stdin).
     """
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -806,7 +808,10 @@ def capture_cli(args=None):
                              "default: stdout)")
     parser.add_argument('--input', dest='input', default=None,
                         help="Input raw binary file for RTL-SDR "
-                             "('-' for stdin, default: stdin)")
+                             "('-' for stdin); read by the Python "
+                             "capture, bypassing fastcard.  Default: "
+                             "fastcard opens the dongle, or without "
+                             "fastcard, stdin")
     parser.add_argument('--duration', dest='duration',
                         type=float, default=None,
                         help="Capture duration in seconds (default: until "

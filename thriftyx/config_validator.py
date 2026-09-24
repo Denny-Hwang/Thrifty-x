@@ -145,27 +145,32 @@ def validate_config(config: dict) -> list[str]:
         if isinstance(carrier_window, (tuple, list)) and len(carrier_window) >= 2:
             unit_hz = bool(len(carrier_window) >= 3 and carrier_window[2])
             window = (carrier_window[0], carrier_window[1], unit_hz)
-            # The conversion capture uses.
+            # The conversion capture uses.  A window is reported in its
+            # own unit (bin block_size/2 is sample_rate/2); only one in
+            # bins can lack the 'Hz'.
+            bins = None  # cannot convert Hz without sample_rate
             if not unit_hz:
                 bins = normalize_freq_range(window, 1.0)
+                what = f"carrier_window {bins[0]} to {bins[1]} (FFT bins)"
+                nyquist = f"Nyquist ({block_size // 2})"
+                hint = (" A window without 'Hz' is in bins even with a "
+                        "k/M suffix: write e.g. 50-60kHz for one in Hz.")
             elif sample_rate is not None:
                 bins = normalize_freq_range(window, sample_rate / block_size)
-            else:
-                bins = None  # cannot convert Hz without sample_rate
+                what = (f"carrier_window {window[0]:.0f} to "
+                        f"{window[1]:.0f} Hz")
+                nyquist = (f"Nyquist (±{sample_rate / 2:.0f} Hz, "
+                           f"sample_rate/2)")
+                hint = " Check carrier_window setting."
             if bins is not None:
                 try:
                     fft_range_index(bins[0], bins[1], block_size)
                 except ValueError:
                     raise ConfigValidationError(
-                        f"carrier_window {bins[0]} to {bins[1]} (FFT bins) "
-                        f"lies outside the {block_size}-bin FFT. A window "
-                        f"without 'Hz' is in bins even with a k/M suffix: "
-                        f"write e.g. 50-60kHz for one in Hz.") from None
+                        f"{what} lies outside the {block_size}-bin FFT: "
+                        f"it exceeds {nyquist}.{hint}") from None
                 if max(abs(bins[0]), abs(bins[1])) > block_size // 2:
-                    warnings.append(
-                        f"carrier_window {bins[0]} to {bins[1]} (FFT bins) "
-                        f"exceeds Nyquist ({block_size // 2}). Check "
-                        f"carrier_window setting.")
+                    warnings.append(f"{what} exceeds {nyquist}.{hint}")
 
     # 7. Gain indices and gain_mode, for devices with staged gain
     if profile.gain_stages:

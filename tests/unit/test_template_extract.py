@@ -4,6 +4,7 @@
 """template_extract: which block it extracts from, and its output file."""
 
 import io
+import os
 import sys
 import types
 
@@ -31,13 +32,26 @@ def test_block_edge_partial_is_never_extracted():
     small enough offset, that partial used to be extracted -- a template
     starting thousands of chips into the code, reported as a success."""
     detections = [_detection(1, 550.0, 0.4), _detection(2, 46.0, -0.15),
-                  _detection(3, 540.0, -0.3)]
-    with pytest.raises(DetectionError, match='complete burst'):
+                  _detection(3, 540.0, -0.3),
+                  _detection(7, 30.0, 0.05), _detection(8, 520.0, 0.45),
+                  _detection(9, 25.0, 0.0)]
+    with pytest.raises(DetectionError, match='part of a burst'):
         template_extract.best_detection(iter(detections), 0.2)
 
-    detections.append(_detection(4, 530.0, 0.1))
+    detections.append(_detection(12, 530.0, 0.1))
     _, result = template_extract.best_detection(iter(detections), 0.2)
-    assert result.block == 4
+    assert result.block == 12
+
+
+def test_a_weaker_transmitters_complete_burst_is_extracted():
+    """Candidates used to need half the strongest detection's energy,
+    which also rejected every burst of a weaker transmitter sending the
+    same code (told apart by carrier frequency), blaming a block edge."""
+    detections = [_detection(block, 537.0, -0.48)
+                  for block in (1, 5, 9, 13)]
+    detections.insert(3, _detection(11, 215.0, -0.10))
+    _, result = template_extract.best_detection(iter(detections), 0.2)
+    assert result.block == 11
 
 
 def _card_with_one_burst():
@@ -77,6 +91,33 @@ def test_output_may_be_the_input_template(monkeypatch, tmp_path):
     assert not np.array_equal(extracted, base)
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         'rx0.card', 'template.npy']
+
+
+def test_output_symlink_is_written_through(monkeypatch, tmp_path):
+    """The output was saved to a temporary file and renamed over -o: a
+    symlink became a regular file and the file's mode was reset."""
+    base = resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE)
+    np.save(tmp_path / 'template.npy', base)
+    os.chmod(tmp_path / 'template.npy', 0o640)
+    os.symlink('template.npy', tmp_path / 'link.npy')
+    _extract(monkeypatch, tmp_path, '-o', 'link.npy')
+    assert os.readlink(tmp_path / 'link.npy') == 'template.npy'
+    assert not np.array_equal(np.load(tmp_path / 'template.npy'), base)
+    assert (tmp_path / 'template.npy').stat().st_mode & 0o777 == 0o640
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        'link.npy', 'rx0.card', 'template.npy']
+
+
+def test_missing_output_directory_fails_first(monkeypatch, tmp_path):
+    """It was reported after the whole extraction, under the temporary
+    file's name."""
+    np.save(tmp_path / 'template.npy',
+            resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE))
+    # Reading the card at all is too late.
+    monkeypatch.setattr(template_extract.detect, 'open_card', None)
+    with pytest.raises(FileNotFoundError) as exc_info:
+        _extract(monkeypatch, tmp_path, '-o', 'nodir/x.npy')
+    assert exc_info.value.filename == 'nodir/x.npy'
 
 
 def test_failed_extraction_keeps_the_previous_output(monkeypatch, tmp_path):

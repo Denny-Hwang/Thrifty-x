@@ -236,12 +236,13 @@ R820T2 driver distributes it across LNA and Mixer. Typical values:
   nearest supported step)
 
 Set this in `detector.cfg` as `tuner_gain: 0.0`. It takes effect only
-when the upstream `fastcard` C binary is on `PATH`: capture then runs
-it with `-g <value>`.  Without `fastcard`, capture's Python fallback
-does not open the dongle at all -- it reads samples from `rtl_sdr`
-(`rtl_sdr -f 433.83M -s 2.4M -g 40 - | thriftyx capture rx0.card
---device-type rtlsdr`), so set the gain with `rtl_sdr -g`; the
-`gain = ... dB` in capture's banner then only echoes `tuner_gain`.
+when the upstream `fastcard` C binary is on `PATH` and no `--input` is
+given: capture then runs it with `-g <value>`.  Otherwise capture's
+Python fallback does not open the dongle at all -- it reads samples
+from `rtl_sdr` (`rtl_sdr -f 433.83M -s 2.4M -g 40 - | thriftyx capture
+rx0.card --device-type rtlsdr --input -`), so set the gain with
+`rtl_sdr -g`; the `gain = ... dB` in capture's banner then only echoes
+`tuner_gain`.
 
 ### 4.3 Airspy 3-Stage Gain (LNA → Mixer → VGA)
 
@@ -397,7 +398,10 @@ command, so a single `detector.cfg` covers `capture`, `detect`,
 milli, not mega: `chip_rate: 0.999707m` is rejected, since no template
 fits that many samples per chip.  `carrier_window` is in FFT bins
 unless it ends in `Hz`: `50-60kHz` is 50 to 60 kHz, but `50-60k` is
-bins 50 000 to 60 000, beyond the FFT, and capture refuses it.
+bins 50 000 to 60 000.  That lies beyond the 32768-bin FFT at 6 Msps,
+where capture refuses it, but inside the 65536-bin FFT at 10 Msps,
+where it is only warned about (past Nyquist) and capture searches the
+wrong frequencies; `20-30k` there draws no warning at all.
 `carrier_window` and threshold expressions are parsed by
 `thriftyx.setting_parsers`.
 
@@ -657,10 +661,14 @@ delay — i.e. a true matched filter for *this* receiver chain.
 `template_extract` cuts the template from a complete burst whose
 correlation peak lies within 0.2 samples of a whole sample.  It never
 uses the partial detection a burst also leaves in the neighbouring
-block (that would give a template starting part-way into the code): if
-no complete burst qualifies it fails and asks for a longer capture.
-The output is replaced only once extraction succeeds, so `-o` may name
-the template it reads (`--template template.npy -o template.npy`).
+block, recognised (as `identify` drops it) by a stronger detection in
+the block before or after; that would give a template starting
+part-way into the code.  If no complete burst qualifies it fails and
+asks for a longer capture.  A weaker transmitter's bursts still count
+as complete.  The output is replaced only once extraction succeeds, so
+`-o` may name the template it reads (`--template template.npy -o
+template.npy`); a symlink is written through and an existing file
+keeps its permissions.
 
 Indicative correlation SNR improvement on real captures:
 
@@ -824,7 +832,8 @@ The dispatch table lives in `thriftyx/cli.py`.
 - `-o / --output` — write to a file instead of stdout.  `detect` and
   `template_extract` open it only once the input, template and settings
   have loaded (`template_extract` only once it has a template to
-  write), so a run that fails leaves an existing file as it was.
+  write, though it reports a missing directory first), so a run that
+  fails leaves an existing file as it was.
 - `-a / --append` — append to an existing output file (`detect` only).
 - `--quiet` — suppress per-block status output (`detect`).
 - `--raw` — input is raw I/Q rather than `.card` (`detect`,

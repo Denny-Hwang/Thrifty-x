@@ -301,6 +301,42 @@ def test_carrier_window_beyond_nyquist_warns(window, warns):
     assert any('Nyquist' in w for w in warnings) == warns
 
 
+@pytest.mark.parametrize('window, hz_hint', [('50-60k', True),
+                                              ('0-7MHz', False)])
+def test_carrier_window_error_suggests_hz_only_without_it(window,
+                                                          hz_hint):
+    """A window in Hz was told to add the 'Hz' it already had."""
+    config = _valid_mini_config()
+    config['carrier_window'] = freq_range(window)
+    with pytest.raises(ConfigValidationError) as exc_info:
+        validate_config(config)
+    assert ("without 'Hz'" in str(exc_info.value)) == hz_hint
+    if not hz_hint:
+        assert '0 to 7000000 Hz' in str(exc_info.value)
+        assert '3000000 Hz, sample_rate/2' in str(exc_info.value)
+
+
+@pytest.mark.parametrize('window, hz_hint', [('9000-10000', True),
+                                              ('0-4MHz', False)])
+def test_nyquist_warning_suggests_hz_only_without_it(window, hz_hint):
+    config = _valid_mini_config()
+    config['carrier_window'] = freq_range(window)
+    [warning] = [w for w in validate_config(config) if 'Nyquist' in w]
+    assert ("without 'Hz'" in warning) == hz_hint
+
+
+@pytest.mark.parametrize('window, warns', [('50-60k', True),
+                                           ('20-30k', False)])
+def test_carrier_window_in_bins_within_a_large_fft(window, warns):
+    """At 10 Msps (65536-bin FFT) a k-suffixed window is inside the FFT:
+    only warned about, or not at all (user guide 5.1)."""
+    config = {'device_type': 'airspy_r2', 'sample_rate': 10e6,
+              'block_size': 65536, 'block_history': 20539,
+              'carrier_window': freq_range(window)}
+    warnings = validate_config(config)
+    assert any('Nyquist' in w for w in warnings) == warns
+
+
 def test_carrier_window_in_hz_needs_the_sample_rate():
     config = _valid_mini_config()
     del config['sample_rate']
