@@ -16,7 +16,8 @@ class of bugs where the C file readers still used the legacy fastcard
    must re-read fastcapture's own output and skip none of it (a card
    input overrides the default -k 1); the re-emitted card must have the
    same blocks, byte-identical, and the same #v2 header (sample rate and
-   geometry passed on).
+   geometry passed on).  A -s that disagrees with the card's rate is
+   refused.
 3. A card whose header records no block history (Python cards before
    it was recorded) is refused without -h -- before any header naming
    a guessed history is written -- and replayed with it.
@@ -183,6 +184,18 @@ def main():
         # the unseeded block), and no -s: the rate comes from the card.
         run(binary, ['--card', '-i', card1, '-o', card2], workdir)
         check_replay("pass 2", card2, header, blocks)
+        # ... and a -s that disagrees with the recorded rate is refused
+        # before anything is written.
+        card2b = os.path.join(workdir, 'pass2b.card')
+        res = run(binary, ['--card', '-i', card1, '-o', card2b, '-s', '6M'],
+                  workdir, check=False)
+        if res.returncode == 0 or f'-s {RATE}' not in res.stderr:
+            fail(f"-s 6M on a card recording sample_rate={RATE} was not "
+                 f"refused with a hint of -s {RATE} (exit "
+                 f"{res.returncode}):\n{res.stderr}")
+        if os.path.exists(card2b) and parse_card(card2b) != (None, {}):
+            fail("the refused -s replay wrote to its card")
+        print("pass 2 OK: a disagreeing -s is refused")
 
         # Pass 3: a card whose header records no history, as thriftyx
         # capture wrote them before it did.  Refused without -h (with

@@ -7,7 +7,7 @@
 # fftwf_*.
 #
 # Run by ctest: cmake -DBUILD_DIR=... -DSTAGE_DIR=... -DPKG_CONFIG=...
-#   -DCC=... -P install_check.cmake
+#   -DCC=... [-DC_FLAGS=...] -P install_check.cmake
 
 file(REMOVE_RECURSE "${STAGE_DIR}")
 # Every install rule is in the default "Unspecified" component, so this
@@ -65,10 +65,13 @@ int main(void) {
     return 0;
 }
 ]=])
+# Built with the project's C_FLAGS, as the library was (under the
+# sanitizers the program must load their runtime).
 separate_arguments(flags UNIX_COMMAND "${flags}")
+separate_arguments(c_flags UNIX_COMMAND "${C_FLAGS}")
 execute_process(
-    COMMAND "${CC}" -o "${STAGE_DIR}/consumer" "${STAGE_DIR}/consumer.c"
-            ${flags}
+    COMMAND "${CC}" ${c_flags} -o "${STAGE_DIR}/consumer"
+            "${STAGE_DIR}/consumer.c" ${flags}
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
 if(NOT rc EQUAL 0)
     message(FATAL_ERROR "a program on the fastcapture headers does not "

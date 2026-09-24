@@ -208,7 +208,7 @@ def test_explicit_history_survives_old_header():
 
 
 def test_unknown_rate_zero_is_ignored():
-    """fastcapture writes sample_rate=0 when re-emitting a file input."""
+    """fastcapture writes sample_rate=0 for a file input of unknown rate."""
     config = settings.apply_card_header(
         _config(sample_rate=6e6), {'sample_rate': '0'})
     assert config.sample_rate == 6e6

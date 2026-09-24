@@ -113,6 +113,7 @@ if(BUILD_TESTING)
                      -DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-install
                      -DPKG_CONFIG=${PKG_CONFIG_EXECUTABLE}
                      -DCC=${CMAKE_C_COMPILER}
+                     "-DC_FLAGS=${CMAKE_C_FLAGS}"
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 endif()
 
