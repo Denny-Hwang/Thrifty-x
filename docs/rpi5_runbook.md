@@ -88,6 +88,12 @@ sudo systemctl stop thriftyx-capture@rx0
 echo "exit=$?"   # 0=PASS, 1=FAIL, 2=setup error
 ```
 
+The cleanup job treats `soak/` like `card/`: a soak's `capture.card`
+expires with `CARD_RETENTION_DAYS` (and is purged, oldest first with
+the capture cards, when the disk passes `DISK_PURGE_PCT`), its logs
+with `LOG_RETENTION_DAYS`; `summary.txt` and `samples.csv` stay.  Copy
+a soak card elsewhere if it must be kept longer.
+
 Automatic determination criteria (can be overridden with environment variables):
 - The soak ran its full duration: not interrupted (Ctrl-C, `kill`, the
   scope stopped, a hangup without `nohup`), and capture ran at least

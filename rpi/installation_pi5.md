@@ -242,8 +242,10 @@ sudo $EDITOR /etc/default/thriftyx-cleanup   # THRIFTYX_OUT must match the captu
 ```
 
 Default policy: delete `.card` files older than 7 days and `.toad` and
-`.log` files older than 30 days under `THRIFTYX_OUT`, and purge the oldest
-cards when the disk passes 90 %.  Change it in
+`.log` files older than 30 days under `THRIFTYX_OUT` (soak runs'
+`soak/<run>/capture.card` and logs included; copy a soak card elsewhere
+to keep it), and when the disk passes 90 % purge the oldest cards,
+soak cards included, until it is below 80 %.  Change it in
 `/etc/default/thriftyx-cleanup`; cron passes no environment, so that
 file is the only place the job reads settings from.  Each run that
 deletes something, and any failure, is logged:
