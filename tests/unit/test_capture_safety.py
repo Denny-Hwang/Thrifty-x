@@ -14,7 +14,8 @@ import io
 import pytest
 
 from thriftyx.airspy_capture import _capture_airspy
-from thriftyx.exceptions import DeviceConfigError, DeviceCaptureError
+from thriftyx.exceptions import (EXIT_CONFIG, DeviceConfigError,
+                                 DeviceCaptureError)
 from thriftyx.settings import Namespace
 from tests.mocks.scripted_device import ScriptedSDRDevice
 
@@ -78,6 +79,13 @@ def test_capture_airspy_capture_error_caught(monkeypatch):
         monkeypatch, 'read_sync', DeviceCaptureError)
     assert code == 1
     assert fake.closed is True
+
+
+def test_capture_airspy_bad_device_selection_is_a_config_error(monkeypatch):
+    """An invalid serial (ValueError from open) is configuration:
+    exit 78 stops the systemd unit instead of restarting it forever."""
+    code, _ = _run_with_failing_device(monkeypatch, 'open', ValueError)
+    assert code == EXIT_CONFIG
 
 
 # ---------------------------------------------------------------------------

@@ -5,11 +5,12 @@
 
 Runs the real CLI on a synthetic 6 MSPS card holding one Gold-code
 burst, headless (Agg, no Qt), and checks the documented output layout
-`<prefix>_block<N>/<plot>.png`.
+`<prefix>_block<N>/<plot>.png`, and what the FFT-window panel shows.
 """
 
 import io
 import sys
+import types
 
 import numpy as np
 import pytest
@@ -62,3 +63,26 @@ def test_export_writes_one_png_per_plot_family(tmp_path, monkeypatch):
     for name in written:
         data = (block_dir / name).read_bytes()
         assert data.startswith(PNG_MAGIC) and len(data) > 10_000, name
+
+
+@pytest.mark.parametrize('window, xlim, markers', [
+    # The default whole-band window used to zoom to bins -10..9 around
+    # DC, hiding the carrier the overview is meant to show.
+    ((0, -1), (-8192, 8191), []),
+    ((300, 400), (290, 410), [300, 400]),
+    ((-10, 10), (-20, 20), [-10, 10]),
+    ((-400, -300), (-410, -290), [-400, -300]),
+    ((8000, 9000), (-8192, 8191), []),     # wraps past Nyquist
+])
+def test_fft_window_panel_keeps_the_window_in_view(window, xlim, markers):
+    from matplotlib.figure import Figure
+
+    n = 16384
+    ax = Figure().add_subplot()
+    ax.plot(np.arange(-n // 2, n // 2), np.ones(n))
+    ax.set_xlim(-n // 2, n // 2 - 1)
+    plotter = types.SimpleNamespace(settings=types.SimpleNamespace(
+        carrier_window=window, block_len=n))
+    detect_analysis.Plotter._plot_fft_window(plotter, ax, zoom_to_window=True)
+    assert tuple(ax.get_xlim()) == xlim
+    assert [line.get_xdata()[0] for line in ax.get_lines()[1:]] == markers

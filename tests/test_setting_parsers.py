@@ -42,6 +42,7 @@ def test_metric_float():
         ('1337.15', 1337.15),
         ('15.2M', 15200000.0),
         ('987k', 987000.0),
+        ('2400K', 2400000.0),  # documented as accepted
         ('55m', 0.055),
         ('164u ', 164e-6),
     ]
@@ -55,6 +56,17 @@ def test_metric_float_invalid():
     for test in tests:
         with pytest.raises(ValueError):
             setting_parsers.metric_float(test)
+
+
+def test_airspy_serial():
+    """Checked when settings load, so a typo is a config error (exit
+    78) rather than a device error when the Airspy opens."""
+    for string in ['0xABCDEF0123456789', '123456', ' 0x12 ']:
+        assert setting_parsers.airspy_serial(string) == string.strip()
+    assert setting_parsers.airspy_serial('') == ''
+    for string in ['0xABCDEF012345678G', '99999999999999999999999', '-5']:
+        with pytest.raises(ValueError):
+            setting_parsers.airspy_serial(string)
 
 
 def test_threshold():

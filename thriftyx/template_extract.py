@@ -29,6 +29,11 @@ Usage example:
 
 
 import argparse
+import contextlib
+import errno
+import os
+import shutil
+import sys
 
 import numpy as np
 
@@ -41,18 +46,69 @@ from thriftyx.setting_parsers import normalize_freq_range
 MAX_OFFSET = 0.2
 
 
+def _with_neighbours(detections):
+    """Yield ``(result, fft, previous, next)`` for each detected block,
+    with the results of the detections before and after it (or None).
+
+    One detection is held back at a time, not every candidate's FFT.
+    """
+    previous = current = None
+    for detected, result, fft, _ in detections:
+        if not detected:
+            continue
+        if current is not None:
+            yield current + (previous, result)
+            previous = current[0]
+        current = (result, fft)
+    if current is not None:
+        yield current + (previous, None)
+
+
+def _is_partial(result, previous, next_):
+    """Whether *result* is the part of a burst that the block before or
+    after it holds whole: that block has a stronger detection.
+
+    Such a partial is at a few percent of the burst's energy and on a
+    misaligned lag, so a template cut there starts part-way into the
+    code.  identify.py drops the same duplicates.  A burst from a weaker
+    transmitter elsewhere in the capture is still complete.
+    """
+    return any(other is not None
+               and abs(other.block - result.block) == 1
+               and other.corr_info.energy > result.corr_info.energy
+               for other in (previous, next_))
+
+
 def best_detection(detections, max_offset):
-    """Get block with largest corr peak and offset less than `max_offset`."""
+    """Get block with largest corr peak and offset less than `max_offset`.
+
+    Only a complete burst qualifies, not the partial detection a burst
+    leaves in the block before or after it (see `_is_partial`).
+    """
     best_result = None
     best_fft = None
+    partial = None  # the strongest candidate that was a partial
 
-    for detected, result, fft, _ in detections:
-        if detected and abs(result.corr_info.offset) <= max_offset:
-            if (best_result is None or
-                    result.corr_info.energy > best_result.corr_info.energy):
-                best_result = result
-                best_fft = fft
+    for result, fft, previous, next_ in _with_neighbours(detections):
+        if abs(result.corr_info.offset) > max_offset:
+            continue
+        if _is_partial(result, previous, next_):
+            if (partial is None or
+                    result.corr_info.energy > partial.corr_info.energy):
+                partial = result
+        elif (best_result is None or
+                result.corr_info.energy > best_result.corr_info.energy):
+            best_result = result
+            best_fft = fft
 
+    if best_result is None and partial is not None:
+        raise DetectionError(
+            "no complete burst peaked within {} samples of a whole "
+            "sample: the best block with |offset| <= {} (#{}) holds only "
+            "part of a burst, which a stronger detection in the block "
+            "before or after it holds whole.  Capture for longer (e.g. "
+            "--duration 30) to get more bursts".format(
+                max_offset, max_offset, partial.block))
     if best_result is None:
         raise DetectionError(
             "no block had a correlation detection with |offset| <= {}; "
@@ -72,6 +128,37 @@ def extract_template(signal, result, template_len):
     cut *= 2 / (np.mean(cut) + np.std(cut))
     cut = cut - np.mean(cut)  # OOK -> bipolar signal
     return cut
+
+
+def _check_output_dir(path):
+    """Fail before the extraction, not after it, if *path*'s directory
+    is missing."""
+    if not os.path.isdir(os.path.dirname(os.path.realpath(path))):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
+                                path)
+
+
+def _save_replacing(path, array):
+    """Save *array* to *path* (.npy) only once it is complete.
+
+    Written next to *path* and renamed over it, so a failure leaves an
+    existing file -- often the working template -- as it was.  A
+    symlink is written through, and an existing file keeps its mode.
+    """
+    target = os.path.realpath(path)
+    tmp = '{}.{}.tmp'.format(target, os.getpid())
+    try:
+        with open(tmp, 'wb') as output:
+            np.save(output, array)
+        if os.path.exists(target):
+            shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        if isinstance(exc, OSError) and exc.filename == tmp:
+            exc.filename = path  # the user's name, not the temporary one
+        raise
 
 
 def plot(signal, template, offset):
@@ -94,8 +181,10 @@ def _main():
     parser.add_argument('input',
                         type=argparse.FileType('rb'), default='-',
                         help="input data ('-' streams from stdin)")
-    parser.add_argument('-o', '--output', type=argparse.FileType('wb'),
-                        default='capture.npy', help="Output file (.npy)")
+    # A path, not an open file: argparse would truncate it before the
+    # template (possibly the same file) is even read.
+    parser.add_argument('-o', '--output', default='capture.npy',
+                        help="Output file (.npy; '-' for stdout)")
     parser.add_argument('-p', '--plot', action='store_true',
                         help="Plot base template and extracted template.")
 
@@ -104,6 +193,8 @@ def _main():
                     'corr_threshold', 'template', 'bit_depth',
                     'freq_shift_method', 'soa_interpolation']
     config, args = settings.load_args(parser, setting_keys)
+    if args.output != '-':
+        _check_output_dir(args.output)
     blocks, config = detect.open_card(args.input, config)
 
     bin_freq = config.sample_rate / config.block_size
@@ -127,12 +218,18 @@ def _main():
     full_signal, result = best_detection(detections, MAX_OFFSET)
     signal = extract_template(full_signal, result, len(template))
 
-    np.save(args.output, signal)
+    info_out = sys.stdout
+    if args.output == '-':
+        np.save(sys.stdout.buffer, signal)
+        info_out = sys.stderr
+    else:
+        _save_replacing(args.output, signal)
     print("Captured template from block #{} (timestamp: {:.6f}): "
           "offset={:+.3f}; corr_ampl={}".format(result.block,
                                                 result.timestamp,
                                                 result.corr_info.offset,
-                                                result.corr_info.energy))
+                                                result.corr_info.energy),
+          file=info_out)
     if args.plot:
         plot(signal, template, result.corr_info.offset)
 

@@ -477,7 +477,7 @@ Other commonly-tuned detector flags (all unchanged from upstream):
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--carrier-window, -w` | `0--1` (whole spectrum) | Restrict carrier search to a frequency range |
+| `--carrier-window, -w` | `0--1` (whole spectrum) | Restrict carrier search to a range of FFT bins (`7-130`), or of frequencies when it ends in `Hz` (`1-19kHz`) |
 | `--carrier-threshold, -t` | `15*snr` | Carrier detection threshold expression |
 | `--corr-threshold, -u`    | `15*snr` | Correlation threshold expression |
 | `--template, -z`          | `template.npy` | Path to the matched-filter template |

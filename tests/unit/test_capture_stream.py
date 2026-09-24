@@ -8,7 +8,9 @@ card timestamp, so both must describe when the samples were taken --
 not how many blocks happened to be processed, or when.
 """
 
+import base64
 import io
+import os
 import signal
 import sys
 import time
@@ -18,7 +20,8 @@ import pytest
 
 import thriftyx.airspy_capture as ac
 from thriftyx.airspy_capture import CardSink, _capture_airspy
-from thriftyx.exceptions import EXIT_CONFIG, DeviceConfigError
+from thriftyx.exceptions import (EXIT_CONFIG, ConfigValidationError,
+                                 DeviceConfigError)
 from thriftyx.settings import Namespace
 from tests.mocks.scripted_device import ScriptedSDRDevice
 
@@ -96,13 +99,38 @@ def test_timestamps_are_reception_times(monkeypatch):
 
 
 def test_all_zero_block_skips_detection(monkeypatch):
-    blocks = _blocks(1) + [np.zeros(12, dtype=np.int16)] + _blocks(1)
+    """Only a block that is zero throughout, history included, is
+    skipped.  The first block of a drop still holds the previous block's
+    tail: a burst there peaks in that block's window, and skipping it
+    left only an off-peak detection in the block before."""
+    zeros = np.zeros(12, dtype=np.int16)
+    blocks = _blocks(1) + [zeros, zeros] + _blocks(1)
     device = ScriptedSDRDevice(blocks)
     calls = _use(monkeypatch, device)
     out = io.StringIO()
     _capture_airspy(_config(), Namespace({'duration': None}), out)
-    assert len(calls) == 2
-    assert [int(c[1]) for c in _cards(out.getvalue())] == [0, 2]
+    assert len(calls) == 3
+    cards = _cards(out.getvalue())
+    assert [int(c[1]) for c in cards] == [0, 1, 3]
+    history = np.frombuffer(base64.b64decode(cards[1][2]), np.int16)[:4]
+    assert history.tolist() == [1, 1, 1, 1]  # block 0's tail
+
+
+def test_window_outside_the_fft_fails_before_any_output(monkeypatch,
+                                                       tmp_path):
+    """A carrier bin the detector cannot index used to raise ValueError
+    on the first block -- exit 1 after the output file was created."""
+    created = []
+    monkeypatch.setattr('thriftyx.hal.device_factory.create_device',
+                        lambda *_a, **_k: created.append(1))
+    card = tmp_path / 'rx0.card'
+    with pytest.raises(ConfigValidationError, match='carrier_window'):
+        # 8-sample blocks: bins 50-60 do not exist.
+        _capture_airspy(_config(carrier_window=(50, 60, False)),
+                        Namespace({'duration': None}),
+                        ac._card_sink_for(str(card)))
+    assert not card.exists()
+    assert created == []
 
 
 def test_header_records_rate_the_device_configured(monkeypatch):
@@ -202,6 +230,36 @@ def test_rotation_never_overwrites_a_file(tmp_path):
     assert (tmp_path / 'rx0.1.card').read_text().startswith('#v2 ')
 
 
+def test_rotation_creates_pattern_directories(tmp_path):
+    """A per-day directory ('%Y%m%d/rx0_...') used to stop capture with
+    FileNotFoundError at the first rotation into a new day, and every
+    restart failed the same way."""
+    clock = _Clock(86400.0 - 0.5)
+    pattern = str(tmp_path / 'card' / '%Y%m%d' / 'rx0_%H%M%S.card')
+    sink = CardSink(path=pattern, rotate=3600, clock=clock)
+    sink.start(bit_depth=12, sample_rate=6_000_000)
+    clock.now = 86400.0
+    sink.tick()
+    clock.now = 2 * 86400.0
+    sink.tick()
+    sink.close()
+    expected = [time.strftime(pattern, time.localtime(t))
+                for t in (86400.0 - 0.5, 86400.0, 2 * 86400.0)]
+    assert sink.paths == expected
+    assert len({os.path.dirname(p) for p in expected}) >= 2
+    for path in expected:
+        with open(path) as card:
+            assert card.read().startswith('#v2 ')
+
+
+def test_rotation_pattern_without_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sink = CardSink(path='rx0_%H%M%S.card', rotate=60, clock=_Clock(0.0))
+    sink.start(bit_depth=12, sample_rate=6_000_000)
+    sink.close()
+    assert [p.name for p in tmp_path.iterdir()] == sink.paths
+
+
 @pytest.mark.parametrize('argv, message', [
     (['out.card', '--rotate', '3600'], 'strftime'),
     (['-', '--rotate', '3600'], 'output file'),
@@ -219,15 +277,58 @@ def test_rotate_validation(monkeypatch, tmp_path, capsys, argv, message):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_rtl_python_fallback_writes_header_and_blocks(monkeypatch, tmp_path):
+def _rtl_capture(monkeypatch, tmp_path, data, **overrides):
     raw = tmp_path / 'iq.u8'
-    raw.write_bytes(bytes(range(36)))  # 3 blocks of 6 new pairs
+    raw.write_bytes(data)
     monkeypatch.setattr(ac, 'carrier_detect_block',
                         lambda *_a, **_k: (True, 1, 10.0, 1.0))
     out = io.StringIO()
     ac._capture_rtlsdr(_config(device_type='rtlsdr', sample_rate=2_400_000,
-                               tuner_gain=10.0),
+                               tuner_gain=10.0, **overrides),
                        Namespace({'duration': None, 'input': str(raw)}), out)
-    text = out.getvalue()
+    return out.getvalue()
+
+
+def _card_bytes(card):
+    return list(base64.b64decode(card[2]))
+
+
+def test_rtl_python_fallback_writes_header_and_blocks(monkeypatch, tmp_path):
+    # 2 history pairs, then 3 blocks of 6 new pairs
+    text = _rtl_capture(monkeypatch, tmp_path, bytes(range(40)))
     assert text.startswith('#v2 bit_depth=8 sample_rate=2400000')
-    assert [int(c[1]) for c in _cards(text)] == [0, 1, 2]
+    cards = _cards(text)
+    assert [int(c[1]) for c in cards] == [0, 1, 2]
+    # Block 0's history is the first samples read.
+    assert _card_bytes(cards[0]) == list(range(16))
+    assert _card_bytes(cards[2]) == list(range(24, 40))
+
+
+def test_rtl_history_after_skip_is_the_last_skipped_block(monkeypatch,
+                                                          tmp_path):
+    text = _rtl_capture(monkeypatch, tmp_path, bytes(range(12 + 24)),
+                        capture_skip=1)
+    cards = _cards(text)
+    assert [int(c[1]) for c in cards] == [0, 1]
+    assert _card_bytes(cards[0]) == list(range(8, 24))
+
+
+@pytest.mark.parametrize('skip', [0, 1])
+def test_rtl_noise_detects_no_carrier(tmp_path, capsys, skip):
+    """Block 0's history used to be raw uint8 zeros, which decode to
+    about -1-1j: a full-scale DC step that "detected" a carrier in block
+    0 of every run, whatever the window or skip."""
+    rng = np.random.default_rng(1)
+    new = 16384 - 4920
+    noise = np.clip(np.rint(127.4 + rng.normal(0, 6, 2 * new * 4)), 0, 255)
+    raw = tmp_path / 'noise.u8'
+    raw.write_bytes(noise.astype(np.uint8).tobytes())
+    config = _config(device_type='rtlsdr', sample_rate=2_400_000,
+                     tuner_gain=0.0, block_size=16384, block_history=4920,
+                     capture_skip=skip, carrier_threshold=(0.0, 15.0, 0.0))
+    out = io.StringIO()
+    blocks = ac._capture_rtlsdr(
+        config, Namespace({'duration': None, 'input': str(raw)}), out)
+    assert blocks == 3
+    assert _cards(out.getvalue()) == []
+    assert 'block #' not in capsys.readouterr().err

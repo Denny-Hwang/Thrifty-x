@@ -1,6 +1,8 @@
 # Thrifty-X capture configuration — Raspberry Pi 5 (Airspy Mini/R2)
 # Place at /var/lib/thriftyx/capture.cfg and edit per receiver.
-# Format: key: value  (hash = comment, ms/k/M unit suffixes allowed)
+# Format: key: value  (hash = comment; k/M/G suffixes allowed, see
+# docs/user_guide.md 5.1).  carrier_window is in FFT bins unless it ends
+# in Hz: 50-60kHz is a frequency, 50-60k is bins 50000-60000.
 
 # --- Receiver identity ---
 # Not used by capture (a .card does not record it): `thriftyx detect -c`

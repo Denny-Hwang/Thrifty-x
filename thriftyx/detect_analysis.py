@@ -267,8 +267,15 @@ class Plotter:
             N = self.settings.block_len
             start_idx, stop_idx = carrier_detect.fft_range_index(
                 window[0], window[1], N)
+            # The span as one piece: converting each end on its own
+            # turns the whole band (0 to N-1) into bins 0 and -1.
             start = util.fft_bin(start_idx, N)
-            stop = util.fft_bin(stop_idx, N)
+            stop = start + (stop_idx - start_idx)
+            if stop_idx - start_idx + 1 >= N or stop > N // 2 - 1:
+                # The whole band, or a window wrapping past Nyquist:
+                # the fftshifted axis cannot show it as one range, so
+                # keep the full spectrum in view.
+                return
             if zoom_padding > 0 or not zoom_to_window:
                 ax.axvline(start, linestyle='-.')
                 ax.axvline(stop, linestyle='-.')
