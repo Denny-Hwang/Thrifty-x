@@ -5,12 +5,20 @@
 # systemd units and helper scripts, restarts the capture service, and
 # verifies it stays up.  On any failure it rolls back to the previous
 # git SHA (code, package, units and scripts) + restarts so the node is
-# never left in a broken state.
+# never left in a broken state.  A failed install goes back to the old
+# SHA without a restart: nothing has touched the service yet.
 #
 # Safe to call repeatedly (no-op when already at remote tip).
 #
 # Typical use:
 #   ssh rx0 'sudo /usr/local/bin/update_node.sh'
+#
+# The capture instance restarted is the one this node has an
+# /etc/default/thriftyx-capture@<rxid> file for (thriftyx-capture@rx1 on
+# rx1).  With none or several, name it on sudo's command line (sudo
+# drops variables the caller exported):
+#   ssh rx1 'sudo THRIFTYX_RXID=1 /usr/local/bin/update_node.sh'
+#   ssh rx1 'sudo THRIFTYX_SERVICE=thriftyx-capture@rx1.service /usr/local/bin/update_node.sh'
 #
 # Root is needed only for systemctl.  git and pip run as the owner of
 # the clone (normally pi): run as root they would leave root-owned
@@ -20,20 +28,21 @@
 #
 # Exit codes:
 #   0   already up to date OR updated successfully
-#   1   update failed AND rollback succeeded (service running on old SHA)
+#   1   update failed, node back on the old SHA (service running it; a
+#       failed install never restarts the service)
 #   2   update failed AND rollback also failed (service may be down — page!)
-#   3   setup error (paths missing, not a git repo, etc.)
+#   3   setup error (paths missing, not a git repo, capture instance
+#       unknown, etc.)
 
 set -uo pipefail
 
 HOME_DIR="${THRIFTYX_HOME:-/home/pi/thrifty-x}"
-RXID="${THRIFTYX_RXID:-0}"
-SERVICE="${THRIFTYX_SERVICE:-thriftyx-capture@rx${RXID}.service}"
 BRANCH="${THRIFTYX_BRANCH:-master}"
 HEALTH_WAIT_S="${HEALTH_WAIT_S:-30}"
 LKG_FILE="${HOME_DIR}/.last_known_good_sha"
 UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
+ENV_DIR="${ENV_DIR:-/etc/default}"
 
 log() { echo "[update_node] $*"; }
 die() { log "FATAL: $*"; exit 3; }
@@ -44,6 +53,37 @@ die() { log "FATAL: $*"; exit 3; }
 [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0"
 [ -d "${HOME_DIR}/.git" ] || die "not a git repo: ${HOME_DIR}"
 [ -x "${HOME_DIR}/.venv/bin/pip" ] || die "venv missing: ${HOME_DIR}/.venv"
+
+# The capture instance to restart.  Unless named, it is the one set up on
+# this node: the unit's EnvironmentFile= is required, so only an
+# instance with an ENV_DIR/thriftyx-capture@<rxid> file can start here.
+# (A fixed rx0 default restarted a unit that fails on every other node.)
+if [ -n "${THRIFTYX_SERVICE:-}" ]; then
+    SERVICE="${THRIFTYX_SERVICE}"
+elif [ -n "${THRIFTYX_RXID:-}" ]; then
+    SERVICE="thriftyx-capture@rx${THRIFTYX_RXID}.service"
+else
+    shopt -s nullglob
+    envs=("${ENV_DIR}"/thriftyx-capture@*)
+    shopt -u nullglob
+    [ "${#envs[@]}" -eq 1 ] \
+        || die "need exactly one ${ENV_DIR}/thriftyx-capture@<rxid> file" \
+               "to tell which capture instance runs here, found" \
+               "${#envs[@]}; name it: sudo" \
+               "THRIFTYX_SERVICE=thriftyx-capture@rxN.service $0"
+    SERVICE="thriftyx-capture@${envs[0]##*/thriftyx-capture@}.service"
+fi
+# Checked before the pull: a wrong instance would otherwise surface only
+# as a failed restart, whose rollback fails the same way (exit 2).
+case "${SERVICE}" in
+    thriftyx-capture@*)
+        instance="${SERVICE#thriftyx-capture@}"
+        instance="${instance%.service}"
+        [ -e "${ENV_DIR}/thriftyx-capture@${instance}" ] \
+            || die "${SERVICE} is not set up on this node" \
+                   "(no ${ENV_DIR}/thriftyx-capture@${instance})"
+        ;;
+esac
 
 cd "${HOME_DIR}"
 PIP="${HOME_DIR}/.venv/bin/pip"
@@ -77,7 +117,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 OLD_SHA="$(git rev-parse HEAD)"
-log "current sha = ${OLD_SHA}"
+log "current sha = ${OLD_SHA}; capture unit = ${SERVICE}"
 
 # Fetch
 if ! git fetch --quiet origin "${BRANCH}"; then
@@ -171,9 +211,21 @@ rollback() {
     return 0
 }
 
+# Nothing has touched the service or its units yet, and the install is
+# editable: the reset alone gives the service back its code.  The
+# reinstall undoes whatever pip upgraded before failing; when it fails
+# too (package index unreachable, the usual cause), the node is still
+# running the old release -- exit 1, not a page.
 if ! do_install; then
-    log "pip install failed on new sha; rolling back"
-    if rollback "${OLD_SHA}"; then exit 1; else exit 2; fi
+    log "pip install failed on new sha; rolling back (service untouched)"
+    git reset --hard --quiet "${OLD_SHA}" \
+        || { log "git reset to ${OLD_SHA} failed"; exit 2; }
+    if ! do_install; then
+        log "WARNING: reinstalling ${OLD_SHA} failed too (package index" \
+            "unreachable?); the service was not restarted and still runs" \
+            "it; re-run update_node.sh once pip works"
+    fi
+    exit 1
 fi
 
 if ! do_refresh; then

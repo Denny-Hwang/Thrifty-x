@@ -18,6 +18,7 @@ import logging
 import subprocess
 import sys
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -35,6 +36,18 @@ def _run_cli(args, cwd):
     return subprocess.run([sys.executable, '-m', 'thriftyx.cli', *args],
                           cwd=cwd, capture_output=True, text=True,
                           timeout=120)
+
+
+def test_subprocesses_import_the_tree_under_test(tmp_path):
+    """Regression: the CLI subprocesses imported whichever thriftyx was
+    installed (another checkout's editable install, say), so a bug in
+    this tree could pass the tests below."""
+    result = subprocess.run(
+        [sys.executable, '-c', 'import thriftyx; print(thriftyx.__file__)'],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    root = Path(__file__).resolve().parents[2]
+    assert Path(result.stdout.strip()).resolve().is_relative_to(root)
 
 
 # --- every command's --help works ------------------------------------------

@@ -7,7 +7,11 @@ The node's clone, its origin and its venv are real directories; the
 commands that need a Pi (systemctl, root) are small scripts on PATH that
 record their calls.  The fake capture service crash-loops whenever the
 checked-out tree contains a file named BROKEN, the way a bad release
-would under Restart=always.
+would under Restart=always, and an instance without its
+/etc/default/thriftyx-capture@<rxid> file fails to start, as it does
+under systemd.  The fake pip fails when the tree contains BADDEPS, or
+always under FAKE_PIP_FAIL (package index unreachable).  The node is set
+up as receiver rx1.
 """
 
 import os
@@ -32,6 +36,12 @@ echo "$*" >> "${state}/calls"
 starts=$(cat "${state}/starts" 2>/dev/null || echo 0)
 case "$1" in
   restart)
+    instance="${2#thriftyx-capture@}"; instance="${instance%.service}"
+    if [ ! -e "${ENV_DIR}/thriftyx-capture@${instance}" ]; then
+      # EnvironmentFile= without '-': systemd refuses to start it.
+      echo "Job for $2 failed because of unavailable resources." >&2
+      exit 1
+    fi
     echo $((starts + 1)) > "${state}/starts"; echo 0 > "${state}/restarts" ;;
   daemon-reload) ;;
   is-active) echo active ;;
@@ -91,7 +101,8 @@ def node(tmp_path):
     venv = clone / '.venv' / 'bin'
     venv.mkdir(parents=True)
     (venv / 'pip').write_text(
-        '#!/bin/bash\necho "$*" >> "${FAKE_STATE}/pip"\n')
+        '#!/bin/bash\necho "$*" >> "${FAKE_STATE}/pip"\n'
+        '[ ! -e BADDEPS ] && [ -z "${FAKE_PIP_FAIL:-}" ]\n')
     (venv / 'python').write_text('#!/bin/bash\nexit 1\n')  # no pyfftw
 
     fakebin = tmp_path / 'bin'
@@ -107,6 +118,9 @@ def node(tmp_path):
     bindir = tmp_path / 'usr-local-bin'
     bindir.mkdir()
     (bindir / 'cleanup_old_captures.sh').write_text('cleanup v1\n')
+    defaults = tmp_path / 'etc-default'
+    defaults.mkdir()
+    (defaults / 'thriftyx-capture@rx1').write_text('THRIFTYX_OUT=/x\n')
     state = tmp_path / 'state'
     state.mkdir()
 
@@ -114,8 +128,10 @@ def node(tmp_path):
                PATH='{}:{}'.format(fakebin, os.environ['PATH']),
                THRIFTYX_HOME=str(clone), HEALTH_WAIT_S='0',
                UNIT_DIR=str(units), BIN_DIR=str(bindir),
+               ENV_DIR=str(defaults),
                FAKE_STATE=str(state), FAKE_CLONE=str(clone), FAKE_UID='0')
-    env.pop('PIP_EXTRAS', None)
+    for key in ('PIP_EXTRAS', 'THRIFTYX_RXID', 'THRIFTYX_SERVICE'):
+        env.pop(key, None)
 
     def run(**overrides):
         return subprocess.run(['bash', str(SCRIPT)], env={**env, **overrides},
@@ -129,7 +145,12 @@ def node(tmp_path):
         ['git', 'rev-parse', 'HEAD'], cwd=clone, capture_output=True,
         text=True, check=True).stdout.strip()
     return dict(run=run, publish=publish, head=head, clone=clone,
-                units=units, bindir=bindir, state=state)
+                units=units, bindir=bindir, defaults=defaults, state=state)
+
+
+def _calls(node):
+    calls = node['state'] / 'calls'
+    return calls.read_text() if calls.exists() else ''
 
 
 def test_up_to_date_is_a_no_op(node):
@@ -185,3 +206,88 @@ def test_requires_root(node):
     assert result.returncode == 3
     assert 'run as root' in result.stdout
     assert node['head']() == before
+
+
+def test_restarts_this_nodes_capture_instance(node):
+    """Regression: the script always restarted thriftyx-capture@rx0.  On
+    a node set up as rx1 that instance has no env file, so the restart
+    failed, the rollback failed the same way, and every update of a node
+    other than rx0 ended in exit 2 (page) with its real unit untouched."""
+    node['publish']('B', {'rpi/cleanup_old_captures.sh': 'cleanup v2\n'})
+    result = node['run']()
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(node)
+    assert 'restart thriftyx-capture@rx1.service' in calls
+    assert 'rx0' not in calls
+
+
+@pytest.mark.parametrize('instances', [[], ['rx0', 'rx1']])
+def test_unknown_capture_instance_is_a_setup_error(node, instances):
+    """No env file, or several: stop before pulling anything."""
+    for path in node['defaults'].iterdir():
+        path.unlink()
+    for instance in instances:
+        (node['defaults'] / 'thriftyx-capture@{}'.format(instance)) \
+            .write_text('')
+    node['publish']('B', {'rpi/cleanup_old_captures.sh': 'cleanup v2\n'})
+    before = node['head']()
+    result = node['run']()
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert 'THRIFTYX_SERVICE' in result.stdout
+    assert node['head']() == before
+    assert _calls(node) == ''
+
+
+@pytest.mark.parametrize('override', [
+    {'THRIFTYX_RXID': '2'},
+    {'THRIFTYX_SERVICE': 'thriftyx-capture@rx2.service'},
+])
+def test_explicit_instance_wins(node, override):
+    (node['defaults'] / 'thriftyx-capture@rx2').write_text('')
+    node['publish']('B', {'rpi/cleanup_old_captures.sh': 'cleanup v2\n'})
+    result = node['run'](**override)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(node)
+    assert 'restart thriftyx-capture@rx2.service' in calls
+    assert 'rx1' not in calls
+
+
+def test_explicit_instance_without_env_file_is_a_setup_error(node):
+    """A wrong THRIFTYX_RXID is caught before the pull, not by a failed
+    restart and a rollback that pages someone."""
+    node['publish']('B', {'rpi/cleanup_old_captures.sh': 'cleanup v2\n'})
+    before = node['head']()
+    result = node['run'](THRIFTYX_RXID='0')
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert 'thriftyx-capture@rx0' in result.stdout
+    assert node['head']() == before
+    assert _calls(node) == ''
+
+
+def test_install_failure_leaves_the_service_alone(node):
+    """The new release does not install: back to the old tree and its
+    package, with no restart (the service never left the old code)."""
+    before = node['head']()
+    node['publish']('bad deps', {'BADDEPS': 'x\n'})
+    result = node['run']()
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert node['head']() == before
+    assert _calls(node) == ''
+    assert len((node['state'] / 'pip').read_text().splitlines()) == 2
+    assert 'WARNING' not in result.stdout
+
+
+def test_unreachable_package_index_is_not_a_page(node):
+    """Regression: git fetch works but PyPI does not, so reinstalling the
+    old release fails too.  The service was never touched and the reset
+    already restored the code its editable install loads, so this is
+    exit 1 (running the old version), not 2 (page)."""
+    before = node['head']()
+    node['publish']('B', {'rpi/cleanup_old_captures.sh': 'cleanup v2\n'})
+    result = node['run'](FAKE_PIP_FAIL='1')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert node['head']() == before
+    assert _calls(node) == ''
+    assert 'WARNING' in result.stdout
+    assert (node['bindir'] / 'cleanup_old_captures.sh').read_text() \
+        == 'cleanup v1\n'

@@ -13,11 +13,17 @@
 # The summary is Markdown (CI appends it to the job summary).
 set -euo pipefail
 
-UPSTREAM_URL=https://github.com/swkrueger/Thrifty
-UPSTREAM_COMMIT=2ad9775753a8712a61c81cc78fb0bc75a921d50b
+# The THRIFTYX_UPSTREAM_* overrides exist for the tests.
+UPSTREAM_URL=${THRIFTYX_UPSTREAM_URL:-https://github.com/swkrueger/Thrifty}
+UPSTREAM_COMMIT=${THRIFTYX_UPSTREAM_COMMIT:-2ad9775753a8712a61c81cc78fb0bc75a921d50b}
 
 cd "$(git rev-parse --show-toplevel)"
-git fetch --quiet --depth=1 "$UPSTREAM_URL" "$UPSTREAM_COMMIT"
+# Fetch only when the commit is missing (a shallow CI checkout).  A full
+# clone of the fork already has it as an ancestor, and a --depth fetch
+# would record it in .git/shallow, cutting the clone's history off there
+# (log, blame and pushes to a new remote stop working past it).
+git cat-file -e "$UPSTREAM_COMMIT^{commit}" 2>/dev/null ||
+    git fetch --quiet --depth=1 "$UPSTREAM_URL" "$UPSTREAM_COMMIT"
 
 # Unified diff of one module: upstream thrifty/<m> vs working-tree thriftyx/<m>.
 module_diff() {
