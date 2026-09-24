@@ -213,30 +213,55 @@ node once with `ssh rxN 'sudo THRIFTYX_RXID=N /usr/local/bin/update_node.sh'`
 (the old script honours `THRIFTYX_RXID` and installs the new one); after
 that the plain command works.
 
+A dropped SSH connection does not stop the update halfway: the script
+ignores the hangup, and its output also goes to the journal
+(`journalctl -t update_node` shows how a run you lost sight of ended).
+To detach it from the session entirely, run it as a transient unit:
+
+```bash
+ssh rx1 'sudo systemd-run --collect --unit=thriftyx-update /usr/local/bin/update_node.sh'
+ssh rx1 'journalctl -u thriftyx-update -f'
+```
+
 Behavior:
 1. Must run as root (for `systemctl`); git and pip run as the clone's owner
-2. No changes after `git fetch` → exit 0 (no-op)
-3. `git merge --ff-only` fails → exit without affecting the service
-4. `pip install` with the extras the venv already has (`fft` only if
+2. The node only moves forward along `origin/master`.  A clone whose
+   HEAD is not an ancestor of it — a local commit, or origin rewound by
+   a force push — is refused → exit 1, service untouched (the message
+   gives the `git reset --hard origin/master` that follows origin).
+   Roll the fleet back by pushing a revert commit, not a force push.
+3. Nothing new after `git fetch` and HEAD is the recorded last known
+   good SHA → exit 0 (no-op).  An earlier run that was cut short
+   (power loss, kill) leaves HEAD different from that record or
+   `~/thrifty-x/.update_pending` behind; the next run finishes it
+   (steps 5-8, even with nothing new to pull) instead of calling the
+   node up to date.  A node without the record (never updated by this
+   script) is verified the same way once, restarting capture.
+4. `git merge --ff-only` fails → exit without affecting the service
+5. `pip install` with the extras the venv already has (`fft` only if
    pyfftw is installed; override with `PIP_EXTRAS=...`).  If it fails
    (e.g. PyPI unreachable), go back to the previous SHA and reinstall
-   it, without restarting the service → exit 1
-5. Refresh installed copies of the repo's systemd units and
+   it, without restarting the service → exit 1 (when finishing a cut
+   short update, a full rollback as in step 8 instead)
+6. Refresh installed copies of the repo's systemd units and
    `update_node.sh` / `cleanup_old_captures.sh` (only files already
    installed; `daemon-reload` when a unit changed)
-6. `restart`, then after 30 seconds the service must be active **with
+7. `restart`, then after 30 seconds the service must be active **with
    the same PID and no automatic restarts** (a crash-looping release
    looks `active` most of the time)
-7. Failure in step 5 or 6 → automatic rollback of code, package, units
-   and scripts to the previous SHA + restart
-8. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
+8. Failure in step 6 or 7 → automatic rollback of code, package, units
+   and scripts to the last known good SHA + restart and health check
+9. On success, record the new SHA in `~/thrifty-x/.last_known_good_sha`
 
 Exit codes:
-- `0` up to date or update succeeded
-- `1` update failed, node back on the old version (if even the old
-  version's reinstall failed, the log says so; the service was never
-  restarted and still runs it, so re-run the update once pip works)
-- `2` both update and rollback failed (immediate human intervention required)
+- `0` up to date, update succeeded, or an unfinished update finished
+- `1` update failed, node back on the last known good version (if even
+  the old version's reinstall failed, the log says so; the service was
+  never restarted and still runs it, so re-run the update once pip
+  works); or refused because the clone is ahead of or diverged from
+  origin (service untouched)
+- `2` both update and rollback failed, or there was no other known good
+  version to go back to (immediate human intervention required)
 - `3` setup error (working tree dirty, no venv, capture instance
   unknown, etc.)
 
