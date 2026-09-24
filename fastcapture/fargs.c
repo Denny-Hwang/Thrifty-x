@@ -217,8 +217,8 @@ int fargs_parse_opt(fargs_t *fargs,
             if (*endptr != '\0' || fargs->block_len < 1) {
                 return FARGS_INVALID_VALUE;
             }
-            /* The carrier argmax is stored in a uint16_t (cardet.c,
-             * corr_detector.cpp), so an FFT longer than 65536 bins
+            /* fastdet's correlation peak index is a uint16_t
+             * (corr_detector.cpp), so an FFT longer than 65536 bins
              * would silently wrap peak indices.  Also enforce the
              * documented power-of-two requirement (FFT length). */
             if (fargs->block_len > MAX_BLOCK_LEN

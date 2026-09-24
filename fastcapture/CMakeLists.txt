@@ -99,6 +99,9 @@ if(BUILD_TESTING)
     add_executable(test_card_reader tests/test_card_reader.c card_reader.c
                    reader.c lib/base64.c)
     add_test(NAME card_reader COMMAND test_card_reader)
+    add_executable(test_cardet tests/test_cardet.c cardet.c)
+    target_link_libraries(test_cardet ${VOLK_LIBRARIES})
+    add_test(NAME cardet COMMAND test_cardet)
 endif()
 
 # Installation

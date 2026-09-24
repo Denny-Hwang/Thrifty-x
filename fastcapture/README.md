@@ -45,7 +45,7 @@ These components operate on float FFT data and have no hardware dependency:
 ```bash
 cmake -S . -B build          # Release (optimised) unless CMAKE_BUILD_TYPE is set
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # ring-buffer and timestamp unit tests
+ctest --test-dir build --output-on-failure   # ring-buffer, timestamp, argument, card-reader and carrier-search unit tests
 sudo cmake --install build
 ```
 
