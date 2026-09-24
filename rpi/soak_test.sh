@@ -81,6 +81,7 @@ _now() { awk '{print int($1)}' /proc/uptime 2>/dev/null || date +%s; }
 # --duration.  SIGTERM stops it at any point.
 INTERRUPTED=""
 CAP_PID=""
+CAP_RC=""
 # shellcheck disable=SC2329  # invoked by the traps below
 on_signal() {
     INTERRUPTED="$1"
@@ -144,18 +145,27 @@ while [ "$(_now)" -lt "${END_TS}" ] && [ -z "${INTERRUPTED}" ]; do
     # Detached from stdout, so a sleep outliving an interrupted run does
     # not hold `ssh node soak_test.sh` or a `| tee` open until it ends.
     sleep "${SAMPLE_INTERVAL_S}" >/dev/null 2>&1 &
-    wait $!
+    SLEEP_PID=$!
+    # Wake at the next sample or as soon as capture exits, whichever is
+    # first (wait -n with ids and -p: bash >= 5.1), so the run's length
+    # is capture's own, not rounded up to the next sample.  -p leaves
+    # DONE_PID unset when a trapped signal cuts the wait short.
+    wait -n -p DONE_PID "${SLEEP_PID}" "${CAP_PID}"
+    WAIT_RC=$?
+    if [ "${DONE_PID:-}" = "${CAP_PID}" ]; then
+        CAP_RC=${WAIT_RC}
+    fi
+    kill "${SLEEP_PID}" 2>/dev/null || true
 done
 
 # A trapped signal also cuts `wait` short (status > 128) while capture
 # is still stopping: wait again for its real exit status.
-while :; do
+while [ -z "${CAP_RC}" ]; do
     wait "${CAP_PID}"
     CAP_RC=$?
     if [ "${CAP_RC}" -gt 128 ] && kill -0 "${CAP_PID}" 2>/dev/null; then
-        continue
+        CAP_RC=""
     fi
-    break
 done
 ELAPSED=$(( $(_now) - START_TS ))
 echo "soak: capture exit code = ${CAP_RC} after ${ELAPSED}s"

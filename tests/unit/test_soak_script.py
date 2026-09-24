@@ -145,6 +145,23 @@ def test_capture_ending_early_fails(soak):
     assert 'interrupted' not in summary
 
 
+def test_capture_ending_within_a_sample_interval_fails(soak):
+    """Regression: the run's length was read after the sample sleep, so
+    a capture that stopped a second into a 10 s soak sampled every 20 s
+    was timed at 20 s and passed."""
+    started = time.monotonic()
+    code, out = _finish(soak['start'](SOAK_DURATION_S='10',
+                                      SAMPLE_INTERVAL_S='20',
+                                      SOAK_TOLERANCE_S='0',
+                                      FAKE_EXIT_AFTER='1'))
+    summary = soak['summary']()
+    assert time.monotonic() - started < 15, out
+    assert code == 1, out
+    assert 'RESULT: FAIL' in summary
+    assert int(summary.split('elapsed_s=')[1].split()[0]) < 10
+    assert 'of the 10s soak' in summary
+
+
 @pytest.mark.parametrize('min_blocks, passes', [(None, False), ('0', True)])
 def test_card_without_detections(soak, min_blocks, passes):
     """A card holding only its header detected nothing all soak: FAIL,
