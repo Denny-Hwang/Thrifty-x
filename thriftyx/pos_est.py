@@ -141,7 +141,12 @@ def solve_numerically(tdoa_array, rx_pos):
     # each receiver.  Such a start only wins by fitting clearly better:
     # for a tag inside a 3-D array, or a 3-receiver one, it can find the
     # mirror solution, which fits (about) as well as the true position.
-    if _near_receiver_or_outside(res.x, rx_coords, centroid):
+    # A fit costing MARGIN / RATIO (4 m^2) or less cannot be replaced (that
+    # takes a cost below RATIO * cost - MARGIN <= 0), so it skips the
+    # extra solves, and the search ends once it has found one.
+    replaceable = OUTER_START_COST_MARGIN / OUTER_START_COST_RATIO
+    if (res.cost > replaceable
+            and _near_receiver_or_outside(res.x, rx_coords, centroid)):
         for rx in rx_coords:
             x0 = rx + 0.5 * (rx - centroid) + 0.1
             if not in_bounds(x0):
@@ -150,13 +155,22 @@ def solve_numerically(tdoa_array, rx_pos):
             if candidate.cost < (OUTER_START_COST_RATIO * res.cost
                                  - OUTER_START_COST_MARGIN):
                 res = candidate
+                if res.cost <= replaceable:
+                    break
+
+    position = res.x
+    if dims == 1:
+        # The TDOAs are the same everywhere beyond an end receiver, so a
+        # fit there (the start near the origin stays put when the origin
+        # lies beyond the receivers) fits as well on that receiver.
+        position = np.clip(position, np.amin(rx_coords), np.amax(rx_coords))
 
     # TODO: also return residual or a measure of the quality or confidence of
     #       the estimate
 
     snr_mean = np.mean(tdoa_array['snr'])
 
-    return res.x, snr_mean
+    return position, snr_mean
 
 
 def _unit_vectors(vectors):

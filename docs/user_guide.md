@@ -1129,7 +1129,12 @@ with `id: x y z` the tag's height is solved too, which needs at least
 receivers and needs at least 2 (a tag beyond the outermost receiver has
 that receiver's TDOAs, and is placed there).  A receiver pair that
 never heard a beacon together gets no TDOA (counted as a failure),
-while the other pairs are estimated.
+while the other pairs are estimated.  A tag less than about 10 m
+behind a corner receiver (seen from the array) can still come out on
+that receiver, about that far off: `pos` only tries other starts for a
+fit whose cost (half the sum of the squared TDOA residuals, in m²)
+exceeds 4 m², so in arrays a few tens of metres across the error is a
+large part of the array.
 End-to-end multi-receiver documentation will be added as the
 integration testing matures.
 
