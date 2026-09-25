@@ -161,3 +161,13 @@ def test_cli_default_rate_warning_names_the_residuals(tmp_path, monkeypatch,
     beacon_analysis._main()
     assert 'The residuals in metres are wrong' in caplog.text
     assert 'position' not in caplog.text
+
+
+@pytest.mark.parametrize('days', [30, 100])
+def test_fit_is_as_precise_as_the_soas_after_an_uptime(days):
+    """Regression: the fit of the raw SoAs (6e12 samples after 30 days at
+    2.4 Msps) was ill-conditioned, and exact SoAs left residuals of 5-10
+    float64 steps: 0.04 samples, 5 m, after 100 days."""
+    soa = _soas(-11.29, -4.6, n=600, noise=0.0) + days * 86400 * FS
+    _, residuals = beacon_analysis.fit_poly_model(soa, 2)
+    assert np.max(np.abs(residuals)) <= 2 * np.spacing(np.max(soa))

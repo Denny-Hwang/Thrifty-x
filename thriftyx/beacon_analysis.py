@@ -197,7 +197,16 @@ def analyze(detections, matches, sample_rate, deg=2):
 
 
 def fit_poly_model(soa, deg=2):
-    soa0, soa1 = soa[:, 0], soa[:, 1]
+    """Fit rx1's SoAs as a polynomial in rx0's; return the coefficients
+    and the residuals (in samples).
+
+    The fit is relative to the first transmission: the coefficients are
+    those of ``soa1 - soa1[0]`` in ``soa0 - soa0[0]``.  SoAs count
+    samples since the capture started, and a fit in values that large is
+    ill-conditioned: after 100 days at 2.4 Msps the residuals of exact
+    SoAs reached 0.04 samples (5 m).
+    """
+    soa0, soa1 = soa[:, 0] - soa[0, 0], soa[:, 1] - soa[0, 1]
     coef = np.polyfit(soa0, soa1, deg)
     fit = np.poly1d(coef)
     residuals = soa1 - fit(soa0)

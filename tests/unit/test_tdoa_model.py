@@ -11,6 +11,7 @@ of arrival of the mobile transmitter.
 """
 
 import numpy as np
+import pytest
 
 from thriftyx import tdoa_est
 from thriftyx.toads_data import CorrDetectionInfo, DetectionResult
@@ -28,34 +29,41 @@ def _dist(a, b):
     return float(np.hypot(a[0] - b[0], a[1] - b[1]))
 
 
-def _sample_index(rxid, t):
-    """Receiver *rxid*'s sample counter at true time *t*."""
+def _sample_index(rxid, t, uptime=0.0, cubic=0.0):
+    """Receiver *rxid*'s sample counter at true time *t*, in a capture
+    that has been running for *uptime* seconds at t = 0."""
     if rxid == 0:
-        return FS * t
-    # Offset, +20 ppm frequency error and a drifting rate.
-    return 1_234_567.25 + FS * (1 + 20e-6) * t + 0.5 * FS * 3e-6 * t ** 2
+        return FS * (uptime + t)
+    # Offset, +20 ppm frequency error and a drifting rate (and optionally
+    # a term the quadratic model cannot follow).
+    return (1_234_567.25 + FS * (1 + 20e-6) * (uptime + t)
+            + 0.5 * FS * 3e-6 * t ** 2 + FS * cubic * t ** 3)
 
 
-def _detections():
+def _detections(uptime=0.0, cubic=0.0, rx_pos=None, beacon_pos=None,
+                mobile_pos=MOBILE_POS):
+    rx_pos = RX_POS if rx_pos is None else rx_pos
+    beacon_pos = BEACON_POS if beacon_pos is None else beacon_pos
     detections, matches = [], []
-    emissions = ([(BEACON, BEACON_POS[BEACON], 0.05 * i) for i in range(20)]
-                 + [(MOBILE, MOBILE_POS, 0.025 + 0.05 * i)
+    emissions = ([(BEACON, beacon_pos[BEACON], 0.05 * i) for i in range(20)]
+                 + [(MOBILE, mobile_pos, 0.025 + 0.05 * i)
                     for i in range(19)])
     for txid, pos, t_emit in emissions:
         group = []
-        for rxid, rx in RX_POS.items():
+        for rxid, rx in rx_pos.items():
             arrival = t_emit + _dist(pos, rx) / C
             info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
             detections.append(DetectionResult(
-                arrival, 0, _sample_index(rxid, arrival), None, info,
-                rxid=rxid, txid=txid))
+                arrival, 0, _sample_index(rxid, arrival, uptime, cubic),
+                None, info, rxid=rxid, txid=txid))
             group.append(len(detections) - 1)
         matches.append(group)
     return detections, matches
 
 
-def _true_tdoa():
-    return (_dist(MOBILE_POS, RX_POS[0]) - _dist(MOBILE_POS, RX_POS[1])) / C
+def _true_tdoa(rx_pos=None, mobile_pos=MOBILE_POS):
+    rx_pos = RX_POS if rx_pos is None else rx_pos
+    return (_dist(mobile_pos, rx_pos[0]) - _dist(mobile_pos, rx_pos[1])) / C
 
 
 def test_mobile_tdoa_matches_geometry():
@@ -68,6 +76,52 @@ def test_mobile_tdoa_matches_geometry():
     got = np.array([g.tdoas['tdoa'][0] for g in groups])
     # 1e-10 s = 3 cm: the quadratic model captures this clock exactly.
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+@pytest.mark.parametrize('model', [tdoa_est.build_model_poly,
+                                   tdoa_est.build_model_weighted_poly])
+@pytest.mark.parametrize('days', [7, 30, 100])
+def test_precision_does_not_decay_with_uptime(days, model):
+    """Regression: the clock model was fitted to the raw SoAs, which
+    count samples since the capture started (5e12 after 10 days at
+    6 Msps), and the ill-conditioned fit put the TDOAs 0.4 m off after
+    7 days and 15 m after 30.  Fitted relative to the window's first
+    beacon, the TDOAs are as precise as the SoAs' float64 steps allow."""
+    detections, matches = _detections(uptime=days * 86400.0)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS,
+        model_builder=model)
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    soa_step = np.spacing(max(d.soa for d in detections)) / FS
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10 + 4 * soa_step)
+
+
+def _tdoas(model, **clock):
+    detections, matches = _detections(**clock)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS,
+        model_builder=model)
+    assert failures == []
+    soa_step = np.spacing(max(d.soa for d in detections)) / FS
+    return np.array([g.tdoas['tdoa'][0] for g in groups]), soa_step
+
+
+@pytest.mark.parametrize('days', [7, 30])
+def test_weighted_model_weights_do_not_depend_on_uptime(days):
+    """The weighted model weights each beacon by its distance in samples
+    from the mobile detection.  With a clock term the quadratic cannot
+    follow, the weights move the TDOAs by 2e-8 s; computed from the raw
+    mobile SoA against centred beacon SoAs they would be uniform after
+    any uptime, and the TDOAs would depend on it."""
+    cubic = 1e-4
+    weighted, _ = _tdoas(tdoa_est.build_model_weighted_poly, cubic=cubic)
+    unweighted, _ = _tdoas(tdoa_est.build_model_poly, cubic=cubic)
+    got, soa_step = _tdoas(tdoa_est.build_model_weighted_poly,
+                           uptime=days * 86400.0, cubic=cubic)
+    atol = 1e-10 + 4 * soa_step
+    assert np.max(np.abs(weighted - unweighted)) > 10 * atol
+    np.testing.assert_allclose(got, weighted, atol=atol)
 
 
 def test_beacon_geometry_is_applied():
@@ -129,3 +183,60 @@ def test_receiver_that_never_hears_the_beacon():
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
     # (0, 2) and (1, 2) of every mobile group
     assert len(failures) == 2 * 19
+
+
+def _shift_soa(detections, matches, txid, nth, samples):
+    """Shift rx1's SoA in the *nth* group of *txid* by *samples*."""
+    group = [m for m in matches if detections[m[0]].txid == txid][nth]
+    det = detections[group[1]]
+    detections[group[1]] = DetectionResult(
+        det.timestamp, det.block, det.soa + samples, None, det.corr_info,
+        rxid=det.rxid, txid=det.txid)
+    return group
+
+
+def test_beacon_outlier_is_left_out_of_the_model():
+    """A beacon detection with a bad SoA (a burst paired with the wrong
+    one) must not bend the clock model: without the outlier rejection,
+    +300 samples at one receiver moved mobile TDOAs by up to 2.8 km."""
+    detections, matches = _detections()
+    _shift_soa(detections, matches, BEACON, 10, 300)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+@pytest.mark.parametrize('samples', [2000, -2000])
+def test_tdoa_beyond_max_tdoa_is_a_failure(samples):
+    """A mobile SoA off by 2000 samples (333 us, 100 km) gives a TDOA
+    more than MAX_TDOA (30 km) beyond what this 1.2 km pair can have: a
+    failure, not a group for pos."""
+    detections, matches = _detections()
+    group = _shift_soa(detections, matches, MOBILE, 5, samples)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, BEACON_POS, RX_POS, FS)
+    assert failures == [tuple(group)]
+    assert len(groups) == 18
+    assert all(abs(g.tdoas['tdoa'][0]) < tdoa_est.MAX_TDOA for g in groups)
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+def test_long_baseline_tdoa_is_kept():
+    """A pair 50 km apart with the tag behind one receiver has a 50 km
+    TDOA: a fixed 30 km cap dropped it as an outlier."""
+    rx_pos = {0: (0.0, 0.0), 1: (50e3, 0.0)}
+    beacon_pos = {BEACON: (20e3, 3e3)}
+    mobile_pos = (-1e3, 200.0)
+    detections, matches = _detections(rx_pos=rx_pos, beacon_pos=beacon_pos,
+                                      mobile_pos=mobile_pos)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, beacon_pos, rx_pos, FS)
+    true_tdoa = _true_tdoa(rx_pos, mobile_pos)
+    assert abs(true_tdoa) > tdoa_est.MAX_TDOA
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    # Within the test clocks' ppm-level rate error (0.2 m on 50 km).
+    np.testing.assert_allclose(got, true_tdoa, rtol=1e-5)

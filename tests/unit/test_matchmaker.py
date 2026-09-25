@@ -7,7 +7,7 @@ import io
 import sys
 
 from thriftyx import cli, toads_data
-from thriftyx.matchmaker import load_matches, save_matches
+from thriftyx.matchmaker import load_matches, match_toads, save_matches
 
 
 def test_save_and_load_matches():
@@ -85,3 +85,43 @@ def test_short_lines_among_records_are_skipped(caplog):
     assert len(toads_data.load_toads(stream)) == 1
     assert 'skipped line #3' in caplog.text
     assert 'skipped line #2' not in caplog.text
+
+
+# --- match_toads ------------------------------------------------------------
+
+def _det(rxid, timestamp, energy=100.0, txid=1):
+    return toads_data.DetectionResult(
+        timestamp, 0, 0.0, None,
+        toads_data.CorrDetectionInfo(0, 0.0, energy, 1.0),
+        rxid=rxid, txid=txid)
+
+
+def test_collision_keeps_the_stronger_detection():
+    """Two detections of one receiver in a window: the match takes the
+    stronger, and the pair is reported as a collision."""
+    toads = [_det(0, 10.000, 900.0), _det(1, 10.001, 800.0),
+             _det(0, 10.050, 40.0)]
+    assert match_toads(toads, 0.2) == ([[0, 1]], [], [(0, 2)])
+    # ... whichever comes first.
+    toads = [_det(0, 10.000, 40.0), _det(1, 10.001, 800.0),
+             _det(0, 10.050, 900.0)]
+    assert match_toads(toads, 0.2) == ([[2, 1]], [], [(0, 2)])
+
+
+def test_window_edges():
+    """A detection at exactly the window's end joins the match; one after
+    it starts the next.  Another transmitter's detections in the window
+    do not join it."""
+    toads = [_det(0, 10.0), _det(2, 10.1, txid=2), _det(1, 10.25),
+             _det(1, 10.5), _det(2, 10.75, txid=2), _det(0, 10.75)]
+    matches, misses, collisions = match_toads(toads, 0.25)
+    assert matches == [[0, 2], [3, 5]]
+    assert misses == [1, 4]
+    assert collisions == []
+
+
+def test_min_match():
+    toads = [_det(0, 10.0), _det(1, 10.01), _det(2, 10.02),
+             _det(0, 11.0), _det(2, 11.01)]
+    assert match_toads(toads, 0.2)[:2] == ([[0, 1, 2], [3, 4]], [])
+    assert match_toads(toads, 0.2, min_match=3)[:2] == ([[0, 1, 2]], [3])

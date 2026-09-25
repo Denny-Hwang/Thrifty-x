@@ -110,6 +110,151 @@ def test_solve_numerically_just_outside_the_array(tx_pos):
     np.testing.assert_allclose(position, tx_pos, atol=0.01)
 
 
+@pytest.mark.parametrize('origin', [(0, 0), (300, 200)])
+@pytest.mark.parametrize('corner', [(0, 0), (1, 0), (0, 1), (1, 1)])
+def test_solve_numerically_behind_every_corner(corner, origin):
+    """Regression: from the origin and centroid starts alone, a tag
+    diagonally behind a corner receiver solved into that receiver's cusp
+    -- (-100, -100) came out at (5.3, 9.5), 152 m off, even with exact
+    TDOAs -- behind whichever corners neither start happened to reach."""
+    width, height = 1200, 1000
+    rx_pos = {0: [0, 0], 1: [width, 0], 2: [0, height], 3: [width, height]}
+    rx_pos = {k: list(np.add(v, origin)) for k, v in rx_pos.items()}
+    rx = np.add(origin, np.multiply(corner, (width, height)))
+    away = np.where(corner, 1, -1)
+    for dist in (20, 100, 400, 800):
+        for angle in np.radians([15, 45, 75]):
+            tx_pos = rx + away * dist * np.array([np.cos(angle),
+                                                  np.sin(angle)])
+            tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+            position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+            np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
+@pytest.mark.parametrize('rx_pos, tx_pos', [
+    ({0: [0, 0, 0], 1: [1000, 0, 10], 2: [0, 1000, 30], 3: [500, 500, 80]},
+     [432.6, 102, 20.3]),
+    ({0: [0, 0, 0], 1: [1000, 0, 10], 2: [0, 1000, 30], 3: [500, 500, 80]},
+     [128, 812.8, 33.1]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500512, 4000823]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500939, 4000020]),
+    ({0: [500000, 4000000], 1: [501000, 4000000], 2: [500500, 4000866]},
+     [500056, 4000026]),
+])
+def test_solve_numerically_keeps_the_fit_inside_the_array(rx_pos, tx_pos):
+    """Regression: a start beyond a receiver found the mirror solution,
+    which fits exact TDOAs as well as the true position does, and won
+    the tie: these tags inside a 3-D array came out 150-210 m above it,
+    those inside a 3-receiver array (UTM coordinates) 1.5-7 km away."""
+    tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+    position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+    np.testing.assert_allclose(position, tx_pos, atol=0.01)
+
+
+MASTS = {0: [0, 0, 6], 1: [1000, 0, 10], 2: [0, 1000, 4], 3: [1000, 1000, 12],
+         4: [500, 450, 8]}
+FLAT = {0: [0, 0, 2], 1: [1000, 0, 2], 2: [0, 1000, 2], 3: [1000, 1000, 2],
+        4: [500, 500, 2]}
+
+
+@pytest.mark.parametrize('rx_pos, tx_pos, solves', [
+    # well inside the array
+    ({0: [0, 0], 1: [1200, 0], 2: [0, 1000], 3: [1200, 1000]}, [400, 300],
+     2),
+    # behind a corner: receiver 0's start finds it, and no later one could
+    # fit better
+    ({0: [0, 0], 1: [1200, 0], 2: [0, 1000], 3: [1200, 1000]}, [-150, -150],
+     2 + 1),
+    # below the masts, or off a flat array: outside the receivers' box in
+    # z, but fitted exactly, which no other start can beat
+    (MASTS, [300, 400, 1], 2),
+    (FLAT, [300, 400, 10], 2),
+])
+def test_starts_beyond_the_receivers_only_when_needed(monkeypatch, rx_pos,
+                                                      tx_pos, solves):
+    """The starts beyond the receivers made pos 3 times slower, and 3-D
+    layouts ran them for almost every tag."""
+    calls = []
+    least_squares = pos_est.scipy.optimize.least_squares
+
+    def counting(*args, **kwargs):
+        calls.append(args[1])
+        return least_squares(*args, **kwargs)
+
+    monkeypatch.setattr(pos_est.scipy.optimize, 'least_squares', counting)
+    position, _ = pos_est.solve_numerically(gen_tdoa_data(rx_pos, tx_pos),
+                                            rx_pos)
+    if rx_pos is FLAT:
+        # z is only known up to its mirror image in the receivers' plane
+        position[2] = 2 + abs(position[2] - 2)
+    np.testing.assert_allclose(position, tx_pos, atol=0.01)
+    assert len(calls) == solves
+
+
+def test_near_collinear_array_uses_the_box_test():
+    """Nearly collinear receivers: the start near the origin fits a point
+    mirrored across the line of receivers, 487 m off, and far from every
+    receiver.  Only being outside the receivers' bounding box sends it to
+    the starts beyond the receivers, which find the tag."""
+    rx_pos = {0: [0, 0], 1: [500, 5], 2: [1000, -3], 3: [1500, 2]}
+    tdoa_array = gen_tdoa_data(rx_pos, [600, 250])
+    position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+    np.testing.assert_allclose(position, [600, 250], atol=0.01)
+
+
+def test_noisy_mirror_needs_a_clearly_better_fit():
+    """With a few metres of noise on the TDOAs, the mirror solution 280 m
+    above this 3-D array fits a little better (cost 19.7 m^2) than the
+    one near the tag (28.1 m^2), but not by the factor of 4 a start
+    beyond the receivers needs to win."""
+    rx_pos = {0: [0, 0, 0], 1: [1000, 0, 10], 2: [0, 1000, 30],
+              3: [500, 500, 80], 4: [1000, 1000, 5]}
+    tx_pos = [-423, 536, 21]
+    tdoa_array = gen_tdoa_data(rx_pos, tx_pos)
+    noise_m = [0.7, 1.9, 4.3, -3.0, -0.8, -4.2, -2.3, 1.1, -0.4, 1.3]
+    tdoa_array['tdoa'] += np.array(noise_m) / SPEED_OF_LIGHT
+    position, _ = pos_est.solve_numerically(tdoa_array, rx_pos)
+    assert np.linalg.norm(position - tx_pos) < 5
+
+
+def test_1d_solve_steps_onto_a_receiver():
+    """Regression: with 3 or more receivers in 1-D, a Gauss-Newton step
+    often lands exactly on a receiver, where the Jacobian was 0/0: scipy
+    raised ValueError and the whole `pos` run aborted.  A tag beyond the
+    outermost receiver has the same TDOAs as that receiver's position,
+    which is where it is placed."""
+    rx_pos = {0: [0.0], 1: [500.0], 2: [1200.0]}
+    for tx, want in ((1500.0, 1200.0), (800.0, 800.0), (500.0, 500.0),
+                     (-300.0, 0.0)):
+        (x,), _ = pos_est.solve_numerically(gen_tdoa_data(rx_pos, [tx]),
+                                            rx_pos)
+        assert x == pytest.approx(want, abs=0.01), tx
+    groups = [(4, 1.0, 3, gen_tdoa_data(rx_pos, [1500.0]))]
+    positions = pos_est.solve(groups, rx_pos)
+    assert positions['x'][0] == pytest.approx(1200.0, abs=0.01)
+    assert np.isfinite(positions['dop'][0])
+
+
+@pytest.mark.parametrize('rx_pos', [{0: [5000.0], 1: [6000.0], 2: [7000.0]},
+                                    {0: [-7000.0], 1: [-6000.0],
+                                     2: [-5000.0]}])
+def test_1d_tag_beyond_receivers_away_from_the_origin(rx_pos):
+    """Regression: with the origin beyond the end receivers, the start near
+    it fits as well as any point out there (the TDOAs are the same), won
+    the tie, and a tag at or beyond the first receiver came out at 0.1 m,
+    km off, with DOP -1 (no estimate)."""
+    first, *_, last = sorted(x for x, in rx_pos.values())
+    groups = [(k, 1.0, 3, gen_tdoa_data(rx_pos, [tx])) for k, tx in
+              enumerate((first - 100, first, last + 300, first + 1400))]
+    positions = pos_est.solve(groups, rx_pos)
+    np.testing.assert_allclose(positions['x'],
+                               [first, first, last, first + 1400], atol=0.01)
+    assert np.all(np.isfinite(positions['dop']))
+    assert np.all(positions['dop'] > 0)
+
+
 def test_solve_skips_a_receiver_without_coordinates(capsys):
     """Regression: a .tdoa row naming a receiver missing from pos-rx.cfg
     crashed pos with a bare KeyError."""

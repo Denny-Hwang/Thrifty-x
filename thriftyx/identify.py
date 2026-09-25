@@ -33,6 +33,14 @@ from thriftyx.settings import parse_kvconfig
 
 UNIDENTIFIED_TX = -1
 
+# Detections in adjacent blocks are duplicates only if their timestamps
+# are at most this far apart (seconds).  Adjacent blocks of one capture
+# are milliseconds apart (a block adds 11464 samples, 4.8 ms, at the
+# default 2.4 Msps); the same block indices in another capture session
+# of the receiver (the index restarts at 0) are at least that earlier
+# session's length apart.
+DUPLICATE_MAX_DT = 1.0
+
 # --map contents: {txid: (start_bin, stop_bin)} and {rxid: bin offset}.
 FreqMap = namedtuple('FreqMap', ['tx_ranges', 'rx_offset'])
 
@@ -138,7 +146,11 @@ def classify_transmitters(detections, freqmap):
         offset = freqmap.rx_offset.get(detection.rxid, 0.0)
         this_txid = UNIDENTIFIED_TX
         for txid, (start, stop) in freqmap.tx_ranges.items():
-            if start + offset <= freq <= stop + offset:
+            # A range holds whole bins, start..stop: carrier frequencies
+            # from half a bin below start up to half a bin above stop
+            # (carrier_offset is in [-0.5, 0.5]).  Half-open, so ranges
+            # of adjacent bins do not both claim their common edge.
+            if start - 0.5 + offset <= freq < stop + 0.5 + offset:
                 this_txid = txid
         if this_txid == UNIDENTIFIED_TX:
             logging.warning("Failed to classify transmitter for detection "
@@ -168,27 +180,38 @@ def identify_duplicates(detections):
 
     The block prior to or after the full detection may contain a portion of
     positioning signal and also trigger a detection. It is thus necessary
-    to remove those "duplicate" detections.
-    It is assumed that all detections were captured by the same receiver.
+    to remove those "duplicate" detections: of two detections by the same
+    receiver of the same transmitter in adjacent blocks, the weaker.
+
+    The block index restarts at 0 with every capture, so adjacent blocks
+    must also be close in time (DUPLICATE_MAX_DT): the same block indices
+    in another capture session of the receiver are not duplicates.
 
     The mask will exclude unidentified detections.
     """
     array = toads_data.toads_array(detections, with_ids=True)
 
-    # Sort by receiver ID, then transmitter ID, then block ID, then timestamp
-    idx = np.argsort(array[['rxid', 'txid', 'block', 'timestamp']])
+    # Sort by receiver ID, then transmitter ID, then timestamp, then block
+    # ID, which keeps each capture session's detections together.
+    idx = np.argsort(array[['rxid', 'txid', 'timestamp', 'block']])
 
     cur = array[idx]
     prev = np.roll(cur, 1)
     next_ = np.roll(cur, -1)
 
+    def duplicate_of(other):
+        # np.roll wraps around, but a wrapped pair passes these checks
+        # only if it is a real pair of neighbours too.
+        return ((cur['rxid'] == other['rxid']) &
+                (cur['txid'] == other['txid']) &
+                (np.abs(cur['block'] - other['block']) == 1) &
+                (np.abs(cur['timestamp'] - other['timestamp'])
+                 <= DUPLICATE_MAX_DT) &
+                (cur['energy'] < other['energy']))
+
     # TODO: only filter if SOA is within code_len
-    mask_unidentified = (cur['txid'] == -1)  # FIXME: magic number
-    mask_prev = ((cur['block'] == prev['block'] + 1) &
-                 (cur['energy'] < prev['energy']))
-    mask_next = ((cur['block'] == next_['block'] - 1) &
-                 (cur['energy'] < next_['energy']))
-    mask = ~(mask_prev | mask_next | mask_unidentified)
+    mask_unidentified = (cur['txid'] == UNIDENTIFIED_TX)
+    mask = ~(duplicate_of(prev) | duplicate_of(next_) | mask_unidentified)
 
     reverse_idx = np.argsort(idx)
 

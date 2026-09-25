@@ -21,14 +21,14 @@ from thriftyx.toads_data import (  # noqa: E402
     CarrierSyncInfo, CorrDetectionInfo, DetectionResult)
 
 
-def _toads(path):
+def _toads(path, interval=0.05):
     rng = np.random.default_rng(3)
     lines = []
     for i in range(40):
         for rxid in (0, 1):
             txid = i % 2
             det = DetectionResult(
-                1000.0 + 0.05 * i + 1e-4 * rxid, i, 20490.0 * i + 100.5,
+                1000.0 + interval * i + 1e-4 * rxid, i, 20490.0 * i + 100.5,
                 CarrierSyncInfo(120 + 30 * txid, rng.uniform(-0.5, 0.5),
                                 500.0, 10.0),
                 CorrDetectionInfo(100, rng.uniform(-0.5, 0.5), 400.0, 5.0),
@@ -44,8 +44,12 @@ def _headless_env():
     return env
 
 
-def test_export_works_without_a_display(tmp_path):
-    _toads(tmp_path / 'data.toads')
+@pytest.mark.parametrize('interval', [0.05, 10.0])
+def test_export_works_without_a_display(tmp_path, interval):
+    """interval 10.0: regression, a .toads spanning more than 150 s asked
+    hist2d for a fractional number of time bins (TypeError), which failed
+    example/Makefile's default target."""
+    _toads(tmp_path / 'data.toads', interval)
     result = subprocess.run(
         [sys.executable, '-m', 'thriftyx.cli', 'analyze_toads',
          '-i', 'data.toads', '--export', 'out'],
