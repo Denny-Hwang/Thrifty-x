@@ -129,7 +129,7 @@ def test_output_is_written_once_setup_succeeds(monkeypatch, tmp_path,
     assert (tmp_path / 'rx0.toad').read_text() == expected
 
 
-def _noise(size=32768):
+def _card_noise(size=32768):
     rng = np.random.default_rng(size)
     return (0.01 * (rng.normal(size=size) + 1j * rng.normal(size=size))
             ).astype(np.complex64)
@@ -144,7 +144,7 @@ def test_first_block_failure_keeps_the_previous_output(monkeypatch,
     (tmp_path / 'rx0.toad').write_text('previous\n')
     with pytest.raises(FileFormatError, match='block 0 holds 65536'):
         _run_detect(monkeypatch, tmp_path, option, 'rx0.toad',
-                    blocks=[_noise(2 * 32768)], header=False)
+                    blocks=[_card_noise(2 * 32768)], header=False)
     assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'
 
 
@@ -163,7 +163,7 @@ def test_output_streams_once_the_first_block_passed(monkeypatch, tmp_path):
     (tmp_path / 'rx0.toad').write_text('previous\n')
     with pytest.raises(FileFormatError, match='block 1 holds'):
         _run_detect(monkeypatch, tmp_path, '-o', 'rx0.toad',
-                    blocks=[_noise(), _noise(1000)], header=False)
+                    blocks=[_card_noise(), _card_noise(1000)], header=False)
     assert (tmp_path / 'rx0.toad').read_text() == ''
 
 
@@ -175,5 +175,5 @@ def test_window_outside_the_fft_is_a_config_error(monkeypatch, tmp_path,
     (tmp_path / 'rx0.toad').write_text('previous\n')
     with pytest.raises(ConfigValidationError, match='carrier_window'):
         _run_detect(monkeypatch, tmp_path, option, 'rx0.toad',
-                    '--carrier-window', '1000-40000', blocks=[_noise()])
+                    '--carrier-window', '1000-40000', blocks=[_card_noise()])
     assert (tmp_path / 'rx0.toad').read_text() == 'previous\n'
