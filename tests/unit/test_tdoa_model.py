@@ -40,14 +40,17 @@ def _sample_index(rxid, t, uptime=0.0, cubic=0.0):
             + 0.5 * FS * 3e-6 * t ** 2 + FS * cubic * t ** 3)
 
 
-def _detections(uptime=0.0, cubic=0.0):
+def _detections(uptime=0.0, cubic=0.0, rx_pos=None, beacon_pos=None,
+                mobile_pos=MOBILE_POS):
+    rx_pos = RX_POS if rx_pos is None else rx_pos
+    beacon_pos = BEACON_POS if beacon_pos is None else beacon_pos
     detections, matches = [], []
-    emissions = ([(BEACON, BEACON_POS[BEACON], 0.05 * i) for i in range(20)]
-                 + [(MOBILE, MOBILE_POS, 0.025 + 0.05 * i)
+    emissions = ([(BEACON, beacon_pos[BEACON], 0.05 * i) for i in range(20)]
+                 + [(MOBILE, mobile_pos, 0.025 + 0.05 * i)
                     for i in range(19)])
     for txid, pos, t_emit in emissions:
         group = []
-        for rxid, rx in RX_POS.items():
+        for rxid, rx in rx_pos.items():
             arrival = t_emit + _dist(pos, rx) / C
             info = CorrDetectionInfo(0, 0.0, 100.0, 1.0)
             detections.append(DetectionResult(
@@ -58,8 +61,9 @@ def _detections(uptime=0.0, cubic=0.0):
     return detections, matches
 
 
-def _true_tdoa():
-    return (_dist(MOBILE_POS, RX_POS[0]) - _dist(MOBILE_POS, RX_POS[1])) / C
+def _true_tdoa(rx_pos=None, mobile_pos=MOBILE_POS):
+    rx_pos = RX_POS if rx_pos is None else rx_pos
+    return (_dist(mobile_pos, rx_pos[0]) - _dist(mobile_pos, rx_pos[1])) / C
 
 
 def test_mobile_tdoa_matches_geometry():
@@ -206,9 +210,9 @@ def test_beacon_outlier_is_left_out_of_the_model():
 
 @pytest.mark.parametrize('samples', [2000, -2000])
 def test_tdoa_beyond_max_tdoa_is_a_failure(samples):
-    """A mobile SoA off by 2000 samples (333 us, 100 km) gives a TDOA no
-    receiver pair within MAX_TDOA (30 km) can have: a failure, not a
-    group for pos."""
+    """A mobile SoA off by 2000 samples (333 us, 100 km) gives a TDOA
+    more than MAX_TDOA (30 km) beyond what this 1.2 km pair can have: a
+    failure, not a group for pos."""
     detections, matches = _detections()
     group = _shift_soa(detections, matches, MOBILE, 5, samples)
     groups, failures = tdoa_est.estimate_tdoas(
@@ -218,3 +222,21 @@ def test_tdoa_beyond_max_tdoa_is_a_failure(samples):
     assert all(abs(g.tdoas['tdoa'][0]) < tdoa_est.MAX_TDOA for g in groups)
     got = np.array([g.tdoas['tdoa'][0] for g in groups])
     np.testing.assert_allclose(got, _true_tdoa(), atol=1e-10)
+
+
+def test_long_baseline_tdoa_is_kept():
+    """A pair 50 km apart with the tag behind one receiver has a 50 km
+    TDOA: a fixed 30 km cap dropped it as an outlier."""
+    rx_pos = {0: (0.0, 0.0), 1: (50e3, 0.0)}
+    beacon_pos = {BEACON: (20e3, 3e3)}
+    mobile_pos = (-1e3, 200.0)
+    detections, matches = _detections(rx_pos=rx_pos, beacon_pos=beacon_pos,
+                                      mobile_pos=mobile_pos)
+    groups, failures = tdoa_est.estimate_tdoas(
+        detections, matches, 0.3, beacon_pos, rx_pos, FS)
+    true_tdoa = _true_tdoa(rx_pos, mobile_pos)
+    assert abs(true_tdoa) > tdoa_est.MAX_TDOA
+    assert failures == []
+    got = np.array([g.tdoas['tdoa'][0] for g in groups])
+    # Within the test clocks' ppm-level rate error (0.2 m on 50 km).
+    np.testing.assert_allclose(got, true_tdoa, rtol=1e-5)

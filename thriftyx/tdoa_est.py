@@ -32,6 +32,8 @@ from thriftyx.setting_parsers import metric_float
 from thriftyx.settings import parse_kvconfig
 
 SPEED_OF_LIGHT = 2.997e8
+# How far a TDOA may go beyond its receiver pair's baseline (no position
+# gives more than baseline / c) before it is taken for an outlier.
 MAX_TDOA = 30e3 / SPEED_OF_LIGHT
 
 
@@ -308,7 +310,9 @@ def estimate_tdoas(detections, matches, window_size,
             tdoa = model(det0, det1)
 
             # Ignore outliers
-            if tdoa is None or abs(tdoa) >= MAX_TDOA:
+            baseline = _dist(rx_pos[det0.rxid], rx_pos[det1.rxid])
+            if (tdoa is None
+                    or abs(tdoa) >= MAX_TDOA + baseline / SPEED_OF_LIGHT):
                 failures.append((det0_id, det1_id))
                 continue
 
