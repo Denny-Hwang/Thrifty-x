@@ -421,7 +421,7 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     stop_signals = (signal.SIGINT, signal.SIGTERM)
     previous = {sig: signal.signal(sig, _on_stop) for sig in stop_signals}
     duration = extra_args.get('duration')
-    for_duration = forwarded = killed = False
+    forwarded = killed = False
     try:
         process = subprocess.Popen(call)
         started = time.monotonic()
@@ -445,14 +445,16 @@ def _capture_rtlsdr_fastcard(config, extra_args):
                 # fastcard has no --duration: stop it as Ctrl-C would.
                 requests.append((signal.SIGINT, now))
                 _signal_process(process, signal.SIGINT)
-                for_duration = forwarded = True
+                forwarded = True
             time.sleep(FASTCARD_POLL_S)
         returncode = process.returncode
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-    if for_duration and returncode == -signal.SIGINT:
-        returncode = 0  # stopped before it set up its handler
+    if requests and returncode == -requests[0][0]:
+        # The stop asked for (a signal, or --duration) reached fastcard
+        # before it set up its handler, and ended it: stopped as asked.
+        returncode = 0
     if returncode < 0:
         returncode = 128 - returncode  # killed by a signal, as a shell says
     if returncode != 0:

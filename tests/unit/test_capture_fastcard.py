@@ -124,7 +124,8 @@ def test_fastcard_status_is_the_exit_status(monkeypatch):
 
 # Stands in for fastcard, taking stop signals as fastcapture's
 # sigthread.c does: the first starts a clean stop (0.3 s here), another
-# during it exits at once with 128+N.  In 'stuck' mode it never stops.
+# during it exits at once with 128+N.  In 'stuck' mode it never stops;
+# in 'slow' mode it spends 30 s starting, before it blocks the signals.
 # It writes its pid once the signals are blocked, and its events to log.
 _FAKE_FASTCARD = textwrap.dedent('''\
     import os
@@ -134,6 +135,10 @@ _FAKE_FASTCARD = textwrap.dedent('''\
 
     here = os.path.dirname(os.path.abspath(__file__))
     stops = {signal.SIGINT, signal.SIGTERM, signal.SIGQUIT}
+    if sys.argv[1] == 'slow':
+        # Still starting: the stop signals have their default action.
+        open(os.path.join(here, 'starting'), 'w').close()
+        time.sleep(30)
     signal.pthread_sigmask(signal.SIG_BLOCK, stops)
 
 
@@ -243,6 +248,21 @@ def test_a_stop_signal_stops_fastcard_once(tmp_path, sig, group):
     assert returncode == 0
     assert _log(tmp_path) == ['stop ' + signal.Signals(sig).name[3:],
                               'clean']
+
+
+@_needs_sigwait
+@pytest.mark.parametrize('sig', [signal.SIGTERM, signal.SIGINT])
+def test_a_group_stop_while_fastcard_starts(tmp_path, sig):
+    """A Ctrl-C or systemd stop that ended fastcard before it set up its
+    handler gave 130 or 143 for a capture that stopped when asked."""
+    process = _run_capture(tmp_path, mode='slow', new_session=True)
+    try:
+        _wait_for(lambda: (tmp_path / 'starting').exists())
+        os.killpg(process.pid, sig)
+    finally:
+        returncode = _finish(process, tmp_path)
+    assert returncode == 0
+    assert _log(tmp_path) == []
 
 
 @_needs_sigwait
