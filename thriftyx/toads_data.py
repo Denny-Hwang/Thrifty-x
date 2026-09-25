@@ -167,9 +167,11 @@ def toads_array(detections, with_ids=True):
         )
         for i, line in enumerate(detections)
     ]
+    # 'block' is 64-bit: a continuous capture passes 2**31 blocks after
+    # 85 days at 6 Msps (119 days at 2.4 Msps).
     return np.array(data, dtype=[
         ('idx', 'i4'), ('rxid', 'i4'), ('txid', 'i4'),
-        ('timestamp', 'f8'), ('block', 'i4'), ('soa', 'f8'),
+        ('timestamp', 'f8'), ('block', 'i8'), ('soa', 'f8'),
         ('sample', 'i4'), ('offset', 'f8'),
         ('energy', 'f8'), ('noise', 'f8'),
         ('carrier_bin', 'i4'), ('carrier_offset', 'f8'),

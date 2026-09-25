@@ -30,6 +30,18 @@ POSITION_INFO_DTYPE = {
 
 MAX_DIST = 10e3
 
+# solve_numerically tries the starts beyond the receivers only for a
+# first fit within NEAR_RX of a receiver (a fraction of the array's
+# radius: in the layouts tried, fits stuck in a corner receiver's cusp
+# were within 0.075 of it) or outside the receivers' bounding box grown
+# by BOX_MARGIN of its size.  A fit from such a start replaces the first
+# only if its cost (half the sum of squared residuals, in m^2) is below
+# OUTER_START_COST_RATIO * cost - OUTER_START_COST_MARGIN.
+NEAR_RX = 0.1
+BOX_MARGIN = 0.1
+OUTER_START_COST_RATIO = 0.25
+OUTER_START_COST_MARGIN = 1.0
+
 
 class EstimationError(exceptions.EstimationError):
     pass
@@ -92,17 +104,6 @@ def solve_numerically(tdoa_array, rx_pos):
     rx0 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx0']])
     rx1 = np.array([rx_pos[rxid] for rxid in tdoa_array['rx1']])
 
-    # The solver stops in the local minimum nearest its start, so solve
-    # from two starts and keep the better fit: near the origin, which some
-    # tags just outside the array need (from the centroid, the path to a
-    # tag behind a corner receiver ends in that receiver's cusp), and the
-    # receivers' centroid, which is inside the bounds even for receivers
-    # more than MAX_DIST from the origin (e.g. UTM coordinates).  The 0.1
-    # offsets keep a start off a receiver, where the Jacobian is undefined.
-    starts = [np.full(dims, 0.1), np.mean(rx_coords, axis=0) + 0.1]
-    starts = [x0 for x0 in starts
-              if np.all(x0 >= min_bounds) and np.all(x0 <= max_bounds)]
-
     def model(pos):
         # position relative to {rx0, rx1}
         pos_rx0, pos_rx1 = rx0 - pos, rx1 - pos
@@ -116,34 +117,92 @@ def solve_numerically(tdoa_array, rx_pos):
         return residuals
 
     def jac(pos):
-        pos_rx0, pos_rx1 = rx0 - pos, rx1 - pos
-        dist0 = np.linalg.norm(pos_rx0, axis=1)
-        dist1 = np.linalg.norm(pos_rx1, axis=1)
-        return pos_rx0 / dist0[:, None] - pos_rx1 / dist1[:, None]
+        return _unit_vectors(rx0 - pos) - _unit_vectors(rx1 - pos)
 
-    res = None
-    for x0 in starts:
-        candidate = scipy.optimize.least_squares(
+    def solve_from(x0):
+        return scipy.optimize.least_squares(
             model, x0, jac=jac, bounds=(min_bounds, max_bounds))
-        if res is None or candidate.cost < res.cost:
-            res = candidate
+
+    def in_bounds(x0):
+        return np.all(x0 >= min_bounds) and np.all(x0 <= max_bounds)
+
+    # The solver stops in the local minimum nearest its start, so solve
+    # from two starts and keep the better fit: near the origin and at the
+    # receivers' centroid, which is inside the bounds even for receivers
+    # more than MAX_DIST from the origin (e.g. UTM coordinates).  The 0.1
+    # offsets keep a start off a receiver.
+    centroid = np.mean(rx_coords, axis=0)
+    res = min((solve_from(x0) for x0 in (np.full(dims, 0.1), centroid + 0.1)
+               if in_bounds(x0)), key=lambda fit: fit.cost)
+
+    # From inside the array, the path to a tag behind a corner receiver
+    # ends in that receiver's cusp, up to hundreds of metres off, so a fit
+    # near a receiver or outside the array is tried again from just beyond
+    # each receiver.  Such a start only wins by fitting clearly better:
+    # for a tag inside a 3-D array, or a 3-receiver one, it can find the
+    # mirror solution, which fits (about) as well as the true position.
+    # A fit costing MARGIN / RATIO (4 m^2) or less cannot be replaced (that
+    # takes a cost below RATIO * cost - MARGIN <= 0), so it skips the
+    # extra solves, and the search ends once it has found one.
+    replaceable = OUTER_START_COST_MARGIN / OUTER_START_COST_RATIO
+    if (res.cost > replaceable
+            and _near_receiver_or_outside(res.x, rx_coords, centroid)):
+        for rx in rx_coords:
+            x0 = rx + 0.5 * (rx - centroid) + 0.1
+            if not in_bounds(x0):
+                continue
+            candidate = solve_from(x0)
+            if candidate.cost < (OUTER_START_COST_RATIO * res.cost
+                                 - OUTER_START_COST_MARGIN):
+                res = candidate
+                if res.cost <= replaceable:
+                    break
+
+    position = res.x
+    if dims == 1:
+        # The TDOAs are the same everywhere beyond an end receiver, so a
+        # fit there (the start near the origin stays put when the origin
+        # lies beyond the receivers) fits as well on that receiver.
+        position = np.clip(position, np.amin(rx_coords), np.amax(rx_coords))
 
     # TODO: also return residual or a measure of the quality or confidence of
     #       the estimate
 
     snr_mean = np.mean(tdoa_array['snr'])
 
-    return res.x, snr_mean
+    return position, snr_mean
+
+
+def _unit_vectors(vectors):
+    """Rows of *vectors* scaled to unit length; a zero row stays zero.
+
+    These are the gradients of the distances to the receivers.  At a
+    receiver the gradient is undefined, and 0/0 made the Jacobian NaN:
+    in 1-D, where a Gauss-Newton step often lands exactly on a receiver,
+    scipy then raised ValueError and aborted `pos`.  Zero (a subgradient)
+    lets the solver move on.
+    """
+    norms = np.linalg.norm(vectors, axis=1)[:, None]
+    return vectors / np.where(norms > 0, norms, 1.0)
+
+
+def _near_receiver_or_outside(pos, rx_coords, centroid):
+    """Whether *pos* is within NEAR_RX of a receiver (as a fraction of the
+    array's radius) or outside the receivers' bounding box grown by
+    BOX_MARGIN of its size in every dimension."""
+    radius = np.max(np.linalg.norm(rx_coords - centroid, axis=1))
+    if np.min(np.linalg.norm(rx_coords - pos, axis=1)) < NEAR_RX * radius:
+        return True
+    low, high = np.amin(rx_coords, axis=0), np.amax(rx_coords, axis=0)
+    margin = BOX_MARGIN * (high - low)
+    return bool(np.any(pos < low - margin) or np.any(pos > high + margin))
 
 
 def dop_matrix(pos, rx_pos, rx_pairs):
     pos = np.array(pos)
     rx0 = np.array([np.array(rx_pos[rxid]) for rxid, _ in rx_pairs])
     rx1 = np.array([np.array(rx_pos[rxid]) for _, rxid in rx_pairs])
-    pos_rx0, pos_rx1 = rx0 - pos, rx1 - pos
-    dist0 = np.linalg.norm(pos_rx0, axis=1)
-    dist1 = np.linalg.norm(pos_rx1, axis=1)
-    G = pos_rx0 / dist0[:, None] - pos_rx1 / dist1[:, None]
+    G = _unit_vectors(rx0 - pos) - _unit_vectors(rx1 - pos)
     H_inv = G.T.dot(G)
     try:
         H = np.linalg.inv(H_inv)
