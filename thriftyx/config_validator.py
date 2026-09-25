@@ -11,6 +11,9 @@
 Supports RTL-SDR (legacy 8-bit), Airspy Mini, and Airspy R2 devices.
 """
 
+from collections.abc import Sequence
+from typing import Any
+
 from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import ConfigValidationError
 from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, get_profile
@@ -143,34 +146,10 @@ def validate_config(config: dict) -> list[str]:
     if carrier_window is not None and block_size is not None:
         # carrier_window is (start, stop) or (start, stop, unit_hz) tuple
         if isinstance(carrier_window, (tuple, list)) and len(carrier_window) >= 2:
-            unit_hz = bool(len(carrier_window) >= 3 and carrier_window[2])
-            window = (carrier_window[0], carrier_window[1], unit_hz)
-            # The conversion capture uses.  A window is reported in its
-            # own unit (bin block_size/2 is sample_rate/2); only one in
-            # bins can lack the 'Hz'.
-            bins = None  # cannot convert Hz without sample_rate
-            if not unit_hz:
-                bins = normalize_freq_range(window, 1.0)
-                what = f"carrier_window {bins[0]} to {bins[1]} (FFT bins)"
-                nyquist = f"Nyquist ({block_size // 2})"
-                hint = (" A window without 'Hz' is in bins even with a "
-                        "k/M suffix: write e.g. 50-60kHz for one in Hz.")
-            elif sample_rate is not None:
-                bins = normalize_freq_range(window, sample_rate / block_size)
-                what = (f"carrier_window {window[0]:.0f} to "
-                        f"{window[1]:.0f} Hz")
-                nyquist = (f"Nyquist (±{sample_rate / 2:.0f} Hz, "
-                           f"sample_rate/2)")
-                hint = " Check carrier_window setting."
-            if bins is not None:
-                try:
-                    fft_range_index(bins[0], bins[1], block_size)
-                except ValueError:
-                    raise ConfigValidationError(
-                        f"{what} lies outside the {block_size}-bin FFT: "
-                        f"it exceeds {nyquist}.{hint}") from None
-                if max(abs(bins[0]), abs(bins[1])) > block_size // 2:
-                    warnings.append(f"{what} exceeds {nyquist}.{hint}")
+            _, warning = _check_carrier_window(carrier_window, sample_rate,
+                                               block_size)
+            if warning:
+                warnings.append(warning)
 
     # 7. Gain indices and gain_mode, for devices with staged gain
     if profile.gain_stages:
@@ -228,3 +207,68 @@ def validate_config(config: dict) -> list[str]:
                 f"bit_depth={bit_depth} is ignored for capture.")
 
     return warnings
+
+
+def _check_carrier_window(
+        carrier_window: Sequence[Any], sample_rate: float | None,
+        block_size: int) -> tuple[tuple[int, int] | None, str | None]:
+    """Check a ``(start, stop[, unit_hz])`` carrier window against the
+    FFT of *block_size* bins.
+
+    Returns ``(bins, warning)``: the window in FFT bins -- None for one
+    in Hz when *sample_rate* is None -- and a warning when it exceeds
+    Nyquist, or None.
+
+    Raises
+    ------
+    ConfigValidationError
+        When a bin lies outside the FFT.
+    """
+    unit_hz = bool(len(carrier_window) >= 3 and carrier_window[2])
+    window = (carrier_window[0], carrier_window[1], unit_hz)
+    # The conversion capture uses.  A window is reported in its own
+    # unit (bin block_size/2 is sample_rate/2); only one in bins can
+    # lack the 'Hz'.
+    if not unit_hz:
+        bins = normalize_freq_range(window, 1.0)
+        what = f"carrier_window {bins[0]} to {bins[1]} (FFT bins)"
+        nyquist = f"Nyquist ({block_size // 2})"
+        hint = (" A window without 'Hz' is in bins even with a "
+                "k/M suffix: write e.g. 50-60kHz for one in Hz.")
+    elif sample_rate is not None:
+        bins = normalize_freq_range(window, sample_rate / block_size)
+        what = f"carrier_window {window[0]:.0f} to {window[1]:.0f} Hz"
+        nyquist = f"Nyquist (±{sample_rate / 2:.0f} Hz, sample_rate/2)"
+        hint = " Check carrier_window setting."
+    else:
+        return None, None  # cannot convert Hz without sample_rate
+    try:
+        fft_range_index(bins[0], bins[1], block_size)
+    except ValueError:
+        raise ConfigValidationError(
+            f"{what} lies outside the {block_size}-bin FFT: "
+            f"it exceeds {nyquist}.{hint}") from None
+    if max(abs(bins[0]), abs(bins[1])) > block_size // 2:
+        return bins, f"{what} exceeds {nyquist}.{hint}"
+    return bins, None
+
+
+def carrier_bins(carrier_window: Sequence[Any], sample_rate: float,
+                 block_size: int) -> tuple[int, int]:
+    """``carrier_window`` in FFT bins, as the carrier detector takes it.
+
+    Checked against the FFT as :func:`validate_config` does, for the
+    commands that do not run it (it checks the capture device too) and
+    callers that skip it: a bin the detector cannot index used to fail
+    on the first block -- with a traceback, after the output file was
+    created.
+
+    Raises
+    ------
+    ConfigValidationError
+        When a bin lies outside the FFT.
+    """
+    bins, _ = _check_carrier_window(carrier_window, sample_rate,
+                                    block_size)
+    assert bins is not None  # a sample rate converts any window
+    return bins

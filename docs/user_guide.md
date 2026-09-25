@@ -399,7 +399,8 @@ milli, not mega: `chip_rate: 0.999707m` is rejected, since no template
 fits that many samples per chip.  `carrier_window` is in FFT bins
 unless it ends in `Hz`: `50-60kHz` is 50 to 60 kHz, but `50-60k` is
 bins 50 000 to 60 000.  That lies beyond the 32768-bin FFT at 6 Msps,
-where capture refuses it, but inside the 65536-bin FFT at 10 Msps,
+where capture (and `detect`, `template_extract`, `analyze_detect`)
+refuse it with status 78, but inside the 65536-bin FFT at 10 Msps,
 where it is only warned about (past Nyquist) and capture searches the
 wrong frequencies; `20-30k` there draws no warning at all.
 `carrier_window` and threshold expressions are parsed by
@@ -708,10 +709,11 @@ thriftyx gold --identify initial.card
 otherwise.
 
 - A clear match correlates well above 0.5 and several times the
-  runner-up (less for 5- and 6-bit codes, whose 31 or 63 chips
-  correlate more with each other); otherwise it says that no code
+  runner-up (less when either is a 5- or 6-bit code, whose 31 or 63
+  chips correlate more with anything); otherwise it says that no code
   matches clearly.  Capture one transmitter at a time, close enough for
-  a clean burst.
+  a clean burst.  Samples the capture lost and zero-filled are
+  ignored, as are bursts next to them.
 - It also reads a template (`.npy`, or fastdet's `.tpl`): `thriftyx
   gold --identify template.npy --sample-rate 6M` tells which code an
   existing template holds.
@@ -844,9 +846,10 @@ The dispatch table lives in `thriftyx/cli.py`.
   `template_extract` write the file only once their results are
   complete (`template_extract` reports a missing directory first), so a
   failed run leaves an existing file untouched.  `detect` opens it once
-  the input, template and settings have loaded -- a run that fails to
-  start keeps the old file -- and then streams detections into it, so
-  an error part-way through a card leaves a partial file.  For these
+  the first block has been processed -- a run that fails to start, or
+  on the card's first block (e.g. a 12-bit card that lost its header),
+  keeps the old file -- and then streams detections into it, so an
+  error part-way through a card leaves a partial file.  For these
   six commands `-o -` writes to stdout, and progress lines go to stderr
   instead.  `template_generate` and `template_extract` default to
   `template.npy` and `capture.npy`.
@@ -871,12 +874,17 @@ The dispatch table lives in `thriftyx/cli.py`.
   (RTL-SDR only). If the binary isn't on `PATH`, Thrifty-X falls back
   to its Python carrier detector.  Card data goes to the same place
   either way: the output file, or stdout for `-` or when stdout is a
-  pipe.
+  pipe.  `--duration`, Ctrl+C and SIGTERM (`systemctl stop`) stop
+  `fastcard` cleanly -- a signal that reached capture alone is passed on
+  after a second -- and a second Ctrl+C kills a `fastcard` that does not
+  stop.  Capture exits with `fastcard`'s status.
 - `--rotate <sec>` — start a new output file every N seconds, on
   wall-clock boundaries (`--rotate 3600` switches files on the hour on
   every receiver).  The output path is then a `strftime` pattern, e.g.
   `rx0_%Y%m%dT%H%M%S.card` (directories may use fields too, e.g.
-  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed); each file gets
+  `%Y%m%d/rx0_%H%M%S.card`, and are created as needed), fine enough to
+  give consecutive files different names (`rx0_%Y%m%d.card` with
+  `--rotate 60` is rejected); each file gets
   its own `#v2` header, and
   block indices continue across files, so sample-of-arrival stays
   continuous for the whole run.  Finished files can be processed or
@@ -892,11 +900,16 @@ indices keep their meaning after a drop, and only detections that
 overlap the gap are affected.
 
 The output file is opened only once the SDR has been opened and
-configured, so a capture that fails to start leaves an existing file
-with the same name untouched.  A bad setting (unknown device type,
+configured -- for the Python RTL-SDR capture (`--input`, or stdin
+without `fastcard`), once the first block of samples has arrived -- so
+a capture that fails to start leaves an existing file with the same
+name untouched.  An input that ends before a whole block (an `rtl_sdr`
+that found no dongle, in the pipe above) exits with status 1.  A bad
+setting (unknown device type,
 unparseable value or `airspy_serial`, a `carrier_window` outside the
-FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`)
-exits with status 78
+FFT, a `chip_rate` impossible at the sample rate, invalid `--rotate`,
+including a file-name pattern that gives consecutive files the same
+name) exits with status 78
 (`EX_CONFIG`); systemd units use it to stop restarting a node whose
 configuration needs fixing.
 

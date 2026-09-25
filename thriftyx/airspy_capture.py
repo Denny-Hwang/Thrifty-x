@@ -19,6 +19,7 @@ matching the behaviour of the original Thrifty ``fastcard`` tool.
 
 import argparse
 import base64
+import errno
 import logging
 import os
 import shutil
@@ -30,12 +31,10 @@ import time
 import numpy as np
 
 from thriftyx import settings as settings_module
-from thriftyx import setting_parsers
 from thriftyx.block_data import (write_card_header, raw_to_complex)
 from thriftyx import config_validator
 from thriftyx.hal.profiles import get_profile
 from thriftyx.carrier_detect import detect as carrier_detect_block
-from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import (EXIT_CONFIG, DeviceNotFoundError,
                                   DeviceConfigError, DeviceCaptureError,
                                   ConfigValidationError)
@@ -47,6 +46,13 @@ from thriftyx.signal_utils import compute_fft
 # FLUSH_BLOCKS detections — whichever comes first.
 FLUSH_INTERVAL_S = 1.0
 FLUSH_BLOCKS = 32
+
+# A stop signal usually reaches fastcard directly too (Ctrl-C signals
+# the terminal's process group, systemd the service's control group);
+# capture passes it on only if fastcard is still running this long
+# after, and checks on fastcard every FASTCARD_POLL_S seconds.
+FASTCARD_STOP_GRACE_S = 1.0
+FASTCARD_POLL_S = 0.1
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +70,6 @@ def _stdout_is_tty():
         return sys.stdout.isatty()
     except (AttributeError, ValueError):
         return False
-
-
-def _carrier_bins(carrier_window, sample_rate, block_size):
-    """``carrier_window`` in FFT bins, checked against the block size.
-
-    A bin the carrier detector cannot index would otherwise stop capture
-    on its first block, after the output file was created.
-    ``validate_config`` rejects such a window too; this guards callers
-    that skip it.
-    """
-    window = setting_parsers.normalize_freq_range(
-        carrier_window, sample_rate / block_size)
-    try:
-        fft_range_index(window[0], window[1], block_size)
-    except ValueError as exc:
-        raise ConfigValidationError(
-            "carrier_window: {}".format(exc)) from None
-    return window
 
 
 class CardSink:
@@ -201,13 +189,35 @@ def _open_new(path):
     if directory:  # os.makedirs('') raises
         os.makedirs(directory, exist_ok=True)
     base, ext = os.path.splitext(path)
-    candidate = path
-    for n in range(1, 1000):
+    for n in range(1000):
+        candidate = "{}.{}{}".format(base, n, ext) if n else path
         try:
             return open(candidate, 'x')
         except FileExistsError:
-            candidate = "{}.{}{}".format(base, n, ext)
-    raise FileExistsError(path)
+            pass
+    raise FileExistsError(
+        errno.EEXIST, "this name and its .1 to .999 variants are all "
+        "taken; move old files away, or give the --rotate pattern finer "
+        "time fields", path)
+
+
+def _pattern_repeats(pattern, rotate, now=None, rotations=1000):
+    """Whether the strftime *pattern* gives consecutive files the same
+    name when rotating every *rotate* seconds -- e.g.
+    ``rx0_%Y%m%d.card`` hourly.
+
+    Checked over the next *rotations* boundaries in UTC: local time
+    repeats an hour when daylight saving time ends, which
+    :func:`_open_new`'s suffix is for.
+    """
+    now = time.time() if now is None else now
+    first = now // rotate
+    try:
+        names = [time.strftime(pattern, time.gmtime((first + k) * rotate))
+                 for k in range(rotations + 1)]
+    except (OverflowError, ValueError, OSError):
+        return False  # rotations beyond any calendar never happen
+    return any(a == b for a, b in zip(names[:-1], names[1:], strict=True))
 
 
 def _card_sink_for(output_path, rotate=None):
@@ -349,9 +359,15 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     This replicates the original Thrifty fastcard-based capture behaviour:
     fastcard performs carrier detection in C and writes only detected blocks
     to the .card file.
+
+    fastcard stops cleanly on SIGINT or SIGTERM.  Capture passes such a
+    signal on only if fastcard is still running
+    :data:`FASTCARD_STOP_GRACE_S` later, and ``duration`` in
+    *extra_args* stops it with SIGINT; a second stop signal kills it.
+    Exits with fastcard's status when that is not 0.
     """
-    window = _carrier_bins(config.carrier_window, config.sample_rate,
-                           int(config.block_size))
+    window = config_validator.carrier_bins(
+        config.carrier_window, config.sample_rate, int(config.block_size))
     constant, snr, stddev = config.carrier_threshold
     if stddev != 0:
         print("Warning: fastcard does not support 'stddev' in threshold "
@@ -391,24 +407,64 @@ def _capture_rtlsdr_fastcard(config, extra_args):
     # with EPERM.
     if os.getsid(0) != os.getpid():
         os.setpgrp()
-    process = subprocess.Popen(call)
 
-    def _signal_handler(signal_, _frame):
-        try:
-            if process.poll() is None:
-                process.send_signal(signal_)
-                returncode = process.wait()
-                sys.exit(returncode)
-        except OSError:
-            pass
+    # The handler only records the request; the loop below acts on it.
+    # (Waiting for fastcard in the handler hung for good: it runs inside
+    # the main thread's wait, and Popen's wait lock is not reentrant.)
+    # Handlers go in first, so a signal that arrives while fastcard
+    # starts is not lost.
+    requests = []  # (signal, time) of each stop request
 
-    signal.signal(signal.SIGTERM, _signal_handler)
+    def _on_stop(signum, _frame):
+        requests.append((signum, time.monotonic()))
 
+    stop_signals = (signal.SIGINT, signal.SIGTERM)
+    previous = {sig: signal.signal(sig, _on_stop) for sig in stop_signals}
+    duration = extra_args.get('duration')
+    forwarded = killed = False
     try:
-        returncode = process.wait()
-        if returncode != 0:
-            sys.exit(returncode)
-    except KeyboardInterrupt:
+        process = subprocess.Popen(call)
+        started = time.monotonic()
+        while process.poll() is None:
+            now = time.monotonic()
+            if len(requests) > 1 and not killed:
+                # Asked again: the clean stop is stuck, or the user does
+                # not want to wait for it.
+                _signal_process(process, signal.SIGKILL)
+                killed = True
+            elif (requests and not forwarded
+                  and now - requests[0][1] >= FASTCARD_STOP_GRACE_S):
+                # Ctrl-C at a terminal and a systemd stop signal fastcard
+                # too, and it takes a second signal as "exit now" (128+N,
+                # losing buffered card lines): pass the signal on only if
+                # it went to capture alone.
+                _signal_process(process, requests[0][0])
+                forwarded = True
+            elif (not requests and duration is not None
+                  and now - started >= duration):
+                # fastcard has no --duration: stop it as Ctrl-C would.
+                requests.append((signal.SIGINT, now))
+                _signal_process(process, signal.SIGINT)
+                forwarded = True
+            time.sleep(FASTCARD_POLL_S)
+        returncode = process.returncode
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if requests and returncode == -requests[0][0]:
+        # The stop asked for (a signal, or --duration) reached fastcard
+        # before it set up its handler, and ended it: stopped as asked.
+        returncode = 0
+    if returncode < 0:
+        returncode = 128 - returncode  # killed by a signal, as a shell says
+    if returncode != 0:
+        sys.exit(returncode)
+
+
+def _signal_process(process, signum):
+    try:
+        os.kill(process.pid, signum)
+    except ProcessLookupError:
         pass
 
 
@@ -426,7 +482,9 @@ def _capture_rtlsdr(config, extra_args, output):
     geometry (readers that predate the header skip it as a comment).
 
     *output* is a :class:`CardSink`, an open text stream, or ``None``
-    (display only).
+    (display only).  A file sink is opened only once the first block
+    has been read, and an input that ends before that (``rtl_sdr``
+    finding no dongle, in a pipe) exits with status 1.
     """
     sink = _as_sink(output)
     sample_rate = int(config.sample_rate)
@@ -438,17 +496,14 @@ def _capture_rtlsdr(config, extra_args, output):
     bit_depth = 8
     thresh_coeffs = config.carrier_threshold
 
-    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
+    window = config_validator.carrier_bins(config.carrier_window, sample_rate,
+                                           block_size)
 
     # Determine input source
     if input_path and input_path != '-':
         input_stream = open(input_path, 'rb')
     else:
         input_stream = sys.stdin.buffer
-
-    if sink is not None:
-        sink.start(bit_depth=bit_depth, sample_rate=sample_rate,
-                   block_size=block_size, block_history=block_history)
 
     # Print fastcard-compatible header to stderr
     _print_capture_header(config, window)
@@ -467,6 +522,7 @@ def _capture_rtlsdr(config, extra_args, output):
     # last skipped block or, without a skip, the first samples read.
     history_bytes = block_history * 2
     history = b''
+    ended = False  # the input ran out
 
     try:
         with _StopOnSignal() as stop:
@@ -478,16 +534,17 @@ def _capture_rtlsdr(config, extra_args, output):
                 while skipped < capture_skip and stop.running:
                     chunk = input_stream.read(bytes_per_block)
                     if len(chunk) < bytes_per_block:
+                        ended = True
                         break
                     history = chunk[len(chunk) - history_bytes:]
                     skipped += 1
                 print(" done\n", file=sys.stderr)
             else:
                 history = input_stream.read(history_bytes)
+                ended = len(history) < history_bytes
 
             # History buffer for block overlap
             history_raw = np.frombuffer(history, dtype=np.uint8)
-            ended = len(history) < history_bytes  # the input ran out
 
             while stop.running and not ended:
                 if (duration is not None
@@ -496,9 +553,18 @@ def _capture_rtlsdr(config, extra_args, output):
 
                 raw_bytes = input_stream.read(bytes_per_block)
                 if len(raw_bytes) < bytes_per_block:
+                    ended = True
                     break
                 now = time.time()
                 if sink is not None:
+                    if block_idx == 0:
+                        # Only now: an input that delivers nothing (a
+                        # failed rtl_sdr) must not replace an existing
+                        # file with a header.
+                        sink.start(bit_depth=bit_depth,
+                                   sample_rate=sample_rate,
+                                   block_size=block_size,
+                                   block_history=block_history)
                     sink.tick(now)
 
                 new_raw = np.frombuffer(raw_bytes, dtype=np.uint8)
@@ -540,6 +606,11 @@ def _capture_rtlsdr(config, extra_args, output):
 
     print("\nRead {} blocks.".format(block_idx), file=sys.stderr)
     logger.info("Detected %d blocks out of %d", detected_count, block_idx)
+    if ended and block_idx == 0:
+        print("ERROR: the input ended before a whole block of samples "
+              "arrived.  Is the dongle connected, and did rtl_sdr start?",
+              file=sys.stderr)
+        sys.exit(1)
     return block_idx
 
 
@@ -578,7 +649,8 @@ def _capture_airspy(config, extra_args, output):
     duration = extra_args.get('duration')
     thresh_coeffs = config.carrier_threshold
 
-    window = _carrier_bins(config.carrier_window, sample_rate, block_size)
+    window = config_validator.carrier_bins(config.carrier_window, sample_rate,
+                                           block_size)
 
     # Resolve device selector.  ``airspy_serial`` (hex/decimal) takes
     # precedence; otherwise ``--device-index`` selects by enumeration order.
@@ -841,9 +913,11 @@ def capture_cli(args=None):
                     'airspy_serial', 'gain_mode', 'combined_gain',
                     'lna_agc', 'mixer_agc', 'ppm', 'packing']
     # sample_rate and bit_depth default from the device profile of
-    # device_type (settings.DEVICE_DERIVED_KEYS).
-    config, extra_args = settings_module.load_args(parser, setting_keys,
-                                                    argv=args)
+    # device_type (settings.DEVICE_DERIVED_KEYS).  No card header can
+    # replace the sample rate: chip_rate is checked against it even when
+    # it is that default.
+    config, extra_args = settings_module.load_args(
+        parser, setting_keys, argv=args, sample_rate_final=True)
 
     # Validate configuration
     try:
@@ -873,6 +947,11 @@ def capture_cli(args=None):
             problem = ("--rotate needs a strftime pattern in the output "
                        "path (e.g. rx0_%Y%m%dT%H%M%S.card), or every "
                        "file would get the same name")
+        elif _pattern_repeats(output_path, rotate):
+            problem = ("--rotate {:g}: the output pattern {} gives files "
+                       "{:g} s apart the same name; add finer time "
+                       "fields (e.g. %H%M%S)".format(rotate, output_path,
+                                                    rotate))
         elif use_fastcard:
             problem = ("--rotate is not supported with the fastcard "
                        "binary; pass --fastcard '' to use the Python "

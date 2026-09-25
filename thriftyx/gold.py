@@ -335,7 +335,30 @@ def _code_bits_for(chips):
     return None
 
 
-def _find_bursts(envelope, sps):
+def _lost_samples(block, min_run):
+    """Mask of the samples capture lost: runs of at least *min_run*
+    exact zeros, in a block whose other samples are rarely zero.
+
+    Capture zero-fills samples lost in transit, and block 0 of an Airspy
+    capture without --skip starts with a zero history.  Received noise
+    is not exactly zero for that long -- unless it is below an LSB: when
+    a quarter or more of the other samples are zero too (a card with
+    little or no noise, whose off chips and gaps between bursts are
+    zero), zero runs are silence, and nothing is masked.
+    """
+    is_zero = np.asarray(block) == 0
+    zero = np.concatenate(([0], is_zero.astype(np.int8), [0]))
+    edges = np.flatnonzero(np.diff(zero))
+    lost = np.zeros(len(is_zero), dtype=bool)
+    for start, stop in zip(edges[::2], edges[1::2], strict=True):
+        if stop - start >= min_run:
+            lost[start:stop] = True
+    if lost.all() or is_zero[~lost].mean() >= 0.25:
+        lost[:] = False
+    return lost
+
+
+def _find_bursts(envelope, sps, lost=None):
     """Locate the complete on-off keyed bursts in a block's envelope.
 
     Returns ``[(start, stop, strength), ...]`` -- sample bounds and the
@@ -345,15 +368,27 @@ def _find_bursts(envelope, sps):
     stretch of mostly-off chips dips below that (a Gold code, the XOR of
     two sequences, can go ~20 chips nearly off), the pieces are joined
     across gaps of up to 48 chips.  A burst cut by a block edge reaches
-    that edge and is left out.
+    that edge and is left out, as is one next to *lost* samples (a mask,
+    see :func:`_lost_samples`), which may have cut it too.
     """
     width = max(int(16 * sps), 1)
     if len(envelope) < 6 * width:
         return []
     smooth = np.convolve(envelope, np.ones(width) / width, mode='same')
     # A burst can fill most of a block: the noise level is a low
-    # percentile, away from the zero-padded ends.
-    noise = np.percentile(smooth[width:-width], 10)
+    # percentile, away from the zero-padded ends -- and from lost
+    # samples: their near-zero level made plain noise look like bursts
+    # far stronger than the real ones.
+    usable = np.zeros(len(smooth), dtype=bool)
+    usable[width:-width] = True
+    near_lost = None
+    if lost is not None and lost.any():
+        near_lost = np.convolve(lost, np.ones(2 * width + 1),
+                                mode='same') > 0.5
+        usable &= ~near_lost
+    if usable.sum() < 2 * width:
+        return []
+    noise = np.percentile(smooth[usable], 10)
     peak = smooth.max()
     if noise <= 0 or peak < 2.5 * noise:
         return []
@@ -370,6 +405,9 @@ def _find_bursts(envelope, sps):
     for start, stop in runs:
         if start < 2 * width or stop > len(envelope) - 1 - 2 * width:
             continue                            # cut by the block edge
+        if near_lost is not None and near_lost[start - width:
+                                               stop + width + 1].any():
+            continue                            # maybe cut by lost samples
         level = smooth[start:stop + 1].max()
         bursts.append((int(start), int(stop), float((level - noise) / noise)))
     return bursts
@@ -427,7 +465,8 @@ def identify_card(stream, sample_rate=None, chip_rate=0.999707e6,
         if count >= max_blocks:
             break
         envelope = _baseband_envelope(np.asarray(block), rate, chip_rate)
-        for start, stop, strength in _find_bursts(envelope, sps):
+        lost = _lost_samples(block, max(int(16 * sps), 1))
+        for start, stop, strength in _find_bursts(envelope, sps, lost):
             bits = _code_bits_for((stop - start) / sps)
             if bits is not None:
                 bursts.setdefault(bits, []).append(
@@ -457,16 +496,20 @@ def is_clear_match(results):
     A matched template correlates 0.7-1.0 (noise and chip-edge shape
     lower it).  Other codes of an 11-bit family stay near 65 / 2047 ...
     0.15, but a burst is correlated aperiodically, and codes of 31 or 63
-    chips reach 0.3-0.55 against each other -- hence a looser ratio, and
-    a higher floor, for those.
+    chips reach 0.3-0.55 against each other -- hence a higher floor for
+    those, and a looser ratio to any other candidate when either is
+    one.  Without a sample rate :func:`identify` also reads a longer
+    code's template as a 5- or 6-bit code at 2-4 times the samples per
+    chip, which reaches 0.3-0.45 as well.
     """
     if not results:
         return False
     best = abs(results[0]['correlation'])
-    runner = abs(results[1]['correlation']) if len(results) > 1 else 0.0
-    if results[0]['bits'] <= 6:
-        return best >= 0.65 and best >= 1.6 * runner
-    return best >= 0.5 and best >= 2.5 * runner
+    short = results[0]['bits'] <= 6
+    if best < (0.65 if short else 0.5):
+        return False
+    return all(best >= (1.6 if short or other['bits'] <= 6 else 2.5)
+               * abs(other['correlation']) for other in results[1:])
 
 
 def load_template_file(path):

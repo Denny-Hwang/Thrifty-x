@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from thriftyx import block_data, gold, template_extract
-from thriftyx.exceptions import DetectionError
+from thriftyx.exceptions import ConfigValidationError, DetectionError
 from thriftyx.template_generate import resample
 
 FS = 6_000_000
@@ -130,3 +130,33 @@ def test_failed_extraction_keeps_the_previous_output(monkeypatch, tmp_path):
     assert (tmp_path / 'captured.npy').read_bytes() == b'previous'
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         'captured.npy', 'rx0.card', 'template.npy']
+
+
+def test_window_outside_the_fft_is_a_config_error(monkeypatch, tmp_path):
+    """Used to end in a ValueError traceback from the first block."""
+    np.save(tmp_path / 'template.npy',
+            resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE))
+    with pytest.raises(ConfigValidationError, match='carrier_window'):
+        _extract(monkeypatch, tmp_path, '--carrier-window', '1000-40000')
+
+
+def test_template_is_checked_at_the_configured_chip_rate(monkeypatch,
+                                                         tmp_path):
+    """chip_rate was not among template_extract's settings, so its
+    template check assumed 0.999707M: a template for the configured chip
+    rate was reported to match no code."""
+    np.save(tmp_path / 'template.npy', np.ones(10))
+    rates = []
+
+    def load_template(_path, _sample_rate, chip_rate=None, report=None):
+        rates.append(chip_rate)
+        raise DetectionError("stop here")
+
+    monkeypatch.setattr(template_extract.detect, 'load_template',
+                        load_template)
+    (tmp_path / 'rx.cfg').write_text('chip_rate: 1.05M\n')
+    with pytest.raises(DetectionError, match='stop here'):
+        _extract(monkeypatch, tmp_path, '-c', 'rx.cfg')
+    with pytest.raises(DetectionError, match='stop here'):
+        _extract(monkeypatch, tmp_path, '--chip-rate', '1.02M')
+    assert rates == [1.05e6, 1.02e6]

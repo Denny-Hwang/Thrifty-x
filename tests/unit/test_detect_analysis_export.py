@@ -18,6 +18,8 @@ import pytest
 pytest.importorskip("matplotlib")
 
 from thriftyx import block_data, detect_analysis, gold  # noqa: E402
+from thriftyx.exceptions import (ConfigValidationError,  # noqa: E402
+                                 TemplateError)
 from thriftyx.template_generate import resample  # noqa: E402
 
 FS = 6_000_000
@@ -86,3 +88,38 @@ def test_fft_window_panel_keeps_the_window_in_view(window, xlim, markers):
     detect_analysis.Plotter._plot_fft_window(plotter, ax, zoom_to_window=True)
     assert tuple(ax.get_xlim()) == xlim
     assert [line.get_xdata()[0] for line in ax.get_lines()[1:]] == markers
+
+
+def _run(tmp_path, monkeypatch, *args):
+    card = tmp_path / 'rx0.card'
+    card.write_text(_card_with_one_burst())
+    np.save(tmp_path / 'template.npy',
+            resample(gold.gold(10, 0, 'gold'), FS / CHIP_RATE))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, 'argv', [
+        'analyze_detect', str(card), '-z', 'template.npy',
+        '--export', str(tmp_path / 'plots'), *args])
+    detect_analysis._main()
+
+
+def test_window_outside_the_fft_is_a_config_error(tmp_path, monkeypatch):
+    """Used to end in a ValueError traceback from the first block."""
+    with pytest.raises(ConfigValidationError, match='carrier_window'):
+        _run(tmp_path, monkeypatch, '--carrier-window', '1000-40000')
+
+
+def test_template_is_checked_at_the_configured_chip_rate(tmp_path,
+                                                         monkeypatch):
+    """chip_rate was not among analyze_detect's settings, so its template
+    check assumed 0.999707M."""
+    rates = []
+
+    def load_template(_path, _sample_rate, chip_rate=None, report=None):
+        rates.append(chip_rate)
+        raise TemplateError("stop here")
+
+    monkeypatch.setattr(detect_analysis.detect, 'load_template',
+                        load_template)
+    with pytest.raises(TemplateError, match='stop here'):
+        _run(tmp_path, monkeypatch, '--chip-rate', '1.02M')
+    assert rates == [1.02e6]

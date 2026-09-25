@@ -91,6 +91,9 @@ def test_bad_setting_exits_78_without_traceback(tmp_path, flag, value, key):
     'airspy_serial: 0xABCDEF012345678G',
     'carrier_window: 50-60k',           # bins, not kHz: beyond the FFT
     'chip_rate: 0.999707m',             # milli
+    # 0.6 samples per chip at the default 6M; only the device-default
+    # rate's leniency (a card may record 10M) let it through.
+    'chip_rate: 9.99707M',
 ])
 def test_bad_capture_setting_exits_78_before_any_output(tmp_path, line):
     """These used to exit 1 (a traceback, or a device error), so the
@@ -104,6 +107,17 @@ def test_bad_capture_setting_exits_78_before_any_output(tmp_path, line):
     assert 'Traceback' not in result.stderr
     assert line.split(':')[0] in result.stderr
     assert [p.name for p in tmp_path.iterdir()] == ['capture.cfg']
+
+
+def test_template_for_an_impossible_chip_rate_is_refused(tmp_path):
+    """template_generate wrote a 1228-sample 11-bit template for 0.6
+    samples per chip."""
+    (tmp_path / 'detector.cfg').write_text('chip_rate: 9.99707M\n')
+    result = _run_cli(['template_generate', '11', '0', '-c', 'detector.cfg'],
+                      cwd=tmp_path)
+    assert result.returncode == EXIT_CONFIG, result.stderr
+    assert 'samples per chip' in result.stderr
+    assert [p.name for p in tmp_path.iterdir()] == ['detector.cfg']
 
 
 def test_load_rejects_unknown_choices():
