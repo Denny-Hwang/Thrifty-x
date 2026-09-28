@@ -57,3 +57,6 @@ ENV/
 *.tdoa
 *.pos
 detector.cfg
+
+# Bench results (scripts/bench/run_cw_bench.sh)
+bench/
