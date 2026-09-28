@@ -42,6 +42,11 @@ class ScriptedSDRDevice(SDRDevice):
     read_times : iterable of float
         ``last_read_time`` reported after successive ``read_sync`` calls
         (left unchanged once exhausted).
+    registers : dict or None
+        Tuner registers {reg: value} served by ``read_tuner_registers``
+        and updated by ``write_tuner_register``; ``None`` keeps the
+        base class's "no register access".  ``register_writes`` records
+        ``(reg, value, read_sync calls before the write)``.
 
     Configuration calls are recorded in ``sample_rate``, ``center_freq``,
     ``gains``, ``bias_tee``, ``packing``, ``applied_gain_mode`` and
@@ -54,7 +59,8 @@ class ScriptedSDRDevice(SDRDevice):
                  fail_in: 'str | None' = None,
                  exc: type = DeviceConfigError,
                  dropped_samples: int = 0,
-                 read_times: Iterable[float] = ()) -> None:
+                 read_times: Iterable[float] = (),
+                 registers: 'dict[int, int] | None' = None) -> None:
         self.PROFILE = profile  # type: ignore[misc]
         self._buffers = [np.asarray(b, dtype=np.int16) for b in buffers]
         self._stream = (None if stream is None
@@ -75,6 +81,9 @@ class ScriptedSDRDevice(SDRDevice):
         self.packing: 'bool | None' = None
         self.applied_gain_mode: 'str | None' = None
         self.applied_kwargs: 'dict | None' = None
+        self.registers = None if registers is None else dict(registers)
+        self.register_writes: list[tuple[int, int, int]] = []
+        self.reads = 0
 
     def _maybe_fail(self, name: str) -> None:
         if self._fail_in == name:
@@ -131,8 +140,24 @@ class ScriptedSDRDevice(SDRDevice):
     def stop_capture(self) -> None:
         self._capturing = False
 
+    def read_tuner_registers(self, first: int = 0x00,
+                             last: int = 0x1F) -> dict[int, int]:
+        if self.registers is None:
+            return super().read_tuner_registers(first, last)
+        self._maybe_fail('read_tuner_registers')
+        return {r: v for r, v in self.registers.items()
+                if first <= r <= last}
+
+    def write_tuner_register(self, reg: int, value: int) -> None:
+        if self.registers is None:
+            super().write_tuner_register(reg, value)
+        self._maybe_fail('write_tuner_register')
+        self.register_writes.append((reg, value, self.reads))
+        self.registers[reg] = value
+
     def read_sync(self, num_samples: int) -> np.ndarray:
         self._maybe_fail('read_sync')
+        self.reads += 1
         if self._read_times:
             self.last_read_time = self._read_times.pop(0)
         if self._stream is not None:

@@ -150,6 +150,29 @@ class SDRDevice(ABC):
             logger.warning("%s does not support sample packing; ignored",
                            type(self).__name__)
 
+    def read_tuner_registers(self, first: int = 0x00,
+                             last: int = 0x1F) -> dict[int, int]:
+        """Read raw tuner registers *first*..*last* (default: none).
+
+        Raises
+        ------
+        DeviceConfigError
+            The device gives no register access.
+        """
+        raise DeviceConfigError(
+            f"{type(self).__name__} gives no tuner register access")
+
+    def write_tuner_register(self, reg: int, value: int) -> None:
+        """Write one raw tuner register (default: unsupported).
+
+        Raises
+        ------
+        DeviceConfigError
+            The device gives no register access.
+        """
+        raise DeviceConfigError(
+            f"{type(self).__name__} gives no tuner register access")
+
     def discard_buffered(self) -> None:
         """Drop samples queued for ``read_sync`` (default: none queued).
 

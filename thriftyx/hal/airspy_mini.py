@@ -110,6 +110,13 @@ try:
         ('airspy_set_linearity_gain',   [ctypes.c_void_p, ctypes.c_uint8]),
         ('airspy_set_sensitivity_gain', [ctypes.c_void_p, ctypes.c_uint8]),
         ('airspy_set_packing',          [ctypes.c_void_p, ctypes.c_uint8]),
+        # Raw R820T2 register access (tuner validation, see
+        # read_tuner_registers).  The firmware reads the chip itself
+        # and undoes the tuner's LSB-first bit order.
+        ('airspy_r820t_read',  [ctypes.c_void_p, ctypes.c_uint8,
+                                ctypes.POINTER(ctypes.c_uint8)]),
+        ('airspy_r820t_write', [ctypes.c_void_p, ctypes.c_uint8,
+                                ctypes.c_uint8]),
     ):
         try:
             getattr(_lib, _fn).restype = ctypes.c_int
@@ -194,6 +201,18 @@ AIRSPY_SAMPLE_FLOAT32_IQ = 0
 AIRSPY_SAMPLE_FLOAT32_REAL = 1
 AIRSPY_SAMPLE_INT16_IQ = 2
 AIRSPY_SAMPLE_INT16_REAL = 3
+
+# R820T2 register file: 0x00-0x04 read-only status, 0x05-0x1F control.
+R820T_FIRST_WRITABLE = 0x05
+R820T_LAST_REGISTER = 0x1F
+
+
+def _check_register(reg: int) -> None:
+    if not 0 <= int(reg) <= R820T_LAST_REGISTER:
+        raise DeviceConfigError(
+            f"R820T2 register 0x{int(reg):02X} out of range "
+            f"(0x00-0x{R820T_LAST_REGISTER:02X})")
+
 
 # ``GAIN_MODES`` (thriftyx.hal.profiles) and ``parse_airspy_serial``
 # (thriftyx.setting_parsers, which checks the setting) are re-exported
@@ -680,6 +699,69 @@ class AirspyMiniDevice(SDRDevice):
             self.set_linearity_gain(int(combined))
         else:  # 'sensitivity'
             self.set_sensitivity_gain(int(combined))
+
+    # -- Raw tuner registers ----------------------------------------------
+
+    def read_tuner_registers(self, first: int = 0x00,
+                             last: int = R820T_LAST_REGISTER
+                             ) -> dict[int, int]:
+        """Read R820T2 registers *first*..*last* from the tuner.
+
+        The values are the chip's, read over I2C by the firmware, so
+        they reflect what the receiver start (filter calibration, the
+        fixed IF bandwidth) wrote on top of the configured gains: read
+        them while streaming.  Registers 0x00-0x04 are status (0x00 is
+        always 0x96; 0x04's low nibble is the filter calibration code).
+
+        Raises
+        ------
+        DeviceConfigError
+            When libairspy lacks ``airspy_r820t_read`` or a read fails.
+        """
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_r820t_read'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_r820t_read")
+        _check_register(first)
+        _check_register(last)
+        values = {}
+        value = ctypes.c_uint8(0)
+        for reg in range(first, last + 1):
+            ret = lib.airspy_r820t_read(self._handle, ctypes.c_uint8(reg),
+                                        ctypes.byref(value))
+            if ret != 0:
+                raise DeviceConfigError(
+                    f"airspy_r820t_read(0x{reg:02X}) failed: {ret}")
+            values[reg] = int(value.value)
+        return values
+
+    def write_tuner_register(self, reg: int, value: int) -> None:
+        """Write one R820T2 register (0x05-0x1F).
+
+        The firmware keeps its own copy of registers 0x05-0x1F and
+        rewrites it to the tuner whenever the receiver starts, so a
+        write persists until the Airspy is power-cycled -- including
+        into later captures -- except where the start sequence or a
+        later setting rewrites the register (0x0A/0x0B IF filter, the
+        gain nibbles of 0x05/0x07/0x0C, the PLL and tracking filter).
+        Write after streaming has started to override those.
+        """
+        lib = self._check_open()
+        if not hasattr(lib, 'airspy_r820t_write'):
+            raise DeviceConfigError(
+                "libairspy build does not expose airspy_r820t_write")
+        if not R820T_FIRST_WRITABLE <= int(reg) <= R820T_LAST_REGISTER:
+            raise DeviceConfigError(
+                f"R820T2 register 0x{int(reg):02X} is not writable "
+                f"(0x{R820T_FIRST_WRITABLE:02X}-0x{R820T_LAST_REGISTER:02X})")
+        if not 0 <= int(value) <= 0xFF:
+            raise DeviceConfigError(
+                f"R820T2 register value {value} is not a byte")
+        ret = lib.airspy_r820t_write(self._handle, ctypes.c_uint8(int(reg)),
+                                     ctypes.c_uint8(int(value)))
+        if ret != 0:
+            raise DeviceConfigError(
+                f"airspy_r820t_write(0x{int(reg):02X}) failed: {ret}")
 
     def set_packing(self, enabled: bool) -> None:
         """Enable libairspy's 12-bit USB packing (saves 25% bandwidth).

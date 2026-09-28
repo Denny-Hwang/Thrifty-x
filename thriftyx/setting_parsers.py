@@ -272,6 +272,41 @@ def airspy_serial(string: str) -> str:
     return string
 
 
+def tuner_registers(string: str) -> tuple[tuple[int, int], ...]:
+    """Parse R820T2 register overrides: ``REG=VALUE[, REG=VALUE ...]``.
+
+    Registers and values are hex (``0x`` optional).  Only the control
+    registers 0x05-0x1F can be written; an empty string means none.
+
+    >>> tuner_registers('0x0C=0x68, 0A=b2')
+    ((12, 104), (10, 178))
+    >>> tuner_registers('')
+    ()
+    """
+    writes = []
+    for item in string.replace(';', ',').split(','):
+        item = item.strip()
+        if not item:
+            continue
+        reg_text, sep, value_text = item.partition('=')
+        if not sep:
+            raise ValueError(
+                f"expected REG=VALUE (e.g. 0x0C=0x68), got {item!r}")
+        try:
+            reg = int(reg_text.strip(), 16)
+            value = int(value_text.strip(), 16)
+        except ValueError:
+            raise ValueError(
+                f"register and value must be hex, got {item!r}") from None
+        if not 0x05 <= reg <= 0x1F:
+            raise ValueError(
+                f"R820T2 register 0x{reg:02X} is not writable (0x05-0x1F)")
+        if not 0 <= value <= 0xFF:
+            raise ValueError(f"register value 0x{value:X} is not a byte")
+        writes.append((reg, value))
+    return tuple(writes)
+
+
 def parse_bool(string: str) -> bool:
     """Parse a boolean value from a string.
 
