@@ -59,4 +59,4 @@ ENV/
 detector.cfg
 
 # Bench results (scripts/bench/run_cw_bench.sh)
-bench/
+/bench/
