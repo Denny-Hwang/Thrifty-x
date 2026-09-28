@@ -211,3 +211,25 @@ def test_report_command(tmp_path, capsys):
     out = capsys.readouterr().out
     assert '| R2-A:0/0/8 | -5.00 |' in out
     assert os.path.getsize(plot) > 0
+
+
+def test_measure_refuses_overdrive(tmp_path, monkeypatch):
+    opened = []
+    monkeypatch.setattr(bench, 'open_receiver',
+                        lambda args: opened.append(args))
+    args = _args(tmp_path, extra=['--tx-dbm', '-10', '--amp-gain', '20'])
+    with pytest.raises(SystemExit, match='into the receiver'):
+        bench.cmd_measure(args)
+    assert opened == []           # refused before touching the receiver
+
+
+def test_report_without_the_reference_falls_back(tmp_path, capsys):
+    path = tmp_path / 'r.csv'
+    bench.append_row(str(path), {
+        'unit': 'R2-A', 'setting': '0/0/0', 'tx_dbm': -80.0,
+        'carrier_dbfs': -50.0, 'noise_dbfs_hz': -110.0, 'cn0_dbhz': 60.0,
+        'detected': 1, 'near_fs_frac': 0.0})
+    assert bench.main(['report', str(path), '--ref', 'RTL:g0']) == 0
+    captured = capsys.readouterr()
+    assert 'using R2-A:0/0/0' in captured.err
+    assert 'Against R2-A:0/0/0' in captured.out

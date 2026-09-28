@@ -18,6 +18,8 @@
 #   R2_RATE  [10M]   PACKING [1] (12-bit USB packing for 10 Msps)
 #   RUN      [run1]  label; results go to bench/$RUN/results.csv
 #   UNITS    [RTL R2-A R2-B]  which receivers to sweep, in order
+#   REF      [RTL:g0, or the first unit's first setting without RTL]
+#            reference unit:setting of the report
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -35,6 +37,12 @@ R2_RATE=${R2_RATE:-10M}
 PACKING=${PACKING:-1}
 RUN=${RUN:-run1}
 UNITS=${UNITS:-RTL R2-A R2-B}
+if [ -z "${REF:-}" ]; then
+    case " ${UNITS} " in
+        *" RTL "*) REF=RTL:g0 ;;
+        *) first=(${UNITS}); REF="${first[0]}:${R2_STAGES%%,*}" ;;
+    esac
+fi
 OUT="bench/${RUN}/results.csv"
 
 mkdir -p "bench/${RUN}"
@@ -74,5 +82,5 @@ for unit in ${UNITS}; do
 done
 
 echo
-python scripts/bench_cw_level.py report "${OUT}" --ref RTL:g0 \
+python scripts/bench_cw_level.py report "${OUT}" --ref "${REF}" \
     --plot "bench/${RUN}/cw_levels.png" | tee "bench/${RUN}/report.md"

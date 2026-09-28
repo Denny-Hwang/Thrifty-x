@@ -420,7 +420,18 @@ def _settings(args):
     return parse_stages(args.stages)
 
 
+def check_input_levels(levels, args):
+    """Refuse levels that put more than MAX_SDR_INPUT_DBM into the receiver."""
+    for tx in levels:
+        pin = sdr_input_dbm(tx, args.amp_gain, args.loss)
+        if pin is not None and pin > MAX_SDR_INPUT_DBM and not args.force:
+            raise SystemExit(
+                f"TX {tx} dBm puts ~{pin:.1f} dBm into the receiver (limit "
+                f"{MAX_SDR_INPUT_DBM} dBm); lower the levels or --force")
+
+
 def cmd_measure(args):
+    check_input_levels([args.tx_dbm], args)
     receiver = open_receiver(args)
     try:
         for setting in _settings(args):
@@ -435,12 +446,7 @@ def cmd_measure(args):
 def cmd_sweep(args):
     levels = parse_levels(args.levels)
     settings = _settings(args)
-    for tx in levels:
-        pin = sdr_input_dbm(tx, args.amp_gain, args.loss)
-        if pin is not None and pin > MAX_SDR_INPUT_DBM and not args.force:
-            raise SystemExit(
-                f"TX {tx} dBm puts ~{pin:.1f} dBm into the receiver (limit "
-                f"{MAX_SDR_INPUT_DBM} dBm); lower the levels or --force")
+    check_input_levels(levels, args)
     print(f"{args.unit}: {len(levels)} levels x {len(settings)} settings, "
           f"{args.seconds:g} s each -> {args.out}")
     receiver = open_receiver(args)
@@ -570,8 +576,13 @@ def cmd_report(args):
     ref_unit, _, ref_setting = args.ref.partition(':')
     ref = (ref_unit, ref_setting)
     if ref not in table:
-        raise SystemExit(f"reference {args.ref} not in the CSV; have "
-                         + ', '.join(f'{u}:{s}' for u, s in keys))
+        # E.g. a sweep without the RTL-SDR: still report, against the
+        # first setting, rather than lose the tables and plot.
+        print(f"WARNING: reference {args.ref} not in the CSV (have "
+              + ', '.join(f'{u}:{s}' for u, s in keys)
+              + f"); using {keys[0][0]}:{keys[0][1]}", file=sys.stderr)
+        ref = keys[0]
+        args.ref = f'{ref[0]}:{ref[1]}'
     band = tuple(float(v) for v in args.band.split(':')) if args.band else None
     levels = sorted({tx for cells in table.values() for tx in cells
                      if tx is not None})
@@ -679,6 +690,8 @@ def _add_capture_args(p):
                    help="cable/attenuator loss to the receiver (dB)")
     p.add_argument('--notes', default='')
     p.add_argument('--out', default='bench/results.csv')
+    p.add_argument('--force', action='store_true',
+                   help=f"allow receiver input above {MAX_SDR_INPUT_DBM} dBm")
 
 
 def build_parser():
@@ -697,8 +710,6 @@ def build_parser():
                    help="e.g. 'off,-110:-60:5' (dBm at the generator)")
     s.add_argument('--no-prompt', action='store_true',
                    help="do not wait for Enter (generator already set)")
-    s.add_argument('--force', action='store_true',
-                   help=f"allow receiver input above {MAX_SDR_INPUT_DBM} dBm")
     r = sub.add_parser('report', help="tables / plot from the CSV")
     r.add_argument('csv')
     r.add_argument('--ref', default='RTL:g0',
