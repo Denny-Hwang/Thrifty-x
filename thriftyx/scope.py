@@ -64,7 +64,7 @@ def scope_cli(args=None):
     bit_depth = get_profile(device_type).bit_depth
 
     from thriftyx.block_data import raw_to_complex
-    from thriftyx.exceptions import DeviceNotFoundError
+    from thriftyx.exceptions import DeviceConfigError, DeviceNotFoundError
 
     # --------------- data source setup ---------------
     device = None
@@ -105,12 +105,13 @@ def scope_cli(args=None):
                     mixer_agc=bool(config.get('mixer_agc', False)),
                 )
             else:
+                combined = config.get('combined_gain')
                 device.apply_gain_mode(
                     gain_mode,
-                    combined=int(config.get('combined_gain', 0)),
+                    combined=None if combined is None else int(combined),
                 )
             device.set_bias_tee(bool(config.get('bias_tee', False)))
-        except DeviceNotFoundError as e:
+        except (DeviceNotFoundError, DeviceConfigError) as e:
             print("ERROR: {}".format(e), file=sys.stderr)
             sys.exit(1)
 

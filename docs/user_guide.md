@@ -162,7 +162,7 @@ python3 -c "import thriftyx; print(thriftyx.__version__)"
 - ADC: **8-bit** unsigned, 1 byte per I + 1 byte per Q
 - Sample rates: 0.9 – 2.4 MSPS (2.4 MSPS recommended)
 - Frequency range: 24 – 1766 MHz
-- Gain: single dB value (the R820T2 LNA + Mixer is auto-distributed by the driver)
+- Gain: single dB value (librtlsdr splits it over the R820T2 LNA and Mixer and fixes the VGA; see [Section 4.2](#42-rtl-sdr-gain))
 - Cost: ~$25 (clones), ~$35 (RTL-SDR Blog v3 / v4)
 - Use case: prototyping, original-Thrifty compatibility
 
@@ -228,12 +228,20 @@ The cup must not overflow, and there must be enough water to taste.
 
 ### 4.2 RTL-SDR Gain
 
-RTL-SDR exposes a **single** `tuner_gain` value (in dB). Internally the
-R820T2 driver distributes it across LNA and Mixer. Typical values:
+RTL-SDR exposes a **single** `tuner_gain` value (in dB). librtlsdr
+snaps it to the nearest supported step (0, 0.9, 1.4, 2.7, ... 49.6 dB)
+and writes the R820T2's LNA and Mixer indices alternately until the sum
+of their measured steps reaches it, with the VGA fixed at code 8
+(+16.3 dB).  What `0` means depends on the program:
 
-- `0.0` — auto-gain (driver's internal AGC)
-- `14.4` to `49.6` — common manual values (the driver snaps to the
-  nearest supported step)
+- **fastcard** (upstream Thrifty's capture tool, run by `thriftyx
+  capture` for RTL-SDR) always enables *manual* gain, so `0` is the
+  lowest manual gain: LNA 0, Mixer 0, VGA 8 -- not AGC.
+- **`rtl_sdr -g 0`** means *auto*: the R820T2's LNA and Mixer AGC loops
+  run, and the VGA is fixed at code 11 (+26.5 dB).
+
+Any other value is manual in both.  [Section 4.7](#47-rtl-sdr--airspy-equivalence-and-validation)
+lists the Airspy indices that set the same registers.
 
 Set this in `detector.cfg` as `tuner_gain: 0.0`. It takes effect only
 when the upstream `fastcard` C binary is on `PATH` and no `--input` is
@@ -287,15 +295,19 @@ order matters:
 #### Index vs. dB
 
 The indices are register values inside the R820T2 chip, **not** decibels.
-Per-step gain is non-linear:
+The R820T2 Register Description gives dB only for the VGA (R12: code 0 =
+−12.0 dB, code 15 = +40.5 dB, 3.5 dB per step); the LNA and Mixer
+figures below are librtlsdr's measured step tables (relative to index 0),
+the same ones it converts an RTL-SDR's dB gain with:
 
-| Stage | Index range | Approx. dB span | Approx. step |
+| Stage | Index range | Span | Step |
 |---|---|---|---|
-| LNA   | 0–14 | 0 to ~26 dB | uneven |
-| Mixer | 0–15 | 0 to ~19 dB | uneven |
-| VGA   | 0–15 | 0 to ~26 dB | ~1.5 dB / step (most linear) |
+| LNA   | 0–14 (libairspy caps 15 to 14) | ~32 dB (0 → 14) | uneven, 0.5–4.0 dB |
+| Mixer | 0–15 | ~16 dB (0 → 14); 15 is 0.8 dB *below* 14 | uneven, 0.3–2.5 dB |
+| VGA   | 0–15 | datasheet −12.0 → +40.5 dB; measured −4.7 → +40.8 dB | datasheet 3.5 dB; measured 1.3–4.2 dB |
 
-Combined three-stage maximum is ~65 dB.
+All three stages together span roughly 90 dB of internal gain.  One VGA
+step is about 3 dB, so the VGA is a coarse, not a fine, trim.
 
 ### 4.4 Gain Modes (manual / linearity / sensitivity)
 
@@ -336,6 +348,11 @@ exactly libairspy's.
 > avoid overdriving the ADC. The preset modes are offered as a convenience
 > for single-knob tuning when no external amplifier is present; they
 > cannot reach the internal minimum because of the VGA=4 floor above.
+>
+> `0/0/0` is **not** what an RTL-SDR runs at its lowest gain: fastcard
+> `-g 0` leaves the VGA at code 8, about 21 dB (measured; 28 dB by the
+> datasheet) more IF gain.  To compare the two receivers, use `0/0/8`
+> (Section 4.7).
 
 ### 4.5 Gain-Tuning Procedure
 
@@ -374,6 +391,7 @@ A reproducible procedure that works for both Airspy devices:
 
 ### 4.6 Diagnosing Gain Problems
 
+
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Zero detections | Gain too low | Raise LNA first |
@@ -381,6 +399,86 @@ A reproducible procedure that works for both Airspy devices:
 | Sporadic correlation hits in odd bins | IMD (LNA too high) | Lower LNA |
 | Histogram piles up beyond about ±15 000 (Airspy int16) | ADC near full scale (±16 384); libairspy's int16 path is linear up to about ±16 000 and distorts at the very top, so act at about 93 % of full scale | Lower the whole chain |
 | `gain = 0.00 dB` displayed (RTL-SDR) | Cosmetic display only | Ignore |
+| Airspy gain indices ignored, level drifts with signal strength | An R820T2 AGC loop left on by another program (the firmware keeps tuner registers until power-off) | `thriftyx capture` and fastdet switch both AGC loops off in manual mode; check the `tuner registers:` line (Section 4.7) |
+
+### 4.7 RTL-SDR ↔ Airspy Equivalence and Validation
+
+The RTL-SDR and the Airspy carry the same R820T2 tuner, but different
+code programs it: librtlsdr on the RTL-SDR, the Airspy's firmware on the
+Airspy.  "Same tuner" therefore gives the same *gain fields* only when
+the indices are matched, and never the same *register file*.
+
+**Matching gain.**  Set the Airspy's indices to the ones librtlsdr
+writes for the RTL-SDR gain (fastcard, manual mode), with VGA 8:
+
+| RTL-SDR `tuner_gain` (dB) | 0 | 7.7 | 14.4 | 20.7 | 25.4 | 29.7 (30) | 33.8 | 37.2 | 40.2 | 43.4 | 48.0 | 49.6 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Airspy LNA / Mixer / VGA | 0/0/8 | 3/2/8 | 4/4/8 | 6/6/8 | 7/7/8 | 8/8/8 | 9/9/8 | 10/10/8 | 11/11/8 | 12/12/8 | 14/13/8 | — (LNA 15) |
+
+`thriftyx capture` warns with these indices when an Airspy config still
+carries an RTL-SDR `tuner_gain`; `thriftyx.hal.r820t` computes them for
+any gain.
+
+**What still differs at matched gain.**  `scripts/r820t_register_model.py`
+replays both drivers' register writes and prints the two register
+files side by side (`-f 161.3M --vga 8`, osmocom librtlsdr at 2.4 Msps
+vs the R2 at 10 Msps):
+
+| Register | RTL-SDR | Airspy R2 | What differs |
+|---|---|---|---|
+| 0x05, 0x07, 0x0C gain fields | LNA 0, Mixer 0, VGA 8, manual | same | nothing |
+| 0x0C bits 7, 5 | 0, 1 (0x68) | 0, 0 (0x48) | undocumented bits (below) |
+| 0x05 bit 7 PWD_LT | 0: loop-through on | 1: off | osmocom only; the RTL-SDR Blog driver turns it off |
+| 0x06 PW_LNA | LNA power `010` | `000` (max) | LNA bias: noise figure, linearity (the RTL-SDR Blog driver also sets FILT_3DB, +3 dB) |
+| 0x08 PW0_AMP | 1: mixer buffer low current | 0: high current | noise figure, linearity |
+| 0x0A / 0x0B IF filter | calibrated code, narrow mode (0x0B bit 7), ~2.4 MHz | fixed code 4, widest (10 Msps); code 15, narrowest (2.5 Msps) | IF bandwidth and shape: in-band noise |
+| IF frequency | 1.815 MHz (librtlsdr at 2.4 Msps) | 5.0 MHz (10 Msps), 1.25 MHz (2.5 Msps) | where the signal sits on the filter / image response |
+| 0x19 bits 6:5 RF poly-filter current | `11` (librtlsdr: min) | `10` | RF filter behaviour |
+| 0x1E bit 6 FILTER_EXT | 1: filter extension on | 0: off | IF filter under weak signal |
+| 0x10, 0x12, 0x14–0x16 PLL | 28.8 MHz crystal | 25 MHz reference (R2) | must differ; also phase noise |
+
+The tracking filter (0x1A/0x1B) is the same table in both.  The
+differences are driver policy, not hardware, so a validation should
+expect equal detections and positions within the SNR each setup
+reaches -- not bit-identical samples.  The back ends differ as well:
+8-bit vs 12-bit ADC, the RTL2832U's DDC vs the Airspy firmware's, and
+the crystal.
+
+**The fixed bits.**  The datasheet's register matrix prints some bits
+as a fixed `1` or `0` instead of naming a field -- R12 (0x0C) bits 7 and
+5 are `1`.  These are the reference values of controls Rafael does not
+document, not dead bits: librtlsdr's driver (written from Rafael's
+reference code) names several of them (0x12[7:5] VCO current, 0x1A[5:4]
+AGC clock, 0x0B[7] narrow IF filter, 0x0A[4] filter Q), and both drivers
+write values other than the printed ones in many places.  Neither
+driver follows R12[7] = 1; only librtlsdr follows R12[5] = 1.  What
+R12[5] does is unpublished -- the same table calls the VGA code
+`vga_code[5:0]` once -- so its effect has to be measured (e.g. capture
+on the R2 with `--tuner-registers 0x0C=0x68`).
+
+**Validating an Airspy against an RTL-SDR.**
+
+1. *Registers.*  Every Airspy capture prints the tuner's registers once
+   the stream runs (`tuner registers: 0x00=0x96 ...` on stderr).  Check
+   them against the model:
+   `scripts/r820t_register_model.py -f 161.3M --airspy-rate 10M --lna 0 --mixer 0 --vga 8 --dump capture.log`
+   (a mismatch means the firmware or a leftover register write differs
+   from what the comparison assumes).
+2. *Closest match first.*  Capture the same source with the RTL-SDR at
+   2.4 Msps and the R2 at **2.5 Msps** (IF 1.25 MHz and a narrow filter,
+   the R2's nearest configuration to the RTL-SDR's), matched gain from
+   the table above, and a theoretical template generated at *each*
+   rate (`thriftyx template_generate 11 0 --sample-rate 2.4M` /
+   `2.5M` / `10M`).  Compare detection SNR and SoA residuals, not raw
+   sample values.
+3. *Isolate one term at a time* with `--tuner-registers` (R2 only;
+   written after the receiver start, so the firmware's own filter
+   setting is overridden): e.g. `0x0C=0x68` for R12 bit 5,
+   `0x08=0xC0` for the RTL-SDR's mixer-buffer current,
+   `0x0A=...`/`0x0B=...` for the RTL-SDR's IF filter.  The firmware
+   keeps these until the Airspy is power-cycled.
+4. *Then 10 Msps.*  Only the rate (and with it the IF filter and noise
+   bandwidth) changes against step 2.
 
 ---
 
@@ -525,12 +623,13 @@ keep the table below internally consistent.
 |---|---|---|
 | `--lna-gain N` / `--mixer-gain N` / `--vga-gain N` | from config | Per-stage indices in `manual` mode. |
 | `--gain-mode {manual, linearity, sensitivity}` | `manual` | Selects gain table. |
-| `--combined-gain N` | 0 | 0–21, used by linearity/sensitivity. |
+| `--combined-gain N` | – | 0–21, required by linearity/sensitivity. |
 | `--lna-agc` / `--mixer-agc` | false | Engage R820T2 AGC loops. |
 | `--bias-tee` | false | 4.5 V on the antenna lead — ensure DC isolation. |
 | `--ppm F` | 0 | Software LO correction in ppm. |
 | `--packing` | false | Enable libairspy 12-bit USB packing (helps R2 at 10 MSPS). |
 | `--airspy-serial 0x…` | – | Select a specific Airspy by 64-bit serial. |
+| `--tuner-registers 0xRR=0xVV,…` | – | Write R820T2 registers once the stream runs (tuner experiments, Section 4.7). Needs `capture_skip` ≥ 1; sticks until the Airspy is power-cycled. |
 | `-d N` / `--device-index N` | 0 | Select RTL-SDR or Airspy by enumeration index. |
 
 ### 5.5 Threshold Tuning

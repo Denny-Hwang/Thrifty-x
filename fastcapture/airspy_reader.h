@@ -26,7 +26,7 @@
  * Airspy reader configuration.
  */
 typedef struct {
-    uint32_t sample_rate;   /**< Sample rate in Hz (3000000 or 6000000) */
+    uint32_t sample_rate;   /**< I/Q rate in Hz (Mini 3M/6M, R2 2.5M/10M) */
     uint32_t center_freq;   /**< Center frequency in Hz */
     uint8_t  lna_gain;      /**< LNA gain index (0-14) */
     uint8_t  mixer_gain;    /**< Mixer gain index (0-15) */

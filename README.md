@@ -390,12 +390,16 @@ defaults come from the `--device-type` profile.
 | `--lna-gain N`   | `0` | 0–14 | Manual LNA index |
 | `--mixer-gain N` | `0` | 0–15 | Manual Mixer index |
 | `--vga-gain N`   | `0` | 0–15 | Manual VGA / IF index |
-| `--combined-gain N` | `0` | 0–21 | Index into the preset ladder. **`0` = minimum**, **`21` = maximum** (libairspy inverts internally). Min row floors VGA at index 4, so only manual `0/0/0` reaches true zero internal gain. |
+| `--combined-gain N` | — (required by the presets) | 0–21 | Index into the preset ladder. **`0` = minimum**, **`21` = maximum** (libairspy inverts internally). Min row floors VGA at index 4, so only manual `0/0/0` reaches true zero internal gain. |
 | `--lna-agc`   | `false` | bool | Engages R820T2 LNA AGC (manual mode) |
 | `--mixer-agc` | `false` | bool | Engages R820T2 Mixer AGC (manual mode) |
+| `--tuner-registers 0xRR=0xVV,…` | — | hex | Writes R820T2 registers once the stream runs (tuner experiments; needs `capture_skip` ≥ 1, sticks until power-off). Every Airspy capture also logs the tuner's registers (`tuner registers:` on stderr). |
 
 > The `DEFINITIONS` table starts every gain at `0` so deployments must
-> explicitly choose a value — there is no "safe" default.  See the
+> explicitly choose a value — there is no "safe" default.  `0/0/0` is
+> below an RTL-SDR's lowest gain: fastcard `-g 0` keeps the VGA at code
+> 8, so the register-equivalent Airspy setting is `0/0/8`
+> ([user guide §4.7](docs/user_guide.md#47-rtl-sdr--airspy-equivalence-and-validation)).  See the
 > [user guide](docs/user_guide.md#45-gain-tuning-procedure) for a recommended starting
 > point per ADC headroom budget.
 
@@ -403,7 +407,7 @@ defaults come from the `--device-type` profile.
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--gain, -g` | `0` | RTL-SDR tuner gain in dB |
+| `--gain, -g` | `0` | RTL-SDR tuner gain in dB.  fastcard sets it in manual mode, `0` included (LNA 0 / Mixer 0 / VGA 8); `rtl_sdr -g 0` is AGC instead.  Ignored (with a warning naming the matching indices) for an Airspy. |
 
 ### RF / USB extras
 
@@ -576,7 +580,9 @@ Thrifty-x/
 │   ├── mocks/           #   Scripted SDR devices and signal generators
 │   └── test_*.py        #   Tests carried over from upstream Thrifty
 ├── scripts/             # Helper scripts, e.g. card_stats.py (headroom vs ADC
-│                        #   full scale), airspy_scale_probe.sh, upstream_diff.sh
+│                        #   full scale), r820t_register_model.py (RTL-SDR vs
+│                        #   Airspy tuner registers), airspy_scale_probe.sh,
+│                        #   upstream_diff.sh
 ├── example/             # Example detector configs + template
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
 └── docs/                # User & deployment documentation

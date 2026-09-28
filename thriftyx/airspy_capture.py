@@ -324,7 +324,7 @@ def _print_capture_header(config, window, device_type='rtlsdr'):
                   ), file=sys.stderr)
         else:
             print("    gain mode: {}; combined={}".format(
-                      gain_mode, int(config.get('combined_gain', 0))),
+                      gain_mode, config.get('combined_gain')),
                   file=sys.stderr)
         print("    bias_tee={}, ppm={:+.2f}, packing={}".format(
                   str(config.get('bias_tee', False)).lower(),
@@ -618,6 +618,40 @@ def _capture_rtlsdr(config, extra_args, output):
 # Airspy capture with Python carrier detection
 # ---------------------------------------------------------------------------
 
+def _tuner_registers(device, writes=()):
+    """Apply R820T2 register *writes*, then log the tuner's registers.
+
+    Called once the stream runs: the Airspy firmware programs the tuner
+    when the receiver starts (filter calibration, fixed IF bandwidth),
+    so only then do writes stick and a read show what the capture runs
+    with.  The register line is printed to stderr in the ``0xNN=0xVV``
+    form ``scripts/r820t_register_model.py --dump`` reads, so every
+    capture log records the tuner state it ran with.
+
+    A failed write raises DeviceConfigError (the capture would not run
+    the requested experiment); a device or libairspy without register
+    access only skips the record.
+    """
+    for reg, value in writes:
+        device.write_tuner_register(reg, value)
+    if writes:
+        print("\ntuner register writes: {}".format(' '.join(
+            "0x{:02X}=0x{:02X}".format(r, v) for r, v in writes)),
+            file=sys.stderr)
+    try:
+        registers = device.read_tuner_registers()
+    except DeviceConfigError as e:
+        logger.debug("tuner registers not recorded: %s", e)
+        return
+    print("\ntuner registers: {}".format(' '.join(
+        "0x{:02X}=0x{:02X}".format(r, v) for r, v in sorted(
+            registers.items()))), file=sys.stderr)
+    for reg, value in writes:
+        if registers.get(reg, value) != value:
+            logger.warning("tuner register 0x%02X reads 0x%02X after "
+                           "writing 0x%02X", reg, registers[reg], value)
+
+
 def _capture_airspy(config, extra_args, output):
     """Capture from a HAL device (Airspy Mini / R2) with carrier detection.
 
@@ -648,6 +682,7 @@ def _capture_airspy(config, extra_args, output):
     capture_skip = int(config.capture_skip)
     duration = extra_args.get('duration')
     thresh_coeffs = config.carrier_threshold
+    tuner_writes = tuple(config.get('tuner_registers') or ())
 
     window = config_validator.carrier_bins(config.carrier_window, sample_rate,
                                            block_size)
@@ -720,9 +755,10 @@ def _capture_airspy(config, extra_args, output):
                 mixer_agc=bool(config.get('mixer_agc', False)),
             )
         else:
+            combined = config.get('combined_gain')
             device.apply_gain_mode(
                 gain_mode,
-                combined=int(config.get('combined_gain', 0)),
+                combined=None if combined is None else int(combined),
             )
         device.set_bias_tee(bool(config.get('bias_tee', False)))
 
@@ -761,6 +797,10 @@ def _capture_airspy(config, extra_args, output):
                     history_raw = (raw[-(block_history * 2):]
                                    if block_history > 0 else raw[:0])
                     blocks_skipped += 1
+                    if blocks_skipped == 1:
+                        # The receiver start has now programmed the
+                        # tuner: override and record its registers.
+                        _tuner_registers(device, tuner_writes)
                 print(" done\n", file=sys.stderr)
 
             # Match RTL behaviour: the first processed block is index 0
@@ -911,7 +951,8 @@ def capture_cli(args=None):
                     'capture_skip',
                     # New Airspy options (P1 follow-ups):
                     'airspy_serial', 'gain_mode', 'combined_gain',
-                    'lna_agc', 'mixer_agc', 'ppm', 'packing']
+                    'lna_agc', 'mixer_agc', 'ppm', 'packing',
+                    'tuner_registers']
     # sample_rate and bit_depth default from the device profile of
     # device_type (settings.DEVICE_DERIVED_KEYS).  No card header can
     # replace the sample rate: chip_rate is checked against it even when

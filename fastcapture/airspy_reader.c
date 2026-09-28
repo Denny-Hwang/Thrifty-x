@@ -361,6 +361,17 @@ int airspy_reader_open(const airspy_reader_config_t *config,
     ret = airspy_set_vga_gain(state->device, config->vga_gain);
     if (ret != AIRSPY_SUCCESS) goto err;
 
+    /* Manual gain: switch both R820T2 AGC loops off explicitly.  The
+     * firmware keeps its tuner registers until the Airspy is
+     * power-cycled, so an AGC another program (or `thriftyx capture
+     * --lna-agc`) left on would otherwise override the indices above
+     * while the log still reports them. */
+    ret = airspy_set_lna_agc(state->device, 0);
+    if (ret != AIRSPY_SUCCESS) goto err;
+
+    ret = airspy_set_mixer_agc(state->device, 0);
+    if (ret != AIRSPY_SUCCESS) goto err;
+
     ret = airspy_set_rf_bias(state->device, config->bias_tee);
     if (ret != AIRSPY_SUCCESS) goto err;
 

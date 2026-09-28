@@ -16,6 +16,7 @@ from typing import Any
 
 from thriftyx.carrier_detect import fft_range_index
 from thriftyx.exceptions import ConfigValidationError
+from thriftyx.hal import r820t
 from thriftyx.hal.profiles import DEFAULT_DEVICE_TYPE, get_profile
 from thriftyx.setting_parsers import normalize_freq_range
 from thriftyx.settings import compute_block_params, longest_code_bits
@@ -194,6 +195,32 @@ def validate_config(config: dict) -> list[str]:
                     "combined_gain. Use gain_mode='manual' to set stages "
                     "directly.")
 
+        # An RTL-SDR config moved to an Airspy keeps its dB gain, which
+        # the Airspy ignores: say so, with the matching indices.
+        tuner_gain = float(config.get('tuner_gain', 0) or 0)
+        if tuner_gain:
+            warnings.append(_rtl_gain_ignored(tuner_gain, profile.name))
+
+        tuner_writes = config.get('tuner_registers') or ()
+        capture_skip = config.get('capture_skip')
+        if tuner_writes and capture_skip is not None \
+                and int(capture_skip) < 1:
+            raise ConfigValidationError(
+                "tuner_registers are written once the stream has started, "
+                "during the skipped blocks: set capture_skip >= 1")
+    else:
+        stray = [f'{s}_gain' for s in ('lna', 'mixer', 'vga')
+                 if int(config.get(f'{s}_gain', 0) or 0) != 0]
+        if stray:
+            warnings.append(
+                f"{profile.name} has one dB gain (tuner_gain); "
+                f"{', '.join(stray)} {'is' if len(stray) == 1 else 'are'} "
+                "ignored.")
+        if config.get('tuner_registers'):
+            raise ConfigValidationError(
+                f"tuner_registers needs an Airspy; {profile.name} capture "
+                "gives no tuner register access.")
+
     # 8. bit_depth must match the device's samples
     bit_depth = config.get('bit_depth')
     if bit_depth is not None:
@@ -207,6 +234,20 @@ def validate_config(config: dict) -> list[str]:
                 f"bit_depth={bit_depth} is ignored for capture.")
 
     return warnings
+
+
+def _rtl_gain_ignored(tuner_gain: float, device_name: str) -> str:
+    """Warning for an RTL-SDR ``tuner_gain`` on a staged-gain device."""
+    text = (f"tuner_gain {tuner_gain:g} dB is the RTL-SDR's gain; "
+            f"{device_name} ignores it and uses lna_gain/mixer_gain/"
+            "vga_gain.")
+    try:
+        lna, mixer, vga = r820t.airspy_equivalent_of_rtl_gain(tuner_gain)
+    except ValueError as exc:
+        return f"{text} {exc}."
+    return (f"{text} The same R820T2 gain registers as an RTL-SDR at "
+            f"{tuner_gain:g} dB (fastcard, manual gain): lna_gain {lna}, "
+            f"mixer_gain {mixer}, vga_gain {vga}.")
 
 
 def _check_carrier_window(

@@ -162,9 +162,9 @@ DEFINITIONS = {
     'combined_gain': Definition(
         ['--combined-gain'],
         int,
-        '0',
-        "Combined gain index (0-21) used when gain_mode is 'linearity' "
-        "or 'sensitivity'. Ignored in 'manual' mode."
+        None,
+        "Combined gain index (0-21), required when gain_mode is "
+        "'linearity' or 'sensitivity'. Ignored in 'manual' mode."
     ),
 
     'lna_agc': Definition(
@@ -195,6 +195,16 @@ DEFINITIONS = {
         'false',
         "Enable libairspy 12-bit USB packing (saves 25% bandwidth; "
         "useful at the highest sample rates on USB 2.0 hosts)"
+    ),
+
+    'tuner_registers': Definition(
+        ['--tuner-registers'],
+        setting_parsers.tuner_registers,
+        None,
+        "Airspy R820T2 register overrides, 'REG=VALUE,...' in hex (e.g. "
+        "'0x0C=0x68'), written once the stream has started (needs "
+        "capture_skip >= 1).  For tuner experiments: the firmware keeps "
+        "them until the Airspy is power-cycled."
     ),
 
     'lna_gain': Definition(
