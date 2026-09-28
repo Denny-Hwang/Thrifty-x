@@ -140,3 +140,15 @@ def test_cli_dump_check(tmp_path, capsys):
     dump.write_text('tuner registers: 0x0C=0x68\n')
     assert model._main(args) == 1
     assert '0x0C: read 0x68, predicted 0x48' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('text', ['', 'Skipping 100 block(s)... done\n',
+                                  'tuner registers: 0x05=0x90\n'])
+def test_cli_rejects_an_empty_or_partial_dump(tmp_path, capsys, text):
+    dump = tmp_path / 'capture.log'
+    dump.write_text(text)
+    assert model._main(['-f', '161.3M', '--vga', '8',
+                        '--dump', str(dump)]) == 1
+    out = capsys.readouterr().out
+    assert 'lacks register(s)' in out
+    assert 'matches the prediction' not in out

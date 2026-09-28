@@ -204,3 +204,13 @@ def test_capture_failed_register_write_stops(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         _run(monkeypatch, device, tuner_registers=((0x0C, 0x68),))
     assert exc.value.code == 1
+
+
+def test_capture_without_skipped_blocks_still_logs_registers(
+        monkeypatch, capsys):
+    device = ScriptedSDRDevice(stream=_stream(),
+                               registers={0x00: 0x96, 0x0C: 0x48})
+    _run(monkeypatch, device, capture_skip=0)
+    err = capsys.readouterr().err
+    assert err.count('tuner registers: 0x00=0x96 0x0C=0x48') == 1
+    assert device.register_writes == []

@@ -780,6 +780,7 @@ def _capture_airspy(config, extra_args, output):
         # values.  Initialised to zeros for the first block (no prior data).
         history_raw = np.zeros(block_history * 2, dtype=np.int16)
 
+        tuner_logged = False
         with _StopOnSignal() as stop:
             if capture_skip > 0:
                 print("\nSkipping {} block(s)...".format(capture_skip),
@@ -797,10 +798,11 @@ def _capture_airspy(config, extra_args, output):
                     history_raw = (raw[-(block_history * 2):]
                                    if block_history > 0 else raw[:0])
                     blocks_skipped += 1
-                    if blocks_skipped == 1:
+                    if not tuner_logged:
                         # The receiver start has now programmed the
                         # tuner: override and record its registers.
                         _tuner_registers(device, tuner_writes)
+                        tuner_logged = True
                 print(" done\n", file=sys.stderr)
 
             # Match RTL behaviour: the first processed block is index 0
@@ -815,6 +817,11 @@ def _capture_airspy(config, extra_args, output):
                 raw = device.read_sync(new_samples)
                 if len(raw) < new_samples * 2:
                     break
+                if not tuner_logged:
+                    # No block skipped (the validator allows writes only
+                    # with skipped blocks): record the registers now.
+                    _tuner_registers(device, tuner_writes)
+                    tuner_logged = True
                 block_idx = blocks_processed
                 timestamp = device.last_read_time or time.time()
                 if sink is not None:

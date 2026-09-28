@@ -619,14 +619,24 @@ def _main(argv=None):
           "the datasheet prints as a fixed 0/1 (see DATASHEET_FIXED_BITS).")
     if args.dump is not None:
         dump = read_dump(args.dump)
+        missing = [r for r in range(FIRST_REG, LAST_REG + 1)
+                   if r not in dump]
         bad = [(r, v, air[r]) for r, v in sorted(dump.items())
                if FIRST_REG <= r <= LAST_REG and v != air[r]]
         print()
+        if missing:
+            # An empty or partial dump (no 'tuner registers:' line, a
+            # truncated log) must not pass as a match.
+            print("Airspy dump lacks register(s) {}: expected all of "
+                  "0x{:02X}-0x{:02X}.".format(
+                      ' '.join(f'0x{r:02X}' for r in missing),
+                      FIRST_REG, LAST_REG))
         if bad:
             print("Airspy dump differs from the prediction:")
             for reg, got, want in bad:
                 print(f"  0x{reg:02X}: read 0x{got:02X}, predicted "
                       f"0x{want:02X}")
+        if bad or missing:
             return 1
         print("Airspy dump matches the prediction.")
     return 0
