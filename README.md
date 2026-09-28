@@ -52,6 +52,7 @@ All documentation is in English.
 | [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation |
 | [docs/rpi5_runbook.md](docs/rpi5_runbook.md) | Pi 5 operational runbook |
 | [docs/rpi5_validation_checklist.md](docs/rpi5_validation_checklist.md) | Pi 5 acceptance/validation checklist |
+| [docs/bench_rtl_vs_r2_cw.md](docs/bench_rtl_vs_r2_cw.md) | Bench procedure: RTL-SDR vs Airspy R2 CW level behind an external amplifier (generator setup, WSL laptop, sweep, report) |
 | [docs/design/](docs/design/) | Design proposals for features not yet built |
 
 Reviews, investigations and their findings are recorded in pull requests
@@ -581,7 +582,8 @@ Thrifty-x/
 │   └── test_*.py        #   Tests carried over from upstream Thrifty
 ├── scripts/             # Helper scripts, e.g. card_stats.py (headroom vs ADC
 │                        #   full scale), r820t_register_model.py (RTL-SDR vs
-│                        #   Airspy tuner registers), airspy_scale_probe.sh,
+│                        #   Airspy tuner registers), bench_cw_level.py and
+│                        #   bench/ (CW level bench), airspy_scale_probe.sh,
 │                        #   upstream_diff.sh
 ├── example/             # Example detector configs + template
 ├── rpi/                 # Pi 5 deployment assets (services, scripts, configs)
