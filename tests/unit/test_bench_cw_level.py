@@ -8,7 +8,9 @@ import csv
 import importlib.util
 import math
 import os
+import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -124,6 +126,93 @@ def test_airspy_capture_skips_dropped_chunks(tmp_path, monkeypatch):
     assert float(row['carrier_dbfs']) == pytest.approx(-30, abs=0.2)
     assert device.applied_kwargs['vga'] == 8
     assert device.applied_kwargs['lna_agc'] is False
+
+
+def test_airspy_register_backlog_and_setup_drops_are_discarded():
+    class FakeAirspy:
+        def __init__(self):
+            self.dropped_samples = 0
+            self.backlogged = False
+            self.measurement_reads = 0
+            self.discards = 0
+
+        def apply_gain_mode(self, *_args, **_kwargs):
+            pass
+
+        def discard_buffered(self):
+            self.backlogged = False
+            self.discards += 1
+
+        def read_tuner_registers(self):
+            # Model a slow control transfer: stale data and setup-only drops
+            # have accumulated while the persistent stream remained active.
+            self.backlogged = True
+            self.dropped_samples += 17
+            return {0x0C: 0x48}
+
+        def read_sync(self, n):
+            if self.discards == 1:  # initial settling read
+                return np.full(n * 2, 111, dtype=np.int16)
+            assert not self.backlogged
+            self.measurement_reads += 1
+            if self.measurement_reads == 2:
+                self.dropped_samples += 3
+                return np.zeros(n * 2, dtype=np.int16)
+            return np.full(n * 2, 1000, dtype=np.int16)
+
+    class Collector:
+        nfft = 8
+
+        def __init__(self):
+            self.blocks = []
+
+        def add(self, block):
+            self.blocks.append(block.copy())
+
+    receiver = object.__new__(bench.Airspy)
+    receiver.device = FakeAirspy()
+    receiver.rate = 100
+    acc = Collector()
+    result = receiver.capture({'lna': 0, 'mixer': 0, 'vga': 8}, acc,
+                              seconds=2, settle=0.1)
+
+    assert result['registers'] == '0x0C=0x48'
+    assert result['dropped'] == 3  # excludes the 17 setup-phase drops
+    assert len(acc.blocks) == 3    # zero-filled dropped block was rejected
+    assert all(np.all(block.real > 0) for block in acc.blocks)
+    assert all(np.all(block.imag > 0) for block in acc.blocks)
+    assert receiver.device.discards >= 3
+
+
+@pytest.mark.parametrize('bias_tee, expected', [('0', False), ('1', True)])
+def test_cw_bench_script_bias_tee_switch(tmp_path, bias_tee, expected):
+    repo = Path(__file__).parents[2]
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    arg_log = tmp_path / 'python-args'
+    for name, body in {
+            'python': '#!/bin/sh\necho "$@" >> "$ARG_LOG"\n',
+            'ldconfig': '#!/bin/sh\necho "libfoo.so => /tmp/libfoo.so"\n',
+    }.items():
+        path = bindir / name
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    run = f'pytest_bias_tee_{bias_tee}'
+    env = os.environ | {
+        'PATH': f'{bindir}:{os.environ["PATH"]}',
+        'ARG_LOG': str(arg_log),
+        'RUN': run,
+        'UNITS': 'R2-A',
+        'R2_BIAS_TEE': bias_tee,
+    }
+    try:
+        subprocess.run([repo / 'scripts/bench/run_cw_bench.sh'], cwd=repo,
+                       env=env, input='\n', text=True, check=True,
+                       capture_output=True)
+        sweep = arg_log.read_text().splitlines()[0]
+        assert ('--bias-tee' in sweep.split()) is expected
+    finally:
+        shutil.rmtree(repo / 'bench' / run, ignore_errors=True)
 
 
 def _fake_rtl_sdr(tmp_path, z, gain_line='Tuner gain set to 0.00 dB.'):
