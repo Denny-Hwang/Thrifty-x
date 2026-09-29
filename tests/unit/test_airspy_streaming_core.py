@@ -11,6 +11,10 @@ must surface instead of being swallowed by ctypes), and part of O3
 (previously the streaming core had no tests at all).
 """
 
+import logging
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -204,3 +208,255 @@ class TestGapsAndTimes:
         assert dev._buffer_full_logged is False
         dev._on_samples(np.full(4, 4, dtype=np.int16))
         assert dev.read_sync(2).tolist() == [4] * 4
+
+
+class _HookLock:
+    """A stream lock that runs a hook just before its next acquisition.
+
+    Lets a test place another thread's whole critical section (here: the
+    consumer's boundary call) exactly between two steps of the callback,
+    without any real threads or timing.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.hook = None
+
+    def locked(self):
+        return self._lock.locked()
+
+    def __enter__(self):
+        hook, self.hook = self.hook, None
+        if hook is not None:
+            hook()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc):
+        self._lock.release()
+        return False
+
+
+def _gap_pairs(values):
+    """I/Q pairs that are exactly zero in an interleaved int16 read."""
+    pairs = values.reshape(-1, 2)
+    return int(np.count_nonzero(~pairs.any(axis=1)))
+
+
+class TestPausedBuffering:
+    """pause_buffering()/resume_buffering(): a running stream nobody reads."""
+
+    def test_paused_stream_cannot_fill_the_buffer(self, caplog):
+        dev = _streaming_device()
+        dev._max_stream_values = 16
+        dev.pause_buffering()
+        with caplog.at_level(logging.WARNING):
+            for _ in range(100):                     # far beyond the cap
+                dev._on_samples(np.ones(12, dtype=np.int16))
+        assert dev._stream_mem == 0 and dev._stream_total == 0
+        assert not dev._stream_chunks
+        assert dev.software_dropped_samples == 0     # discarded, not lost
+        assert dev.dropped_samples == 0
+        assert 'buffer full' not in caplog.text
+
+    def test_same_stream_unpaused_does_overflow(self, caplog):
+        """Control: without the pause the very same traffic overflows."""
+        dev = _streaming_device()
+        dev._max_stream_values = 16
+        with caplog.at_level(logging.WARNING):
+            for _ in range(100):
+                dev._on_samples(np.ones(12, dtype=np.int16))
+        assert dev.software_dropped_samples == 99 * 6
+        assert 'buffer full' in caplog.text
+
+    def test_hardware_drops_still_count_but_leave_no_gap(self):
+        dev = _streaming_device()
+        dev.pause_buffering()
+        dev._on_samples(np.ones(8, dtype=np.int16), dropped_pairs=5)
+        assert dev.dropped_samples == 5
+        assert dev.software_dropped_samples == 0
+        assert dev._stream_total == 0                # no zero gap queued
+        assert dev.resume_buffering() == 5
+
+    def test_pause_drops_the_queue_and_reads_are_refused(self):
+        dev = _streaming_device()
+        dev._on_samples(np.full(8, 3, dtype=np.int16))
+        dev.pause_buffering()
+        assert dev._stream_total == 0 and dev._stream_mem == 0
+        with pytest.raises(DeviceCaptureError, match="resume_buffering"):
+            dev.read_sync(2)
+        with pytest.raises(DeviceCaptureError, match="resume_buffering"):
+            dev.read_sync(0)        # misuse is reported for an empty read too
+
+    def test_resume_starts_from_an_empty_queue(self):
+        dev = _streaming_device()
+        dev._on_samples(np.full(8, 1, dtype=np.int16), dropped_pairs=2)
+        dev.pause_buffering()
+        dev._on_samples(np.full(8, 2, dtype=np.int16))       # discarded
+        dev.dropped_samples += 7                              # counted, kept
+        assert dev.resume_buffering() == 9
+        assert dev._stream_total == 0
+        dev._on_samples(np.full(4, 4, dtype=np.int16))
+        assert dev.read_sync(2).tolist() == [4] * 4
+        assert dev.dropped_samples == 9                       # never reset
+
+    def test_resume_without_pause_is_a_clean_boundary_too(self):
+        dev = _streaming_device()
+        dev._on_samples(np.full(8, 1, dtype=np.int16), dropped_pairs=3)
+        assert dev.resume_buffering() == 3
+        assert dev._stream_total == 0
+
+    def test_resume_rearms_the_buffer_full_warning(self, caplog):
+        dev = _streaming_device()
+        dev._max_stream_values = 8
+        with caplog.at_level(logging.WARNING):
+            dev._on_samples(np.ones(8, dtype=np.int16))
+            dev._on_samples(np.ones(8, dtype=np.int16))      # full: warns
+        dev.pause_buffering()
+        dev.resume_buffering()
+        caplog.clear()                                       # the first one
+        with caplog.at_level(logging.WARNING):
+            dev._on_samples(np.ones(8, dtype=np.int16))
+            dev._on_samples(np.ones(8, dtype=np.int16))      # full again
+        assert caplog.text.count('buffer full') == 1
+
+    def test_a_blocked_read_sync_notices_a_pause_from_another_thread(self):
+        dev = _streaming_device()
+        dev.read_timeout = 5.0
+        box = {}
+
+        def reader():
+            try:
+                dev.read_sync(4)
+            except DeviceCaptureError as exc:
+                box['error'] = exc
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        time.sleep(0.1)                                      # reader waits
+        dev.pause_buffering()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert 'resume_buffering' in str(box['error'])
+
+    def test_stopping_rx_ends_the_pause(self):
+        dev = _streaming_device()
+        dev._capturing = False          # no libairspy call in _stop_rx
+        dev.pause_buffering()
+        dev._stop_rx()
+        assert dev._buffering_paused is False
+
+    def test_base_class_defaults_queue_nothing(self):
+        from tests.mocks.mock_device import MockSDRDevice
+        dev = MockSDRDevice()
+        dev.dropped_samples = 4
+        assert dev.pause_buffering() is None
+        assert dev.resume_buffering() == 4
+
+
+class TestBoundaryAtomicity:
+    """Losses either side of resume_buffering() are never misattributed.
+
+    A hardware drop is *counted* and its zero gap *queued* by the callback
+    thread; the consumer's boundary clears the queue and reads the counter.
+    Whatever the interleaving, a zero gap that is still in the queue after
+    the boundary must be counted after the baseline the boundary returned.
+    """
+
+    @staticmethod
+    def _dev():
+        dev = _streaming_device()
+        dev._stream_lock = _HookLock()
+        return dev
+
+    def test_callback_that_reaches_the_lock_after_the_boundary(self):
+        dev = self._dev()
+        boundary = {}
+        # The callback is about to take the lock; the consumer's whole
+        # boundary call runs first.
+        dev._stream_lock.hook = lambda: boundary.setdefault(
+            'baseline', dev.resume_buffering())
+        dev._on_samples(np.full(8, 5, dtype=np.int16), dropped_pairs=4)
+        after = dev.dropped_samples - boundary['baseline']
+        stream = dev.read_sync(4 + 4)            # 4 gap pairs + 4 data pairs
+        assert _gap_pairs(stream) == after == 4
+
+    def test_callback_that_finished_before_the_boundary(self):
+        dev = self._dev()
+        dev._on_samples(np.full(8, 5, dtype=np.int16), dropped_pairs=4)
+        baseline = dev.resume_buffering()
+        assert baseline == 4                     # counted before ...
+        assert dev._stream_total == 0            # ... and its gap is gone
+
+    def test_a_callback_racing_the_boundary_is_never_half_counted(self):
+        """A real callback thread fires while the boundary reads the counter.
+
+        If the boundary cleared the queue and read the counter in separate
+        critical sections, the whole callback (count *and* gap) could land
+        between them: the baseline would include a loss whose zero gap
+        stays in the stream -- silently measured, never counted.  With one
+        critical section the callback waits for the boundary to finish.
+        """
+        racer = {}
+
+        class Probe(AirspyMiniDevice):
+            @property
+            def dropped_samples(self):
+                hook, racer['hook'] = racer.get('hook'), None
+                if hook is not None:
+                    hook()
+                return self._dropped
+
+            @dropped_samples.setter
+            def dropped_samples(self, value):
+                self._dropped = value
+
+        dev = Probe()
+        dev._open = True
+        dev._check_open = lambda: None
+        dev.close = lambda: None
+        dev._capturing = True
+        dev._stream_started = True
+
+        def callback_fires():
+            thread = threading.Thread(
+                target=dev._on_samples,
+                args=(np.full(8, 5, dtype=np.int16), 4))
+            racer['thread'] = thread
+            thread.start()
+            thread.join(0.05)      # completes now, or blocks on the lock
+
+        racer['hook'] = callback_fires
+        baseline = dev.resume_buffering()
+        racer['thread'].join(2)
+        assert not racer['thread'].is_alive()
+
+        stream = dev.read_sync(4 + 4)            # 4 gap pairs + 4 data pairs
+        assert _gap_pairs(stream) == dev.dropped_samples - baseline == 4
+
+    def test_counter_is_only_written_with_the_lock_held(self):
+        """Counting a loss and queueing its gap share one critical section
+        (a consumer that sees the counter move must find the gap already
+        queued, or the lock still held)."""
+        writes = []
+
+        class Probe(AirspyMiniDevice):
+            @property
+            def dropped_samples(self):
+                return self._dropped
+
+            @dropped_samples.setter
+            def dropped_samples(self, value):
+                lock = getattr(self, '_stream_lock', None)
+                writes.append(lock.locked() if lock is not None else None)
+                self._dropped = value
+
+        dev = Probe()
+        dev._open = True
+        dev._check_open = lambda: None
+        dev.close = lambda: None
+        writes.clear()
+        dev._max_stream_values = 8
+        dev._on_samples(np.ones(4, dtype=np.int16), dropped_pairs=2)  # hw
+        dev._on_samples(np.ones(8, dtype=np.int16))    # buffer full: sw
+        assert writes == [True, True]

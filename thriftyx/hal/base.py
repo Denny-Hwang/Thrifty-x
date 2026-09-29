@@ -181,6 +181,31 @@ class SDRDevice(ABC):
         """
         return None
 
+    def pause_buffering(self) -> None:
+        """Stop queueing samples for ``read_sync`` while nobody reads.
+
+        The hardware keeps streaming; the driver just drops what arrives
+        (default: nothing is queued).  Use it whenever the consumer will
+        be away for longer than the driver's buffer holds -- waiting for
+        an operator, slow control transfers -- so the queue cannot
+        overflow and pollute the drop counters.  Losses the hardware
+        itself reports keep counting in ``dropped_samples``.
+        :meth:`resume_buffering` ends the pause.
+        """
+        return None
+
+    def resume_buffering(self) -> int:
+        """Resume queueing from an empty queue; return the drop counter.
+
+        Whatever was queued or lost before this call is gone, and the
+        returned ``dropped_samples`` is the counter at that very
+        instant.  A caller measuring from here on can therefore report
+        ``dropped_samples - returned`` as the loss inside its window
+        without a loss on either side of the boundary leaking in.
+        """
+        self.discard_buffered()
+        return self.dropped_samples
+
     @abstractmethod
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:
         """Start asynchronous sample capture.
