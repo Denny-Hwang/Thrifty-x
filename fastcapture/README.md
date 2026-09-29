@@ -10,7 +10,7 @@ Replaces the original `fastcard` library (RTL-SDR based) with libairspy support.
 |--------|---------------------|-------------------------|
 | SDR Library | librtlsdr | libairspy |
 | Sample Type | uint8 (8-bit unsigned) | int16 I/Q from libairspy (ADC full scale ≈ ±16384) |
-| Sample Conversion | `(val - 127.4) / 128.0` | `val / 16384.0`: ADC full scale maps to 1.0 on both (see `rawconv.c`) |
+| Sample Conversion | `(val - 127.4) / 128.0` | `val / 16384.0`: each device's digital full scale maps to 1.0 (see `rawconv.c`); the RF level that reaches it differs between devices |
 | DC Offset | Yes (127.4 subtraction) | No (Airspy has none) |
 | Gain Control | Single tuner_gain | LNA + Mixer + VGA (3-stage) |
 | Bias Tee | Not supported | Supported |

@@ -1074,8 +1074,8 @@ the lower `corr_energy`.  The timestamp check keeps the detections of
 another capture session, whose block index restarts at 0.
 
 **Magnitude note for `carrier_energy` / `corr_energy`.** Samples are
-normalised so that ADC full scale is `|z| = 1` on every device. RTL-SDR
-uses `(x − 127.4) / 128`. For Airspy, libairspy's INT16_IQ output
+normalised so that each device's own digital full scale is `|z| = 1`.
+RTL-SDR uses `(x − 127.4) / 128`, i.e. the full 8-bit output word. For Airspy, libairspy's INT16_IQ output
 left-shifts each 12-bit ADC code by 4 and converts the real stream to
 I/Q with a unity-gain half-band filter, so a tone of A ADC codes
 arrives as `|I + jQ| ≈ 8·A`, and full scale (2048 codes) is int16
@@ -1084,6 +1084,15 @@ reproduces the measurement on libairspy's own conversion code. On
 hardware, a strong tone at high gain should top out near ±16 000 before
 distorting; `python scripts/card_stats.py rx0.card` prints a card's
 peak and RMS magnitude as a fraction of ADC full scale.
+
+These full scales are device-relative, not RF-referenced: the RF power
+that reaches `|z| = 1` depends on each receiver's IF path, ADC and (for
+the RTL2832U) digital down-converter. At the same R820T gain codes
+(RTL-SDR gain 0, Airspy R2 0/0/8) a bench tone read about 21 dB lower in
+Airspy dBFS than in RTL-SDR dBFS while C/N0 differed by only 1–1.6 dB
+(`docs/rtl_vs_airspy_dbfs_audit.md`). Energies, noise levels and any
+absolute threshold constant therefore differ between device types even
+with this normalisation; SNR-relative thresholds do not.
 
 Airspy `.toad` files written before this scale was corrected used a
 divisor of 2048, so their `carrier_energy`, `corr_energy` and noise
