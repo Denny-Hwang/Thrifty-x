@@ -17,7 +17,8 @@
 #   R2_STAGES [0/0/0,0/0/8,0/0/10,0/0/11]
 #   R2_RATE  [10M]   PACKING [1] (12-bit USB packing for 10 Msps)
 #   R2_BIAS_TEE [0]  enable Airspy coax bias power (safe default: off)
-#   AMP_POWER [external USB-C]  external amplifier power source (logged)
+#   AMP_POWER [external]  how the amplifier is powered, for run_info
+#            (e.g. 'external 12 V bench supply')
 #   RUN      [run1]  label; results go to bench/$RUN/results.csv
 #   UNITS    [RTL R2-A R2-B]  which receivers to sweep, in order
 #   REF      [RTL:g0, or the first unit's first setting without RTL]
@@ -38,7 +39,7 @@ R2_STAGES=${R2_STAGES:-0/0/0,0/0/8,0/0/10,0/0/11}
 R2_RATE=${R2_RATE:-10M}
 PACKING=${PACKING:-1}
 R2_BIAS_TEE=${R2_BIAS_TEE:-0}
-AMP_POWER=${AMP_POWER:-external USB-C}
+AMP_POWER=${AMP_POWER:-external}
 RUN=${RUN:-run1}
 UNITS=${UNITS:-RTL R2-A R2-B}
 if [ -z "${REF:-}" ]; then

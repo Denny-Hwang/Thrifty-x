@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -215,7 +216,8 @@ def test_cw_bench_script_bias_tee_switch(tmp_path, bias_tee, expected):
         shutil.rmtree(repo / 'bench' / run, ignore_errors=True)
 
 
-def _fake_rtl_sdr(tmp_path, z, gain_line='Tuner gain set to 0.00 dB.'):
+def _fake_rtl_sdr(tmp_path, z, gain_line='Tuner gain set to 0.00 dB.',
+                  noise_lines=0):
     data = tmp_path / 'iq.u8'
     complex_to_raw(z, bit_depth=8).tofile(data)
     script = tmp_path / 'rtl_sdr'
@@ -224,6 +226,8 @@ def _fake_rtl_sdr(tmp_path, z, gain_line='Tuner gain set to 0.00 dB.'):
         "import sys\n"
         f"sys.stderr.write({gain_line!r} + '\\n')\n"
         "sys.stderr.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"for i in range({noise_lines}):\n"
+        "    sys.stderr.write('libusb warning %d: transfer retried\\n' % i)\n"
         f"sys.stdout.buffer.write(open({str(data)!r}, 'rb').read())\n")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
@@ -240,6 +244,24 @@ def test_rtl_capture_through_rtl_sdr(tmp_path):
     assert row['setting'] == 'g0' and row['unit'] == 'RTL'
     assert 'Tuner gain set to 0.00 dB.' in row['notes']
     # 8-bit quantisation adds noise but the tone level holds.
+    assert float(row['carrier_dbfs']) == pytest.approx(-25, abs=0.3)
+
+
+def test_rtl_capture_survives_a_chatty_stderr(tmp_path):
+    # More stderr than a pipe buffer holds (~64 KiB) before any sample:
+    # reading only stdout from a stderr pipe would block rtl_sdr forever.
+    rate = 2.4e6
+    z = _tone(rate, 0.3, 10 ** (-25 / 20), 15e3, 1e-11)
+    args = _args(tmp_path, device='rtlsdr', unit='RTL',
+                 extra=['--rtl-sdr', _fake_rtl_sdr(tmp_path, z,
+                                                   noise_lines=5000)])
+    done = []
+    worker = threading.Thread(
+        target=lambda: done.append(bench.cmd_measure(args)), daemon=True)
+    worker.start()
+    worker.join(timeout=60)
+    assert done == [0], "capture hung with a full stderr pipe"
+    row = next(csv.DictReader(open(args.out)))
     assert float(row['carrier_dbfs']) == pytest.approx(-25, abs=0.3)
 
 

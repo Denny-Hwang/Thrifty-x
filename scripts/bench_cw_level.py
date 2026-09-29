@@ -48,6 +48,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -199,28 +200,23 @@ class RtlSdr:
         call = [args.rtl_sdr, '-f', str(int(args.freq)), '-s', str(rate),
                 '-g', self.gain_argument(setting['rtl_gain_db']),
                 '-d', str(args.device_index), '-n', str(total), '-']
-        proc = subprocess.Popen(call, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE)
-        skip = int(settle * rate) * 2
-        chunk = acc.nfft * 2 * 16
-        pending = b''
-        try:
-            while True:
-                data = proc.stdout.read(chunk)
-                if not data:
-                    break
-                if skip:
-                    cut = min(skip, len(data))
-                    data, skip = data[cut:], skip - cut
-                pending += data
-                usable = (len(pending) // (acc.nfft * 2)) * acc.nfft * 2
-                if usable:
-                    raw = np.frombuffer(pending[:usable], dtype=np.uint8)
-                    acc.add(raw_to_complex(raw, bit_depth=8))
-                    pending = pending[usable:]
-        finally:
-            _, err = proc.communicate()
-        err = err.decode(errors='replace')
+        # stderr goes to a file, not a pipe: only stdout is read while
+        # rtl_sdr runs, and a full stderr pipe (repeated libusb warnings
+        # over usbip) would block rtl_sdr and hang the capture.
+        with tempfile.TemporaryFile() as errf:
+            proc = subprocess.Popen(call, stdout=subprocess.PIPE,
+                                    stderr=errf)
+            try:
+                self._read_samples(proc.stdout, acc, int(settle * rate) * 2)
+            except BaseException:
+                proc.kill()
+                proc.wait()
+                raise
+            finally:
+                proc.stdout.close()
+            proc.wait()
+            errf.seek(0)
+            err = errf.read().decode(errors='replace')
         if proc.returncode != 0:
             raise RuntimeError(f"rtl_sdr failed ({proc.returncode}):\n{err}")
         notes = []
@@ -233,6 +229,25 @@ class RtlSdr:
             raise RuntimeError("rtl_sdr did not report a manual gain:\n"
                                + err)
         return {'dropped': '', 'registers': '', 'notes': '; '.join(notes)}
+
+    @staticmethod
+    def _read_samples(stream, acc, skip):
+        """Feed uint8 I/Q from *stream* to *acc*, dropping *skip* bytes."""
+        chunk = acc.nfft * 2 * 16
+        pending = b''
+        while True:
+            data = stream.read(chunk)
+            if not data:
+                break
+            if skip:
+                cut = min(skip, len(data))
+                data, skip = data[cut:], skip - cut
+            pending += data
+            usable = (len(pending) // (acc.nfft * 2)) * acc.nfft * 2
+            if usable:
+                raw = np.frombuffer(pending[:usable], dtype=np.uint8)
+                acc.add(raw_to_complex(raw, bit_depth=8))
+                pending = pending[usable:]
 
     def close(self):
         pass
