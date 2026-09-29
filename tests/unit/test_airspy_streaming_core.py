@@ -56,6 +56,16 @@ class TestOnSamplesRouting:
         assert len(received) == 1
         assert dev._stream_total == 0  # not buffered in callback mode
 
+    def test_user_callback_mode_still_counts_hardware_drops(self):
+        """``thriftyx capture`` (start_capture) reads dropped_samples too."""
+        dev = _streaming_device()
+        received = []
+        dev._user_callback = received.append
+        dev._on_samples(np.arange(8, dtype=np.int16), dropped_pairs=5)
+        assert len(received) == 1
+        assert dev.dropped_samples == 5
+        assert dev._stream_total == 0
+
 
 class TestBoundedBuffer:
     def test_drops_when_full_and_counts(self):
@@ -210,25 +220,38 @@ class TestGapsAndTimes:
         assert dev.read_sync(2).tolist() == [4] * 4
 
 
-class _HookLock:
-    """A stream lock that runs a hook just before its next acquisition.
+class _CountingLock:
+    """A stream lock that can run an action just before its k-th acquisition.
 
-    Lets a test place another thread's whole critical section (here: the
-    consumer's boundary call) exactly between two steps of the callback,
-    without any real threads or timing.
+    Lets a test place another thread's whole critical section (say, the
+    consumer's boundary call, or the RX callback) exactly between two steps
+    of the operation under test, without real threads or timing.  It also
+    counts acquisitions, so a test can tell one critical section from two.
     """
 
     def __init__(self):
         self._lock = threading.Lock()
-        self.hook = None
+        self.entries = 0
+        self._fire_at = None
+        self._action = None
+
+    def arm(self, k, action):
+        """Run *action* just before the k-th (0-based) acquisition from now."""
+        self.entries = 0
+        self._fire_at, self._action = k, action
+
+    def disarm(self):
+        """Forget an action the operation under test never reached."""
+        self._fire_at = self._action = None
 
     def locked(self):
         return self._lock.locked()
 
     def __enter__(self):
-        hook, self.hook = self.hook, None
-        if hook is not None:
-            hook()
+        if self._fire_at is not None and self.entries == self._fire_at:
+            action, self._action, self._fire_at = self._action, None, None
+            action()
+        self.entries += 1
         self._lock.acquire()
         return self
 
@@ -307,18 +330,30 @@ class TestPausedBuffering:
         assert dev._stream_total == 0
 
     def test_resume_rearms_the_buffer_full_warning(self, caplog):
+        """A chunk larger than the cap never fits, so nothing but the reset
+        in the boundary's queue clearing can re-arm the once-per-episode
+        warning (an accepted chunk would also do it)."""
         dev = _streaming_device()
         dev._max_stream_values = 8
         with caplog.at_level(logging.WARNING):
-            dev._on_samples(np.ones(8, dtype=np.int16))
-            dev._on_samples(np.ones(8, dtype=np.int16))      # full: warns
+            dev._on_samples(np.ones(12, dtype=np.int16))     # full: warns
+            dev._on_samples(np.ones(12, dtype=np.int16))     # already logged
+        assert caplog.text.count('buffer full') == 1
         dev.pause_buffering()
         dev.resume_buffering()
-        caplog.clear()                                       # the first one
+        caplog.clear()
         with caplog.at_level(logging.WARNING):
-            dev._on_samples(np.ones(8, dtype=np.int16))
-            dev._on_samples(np.ones(8, dtype=np.int16))      # full again
+            dev._on_samples(np.ones(12, dtype=np.int16))
         assert caplog.text.count('buffer full') == 1
+
+    def test_pausing_and_resuming_take_the_stream_lock_once(self):
+        """The queue is cleared under the lock the callback appends under."""
+        dev = _streaming_device()
+        dev._stream_lock = _CountingLock()
+        dev.pause_buffering()
+        assert dev._stream_lock.entries == 1
+        dev.resume_buffering()
+        assert dev._stream_lock.entries == 2
 
     def test_a_blocked_read_sync_notices_a_pause_from_another_thread(self):
         dev = _streaming_device()
@@ -366,16 +401,22 @@ class TestBoundaryAtomicity:
     @staticmethod
     def _dev():
         dev = _streaming_device()
-        dev._stream_lock = _HookLock()
+        dev._stream_lock = _CountingLock()
         return dev
+
+    @staticmethod
+    def _assert_no_uncounted_gap(dev, baseline):
+        queued = dev._stream_total
+        stream = dev.read_sync(queued // 2) if queued else np.empty(0)
+        assert _gap_pairs(stream) == dev.dropped_samples - baseline, (
+            f"zero pairs still queued {_gap_pairs(stream)}, counted after "
+            f"the baseline {dev.dropped_samples - baseline}")
 
     def test_callback_that_reaches_the_lock_after_the_boundary(self):
         dev = self._dev()
         boundary = {}
-        # The callback is about to take the lock; the consumer's whole
-        # boundary call runs first.
-        dev._stream_lock.hook = lambda: boundary.setdefault(
-            'baseline', dev.resume_buffering())
+        dev._stream_lock.arm(0, lambda: boundary.setdefault(
+            'baseline', dev.resume_buffering()))
         dev._on_samples(np.full(8, 5, dtype=np.int16), dropped_pairs=4)
         after = dev.dropped_samples - boundary['baseline']
         stream = dev.read_sync(4 + 4)            # 4 gap pairs + 4 data pairs
@@ -388,15 +429,41 @@ class TestBoundaryAtomicity:
         assert baseline == 4                     # counted before ...
         assert dev._stream_total == 0            # ... and its gap is gone
 
-    def test_a_callback_racing_the_boundary_is_never_half_counted(self):
-        """A real callback thread fires while the boundary reads the counter.
+    @pytest.mark.parametrize('k', range(3))
+    def test_callback_at_every_lock_gap_inside_the_boundary(self, k):
+        """The RX callback runs before the k-th lock acquisition of
+        resume_buffering().  With the boundary one critical section there
+        is only k = 0; were it two (clear, then read the counter) k = 1
+        would put a whole callback between them: counted in the baseline,
+        its gap left in the queue."""
+        dev = self._dev()
+        dev._on_samples(np.full(8, 1, dtype=np.int16))       # queued before
+        dev._stream_lock.arm(k, lambda: dev._on_samples(
+            np.full(8, 5, dtype=np.int16), dropped_pairs=4))
+        baseline = dev.resume_buffering()
+        dev._stream_lock.disarm()
+        self._assert_no_uncounted_gap(dev, baseline)
 
-        If the boundary cleared the queue and read the counter in separate
-        critical sections, the whole callback (count *and* gap) could land
-        between them: the baseline would include a loss whose zero gap
-        stays in the stream -- silently measured, never counted.  With one
-        critical section the callback waits for the boundary to finish.
-        """
+    @pytest.mark.parametrize('k', range(3))
+    def test_boundary_at_every_lock_gap_inside_the_callback(self, k):
+        """The consumer's boundary runs before the k-th lock acquisition of
+        one hardware-drop callback.  Were counting and queueing the gap two
+        critical sections, k = 1 would put the boundary between them: the
+        loss lands in the baseline, its gap in the fresh queue."""
+        dev = self._dev()
+        boundary = {}
+        dev._stream_lock.arm(k, lambda: boundary.setdefault(
+            'baseline', dev.resume_buffering()))
+        dev._on_samples(np.full(8, 5, dtype=np.int16), dropped_pairs=4)
+        dev._stream_lock.disarm()
+        self._assert_no_uncounted_gap(dev, boundary.get('baseline', 0))
+
+    def test_the_counter_is_read_under_the_boundarys_lock(self):
+        """A real callback thread fires at the instant the boundary reads
+        the counter.  Were the read outside the lock, the whole callback
+        (count *and* gap) could land right before it: the baseline would
+        include a loss whose zero gap stays in the stream, measured and
+        never counted.  Here the callback must wait for the boundary."""
         racer = {}
 
         class Probe(AirspyMiniDevice):
@@ -435,9 +502,8 @@ class TestBoundaryAtomicity:
         assert _gap_pairs(stream) == dev.dropped_samples - baseline == 4
 
     def test_counter_is_only_written_with_the_lock_held(self):
-        """Counting a loss and queueing its gap share one critical section
-        (a consumer that sees the counter move must find the gap already
-        queued, or the lock still held)."""
+        """Counting a loss happens inside the critical section that queues
+        its gap (see the lock-gap sweeps above for the ordering)."""
         writes = []
 
         class Probe(AirspyMiniDevice):

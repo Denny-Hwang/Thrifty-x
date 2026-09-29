@@ -191,17 +191,30 @@ class SDRDevice(ABC):
         overflow and pollute the drop counters.  Losses the hardware
         itself reports keep counting in ``dropped_samples``.
         :meth:`resume_buffering` ends the pause.
+
+        Calling ``read_sync`` while paused is unsupported: the Airspy
+        driver raises :class:`~thriftyx.exceptions.DeviceCaptureError`.
+        Like :meth:`discard_buffered`, pausing breaks the time-contiguity
+        of the stream.  A driver that queues samples must override both
+        this and :meth:`resume_buffering`; the defaults here are for
+        drivers that queue nothing.
         """
         return None
 
     def resume_buffering(self) -> int:
         """Resume queueing from an empty queue; return the drop counter.
 
-        Whatever was queued or lost before this call is gone, and the
-        returned ``dropped_samples`` is the counter at that very
-        instant.  A caller measuring from here on can therefore report
-        ``dropped_samples - returned`` as the loss inside its window
-        without a loss on either side of the boundary leaking in.
+        Whatever the driver had queued is gone, and the returned
+        ``dropped_samples`` is the counter read together with that
+        clearing, so ``dropped_samples - returned`` counts the losses
+        the driver saw after the boundary.  The boundary is exact between
+        the driver's counter and its queue; samples and loss reports
+        already in the hardware or libusb/libairspy pipeline may still
+        arrive after it (a late loss report is counted in the new window,
+        which errs on the safe side).
+
+        The default only calls :meth:`discard_buffered` and reads the
+        counter, which is all a driver without a queue can do.
         """
         self.discard_buffered()
         return self.dropped_samples

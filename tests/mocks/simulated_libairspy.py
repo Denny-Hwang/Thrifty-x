@@ -21,7 +21,9 @@ Transfers are delivered through the callback the driver registered with
 ``airspy_start_rx``, as libairspy's consumer thread would.  Like the
 real library, a second ``airspy_start_rx`` while streaming fails
 (``AIRSPY_ERROR_BUSY`` = -6), and a hardware loss is reported with the
-transfer that follows it.
+transfer that follows it.  Transfers always have the unpacked size (65536
+IQ pairs) whatever ``airspy_set_packing`` says; libairspy's packed
+transfers (49152 pairs) change the granularity of a loss, not any verdict.
 """
 
 import ctypes
@@ -97,6 +99,7 @@ class SimulatedLibairspy:
         self.signal_chunks = 0          # transfers delivered to read_sync
         self.idle_chunks = 0            # transfers delivered via advance()
         self.drop_plan = {}             # signal chunk -> pairs lost before it
+        self.idle_drop_pairs = 0        # loss reported by every idle transfer
 
     # -- what the "hardware" produces ----------------------------------
 
@@ -141,7 +144,7 @@ class SimulatedLibairspy:
             return
         for _ in range(math.ceil(seconds * self.rate / CHUNK_PAIRS)):
             self.idle_chunks += 1
-            self._deliver(self._poison)
+            self._deliver(self._poison, self.idle_drop_pairs)
 
     # -- the libairspy API the driver calls ----------------------------
 
@@ -188,6 +191,9 @@ class SimulatedLibairspy:
         return 0
 
     def airspy_r820t_read(self, _handle, reg, value_ref):
+        # The tuner registers are read with RX active (the firmware
+        # programs the tuner when RX starts).
+        assert self.streaming, "register read while RX is stopped"
         self.calls.append('r820t_read')
         self.advance(self.register_read_seconds)
         value_ref._obj.value = self.regs[reg.value]

@@ -22,6 +22,7 @@ import logging
 import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from tests.mocks.simulated_libairspy import CHUNK_PAIRS, SimulatedLibairspy
@@ -41,6 +42,13 @@ SECONDS = 0.4               # per capture (the hardware run uses 5)
 SETTLE = 0.1
 # Generator level (as the bench is told) -> tone level at the receiver.
 TONE_DBFS = {None: None, -100.0: -50.0, -80.0: -30.0, -60.0: -10.0}
+
+
+def _longest_zero_run(z):
+    """Longest run of exactly-zero complex samples (noise has none)."""
+    zero = np.concatenate(([False], np.asarray(z) == 0, [False]))
+    edges = np.flatnonzero(np.diff(zero.astype(np.int8)))
+    return int((edges[1::2] - edges[0::2]).max(initial=0))
 
 
 def expected_segments(rate=RATE, seconds=SECONDS):
@@ -67,6 +75,20 @@ class Rig:
         self.monkeypatch = monkeypatch
         self.out = tmp_path / 'results.csv'
         self.at_enter = []          # driver state as the operator presses Enter
+        # What every block that reaches the PSD looks like.  Idle transfers
+        # are near-full-scale poison and a lost transfer is a run of exact
+        # zeros: neither may ever be measured, counted or not.
+        self.longest_zero_run = 0
+        self.peak = 0.0
+        real_add = bench.Accumulator.add
+
+        def spying_add(acc, z):
+            self.longest_zero_run = max(self.longest_zero_run,
+                                        _longest_zero_run(z))
+            self.peak = max(self.peak, float(np.abs(z.real).max()),
+                            float(np.abs(z.imag).max()))
+            real_add(acc, z)
+        monkeypatch.setattr(bench.Accumulator, 'add', spying_add)
         # close() -> _stop_rx() zeroes the drop counters, so the end-of-run
         # figures are taken just before it.
         self.final = {}
@@ -105,6 +127,8 @@ class Rig:
         self.operator(levels, idle)
         text = ','.join('off' if tx is None else f'{tx:g}' for tx in levels)
         assert bench.cmd_sweep(self.args('sweep', f'--levels={text}')) == 0
+        assert self.longest_zero_run < 16, "a zero gap reached the PSD"
+        assert self.peak < bench.NEAR_FULL_SCALE, "idle poison reached the PSD"
         return self.rows()
 
     def rows(self):
@@ -120,20 +144,29 @@ def rig(monkeypatch, tmp_path):
 
 
 def assert_clean_row(row, tone_dbfs):
-    """An undisturbed measurement of a tone at *tone_dbfs* (or none)."""
+    """An undisturbed measurement of a tone at *tone_dbfs* (or none).
+
+    The simulated scatter is a few thousandths of a dB, so the bounds are
+    tight enough to see a leaked zero gap of a fraction of a transfer.
+    """
     assert int(row['dropped']) == 0
     assert int(row['segments']) == expected_segments()
     # Poison from idle time would clip and wreck every figure below.
     assert float(row['near_fs_frac']) == 0.0
     assert float(row['noise_dbfs_hz']) == pytest.approx(NOISE_DBFS_HZ,
-                                                        abs=0.5)
+                                                        abs=0.1)
+    power = 10 ** (NOISE_DBFS_HZ / 10) * RATE
     if tone_dbfs is None:
         assert row['detected'] == '0'
     else:
+        power += 10 ** (tone_dbfs / 10)
         assert row['detected'] == '1'
-        assert float(row['carrier_dbfs']) == pytest.approx(tone_dbfs, abs=0.3)
+        assert float(row['carrier_dbfs']) == pytest.approx(tone_dbfs, abs=0.05)
         assert float(row['cn0_dbhz']) == pytest.approx(
-            tone_dbfs - NOISE_DBFS_HZ, abs=0.6)
+            tone_dbfs - NOISE_DBFS_HZ, abs=0.1)
+        assert abs(float(row['freq_error_ppm'])) < 0.05
+    assert float(row['rms_dbfs']) == pytest.approx(
+        10 * math.log10(power), abs=0.05)
 
 
 # ---------------------------------------------------------------------
@@ -175,6 +208,9 @@ def test_rx_starts_once_and_stops_only_at_close(rig):
     assert lib.busy_errors == 0
     assert lib.stop_calls == 1                    # from close(), at the end
     assert lib.calls.index('start_rx') < lib.calls.index('stop_rx')
+    # The registers are read with RX running (after the settle read), so
+    # they include the tuner's start-up calibration.
+    assert lib.calls.index('start_rx') < lib.calls.index('r820t_read')
     assert lib.calls[-2:] == ['stop_rx', 'close']
     assert lib.calls.count('start_rx') == 1
     # The receiver was configured before, and never during, the stream.
@@ -305,15 +341,7 @@ def test_consumer_stall_during_measurement_is_still_a_reported_overflow(
     stall inside the measurement, beyond the 4 s cap) overflows the queue.
     That is a genuine loss: counted, logged, noted in the row, and none of
     the stalled stream is measured."""
-    real_add = bench.Accumulator.add
-    calls = {'n': 0}
-
-    def stalling_add(acc, z):
-        calls['n'] += 1
-        if calls['n'] == 2:
-            rig.lib.advance(5.0)                    # the consumer is away
-        real_add(acc, z)
-    rig.monkeypatch.setattr(bench.Accumulator, 'add', stalling_add)
+    _stall_in_second_block(rig)
 
     with caplog.at_level(logging.WARNING, logger='thriftyx.hal.airspy_mini'):
         rows = rig.sweep(levels=(-80.0,))
@@ -321,7 +349,7 @@ def test_consumer_stall_during_measurement_is_still_a_reported_overflow(
     row = rows[0]
     assert rig.final['software'] > 0
     assert int(row['dropped']) == rig.final['software']
-    assert 'buffer overflow' in row['notes']
+    assert row['notes'] == f"{rig.final['software']} of them buffer overflow"
     assert 'buffer full' in caplog.text
     assert 'samples were dropped during the measurement' in \
         capsys.readouterr().out
@@ -346,6 +374,75 @@ def test_buffering_is_paused_again_after_every_capture_even_a_failed_one(rig):
         receiver.capture(setting, acc, SECONDS, SETTLE)
     assert rig.dev._buffering_paused
     receiver.close()
+
+
+def test_a_clean_five_second_ten_msps_capture_has_381_segments():
+    """Requirement 6 in numbers: nfft 131072, blocks of 8 segments."""
+    assert bench.fft_size(10_000_000) == 131072
+    assert expected_segments(10_000_000, 5.0) == 381
+
+
+def _stall_in_second_block(rig, seconds=5.0):
+    """Make the consumer 'busy' for *seconds* inside the second block."""
+    real_add = bench.Accumulator.add
+    calls = {'n': 0}
+
+    def stalling_add(acc, z):
+        calls['n'] += 1
+        if calls['n'] == 2:
+            rig.lib.advance(seconds)
+        real_add(acc, z)
+    rig.monkeypatch.setattr(bench.Accumulator, 'add', stalling_add)
+
+
+def test_only_the_stalled_capture_reports_an_overflow(rig):
+    """The overflow count in ``notes`` is per capture, never carried over."""
+    _stall_in_second_block(rig)
+    rows = rig.sweep(levels=(-80.0, -60.0))
+    software = rig.final['software']
+    assert software > 0
+    assert int(rows[0]['dropped']) == software
+    assert rows[0]['notes'] == f'{software} of them buffer overflow'
+    assert rows[1]['notes'] == ''
+    assert_clean_row(rows[1], TONE_DBFS[-60.0])
+
+
+def test_hardware_and_overflow_losses_are_told_apart(rig):
+    """A stall (buffer overflow) and, in a later block, a USB loss: both
+    are in ``dropped``, only the former in the ``notes`` count."""
+    _stall_in_second_block(rig)
+    lost = CHUNK_PAIRS
+    rig.lib.drop_plan[_measurement_chunk(rig, block=2)] = lost
+    rows = rig.sweep(levels=(-80.0,))
+    software = rig.final['software']
+    assert software > 0
+    assert int(rows[0]['dropped']) == software + lost
+    assert rows[0]['notes'] == f'{software} of them buffer overflow'
+    assert int(rows[0]['segments']) == expected_segments() - 8   # USB block
+
+
+def test_hardware_losses_outside_the_measurement_stay_out_of_the_row(rig):
+    """Test C/D, hardware side: every idle and register-phase transfer
+    reports a loss, and one more is lost during the settle read.  The
+    driver counts them all; none belongs to the measurement."""
+    rig.lib.idle_drop_pairs = 12345
+    rig.lib.drop_plan[0] = CHUNK_PAIRS                     # in the settle read
+    rows = rig.sweep(levels=(-100.0, -80.0))
+    assert rig.final['dropped'] > 0 and rig.final['software'] == 0
+    for row, tx in zip(rows, (-100.0, -80.0), strict=True):
+        assert_clean_row(row, TONE_DBFS[tx])
+        assert row['notes'] == ''
+
+
+def test_a_failed_register_read_still_measures_cleanly(rig, monkeypatch):
+    """A libairspy without airspy_r820t_read: the row says the registers
+    are unavailable, and the boundary is still taken, so nothing stays
+    paused (the next read_sync would raise) and the rows are clean."""
+    monkeypatch.delattr(SimulatedLibairspy, 'airspy_r820t_read')
+    rows = rig.sweep(levels=(-100.0, -80.0))
+    for row, tx in zip(rows, (-100.0, -80.0), strict=True):
+        assert row['registers'].startswith('unavailable')
+        assert_clean_row(row, TONE_DBFS[tx])
 
 
 class RacingDevice(AirspyR2Device):
@@ -383,9 +480,12 @@ class RacingDevice(AirspyR2Device):
 
 def test_a_loss_arriving_right_after_the_boundary_is_counted_and_excluded(
         monkeypatch, tmp_path):
-    """The boundary is an exact snapshot: a loss delivered immediately
-    after it belongs to the measurement (counted, its gap excluded) and
-    must not slip into the baseline while its zeros stay in the stream."""
+    """A loss delivered immediately after the boundary belongs to the
+    measurement: counted, its gap excluded.  (This guards the bench's use
+    of the boundary -- baseline from resume_buffering(), not a separate
+    counter read.  That the driver's count-and-queue and boundary are each
+    one critical section is proven by TestBoundaryAtomicity in
+    test_airspy_streaming_core.py.)"""
     lost = CHUNK_PAIRS
     rig = Rig(monkeypatch, tmp_path,
               device=lambda lib: RacingDevice(lib, lost))
