@@ -27,7 +27,7 @@ LEVELS = (-100.0, -80.0, -70.0, -60.0)
 
 
 def _write(path, unit, device, rate, carrier_off, noise_off, spread=0.0,
-           off_detected=0, dropped=0):
+           off_detected=0, dropped=0, setting=None):
     """A sweep per tone: RF off, four levels, RF off."""
     for t_i, tone in enumerate(TONES):
         for l_i, tx in enumerate((None,) + LEVELS + (None,)):
@@ -35,7 +35,8 @@ def _write(path, unit, device, rate, carrier_off, noise_off, spread=0.0,
             noise = -130.0 + noise_off
             row = {'unit': unit, 'device': device, 'rate': int(rate),
                    'tone_hz': int(tone), 'center_hz': int(161.3e6),
-                   'setting': 'g0' if device == 'rtlsdr' else '0/0/8',
+                   'setting': setting or ('g0' if device == 'rtlsdr'
+                                          else '0/0/8'),
                    'tx_dbm': '' if tx is None else tx,
                    'noise_dbfs_hz': noise, 'near_fs_frac': 0.0,
                    'dropped': dropped if tx == -80.0 else ''}
@@ -65,18 +66,18 @@ def test_statistics_are_recomputed_from_row_contents(tmp_path, capsys):
     def cells(name):
         return [c.split() for c in lines[name].split('|')[2:6]]
 
-    car, noise, cn0, points = cells('R2-A 2.5M − RTL 2.4M')
+    car, noise, cn0, points = cells('R2-A 2.5M 0/0/8 − RTL 2.4M g0')
     assert float(car[0]) == pytest.approx(-21.0)
     # The jitter pattern over 3 tones x 4 levels: population sigma.
     assert float(car[1]) == pytest.approx(0.3 * (8 / 12) ** 0.5, abs=1e-3)
     assert float(noise[0]) == pytest.approx(-13.0)
     assert float(cn0[0]) == pytest.approx(-8.0)
     assert points == ['12']
-    car, noise, cn0, _ = cells('R2-A 10M − R2-A 2.5M')
+    car, noise, cn0, _ = cells('R2-A 10M 0/0/8 − R2-A 2.5M 0/0/8')
     assert float(car[0]) == pytest.approx(0.1)
     assert float(noise[0]) == pytest.approx(-7.0)
     assert float(cn0[0]) == pytest.approx(7.1)
-    car, noise, cn0, _ = cells('R2-B 10M − R2-A 10M')
+    car, noise, cn0, _ = cells('R2-B 10M 0/0/8 − R2-A 10M 0/0/8')
     assert float(car[0]) == pytest.approx(0.1)
     assert float(noise[0]) == pytest.approx(0.8)
     assert float(cn0[0]) == pytest.approx(-0.7)
@@ -105,3 +106,27 @@ def test_rf_off_and_undetected_rows_stay_out_of_the_averages(tmp_path):
     cells = audit.levels(rows, 1e-5)
     assert sorted(cells) == sorted(LEVELS)
     assert max(c['carrier_dbfs'] for c in cells.values()) < 0
+
+
+def test_gain_settings_are_never_pooled(tmp_path, capsys):
+    """A sweep with two R2 settings compares each setting on its own."""
+    _write(tmp_path / 'a.csv', 'RTL', 'rtlsdr', 2.4e6, 0.0, 0.0)
+    _write(tmp_path / 'b.csv', 'R2-A', 'airspy_r2', 10e6, -20.9, -20.0)
+    _write(tmp_path / 'b.csv', 'R2-A', 'airspy_r2', 10e6, -40.0, -25.0,
+           setting='0/0/0')
+    _write(tmp_path / 'c.csv', 'R2-B', 'airspy_r2', 10e6, -20.8, -19.2)
+    audit.main([str(tmp_path / n) for n in ('a.csv', 'b.csv', 'c.csv')])
+    out = capsys.readouterr().out
+    rows = {line.split('|')[1].strip(): line.split('|')
+            for line in out.splitlines()
+            if line.startswith('| R2') and '−' in line}
+    assert float(rows['R2-A 10M 0/0/8 − RTL 2.4M g0'][2].split()[0]) == \
+        pytest.approx(-20.9)
+    assert float(rows['R2-A 10M 0/0/0 − RTL 2.4M g0'][2].split()[0]) == \
+        pytest.approx(-40.0)
+    assert rows['R2-A 10M 0/0/8 − RTL 2.4M g0'][5].strip() == '12'
+    # B has no 0/0/0: B - A compares 0/0/8 only.
+    assert set(k for k in rows if k.startswith('R2-B 10M')
+               and 'R2-A' in k) == {'R2-B 10M 0/0/8 − R2-A 10M 0/0/8'}
+    assert float(rows['R2-B 10M 0/0/8 − R2-A 10M 0/0/8'][2].split()[0]) \
+        == pytest.approx(0.1)

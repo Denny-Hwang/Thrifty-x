@@ -20,12 +20,13 @@ Printed:
   groups    per unit/rate/tone: rows, carrier slope vs generator level,
             mean frequency error (ppm), dropped-sample incidence,
             RF-OFF detections and noise
-  vs ref    every non-reference unit/rate against the reference device
-            (default: the rtlsdr rows), paired by tone and level:
-            mean and sigma of the carrier, noise-density and C/N0
-            differences
-  rates     per unit, each rate against the unit's lowest rate
-  units     per rate, each unit against the first unit (name order)
+  vs ref    every non-reference unit/rate/setting against each
+            reference setting (default: the rtlsdr rows), paired by
+            tone and level: mean and sigma of the carrier,
+            noise-density and C/N0 differences
+  rates     per unit and setting, each rate against the lowest rate
+  units     per rate and setting, each unit against the first unit
+Different gain settings are never pooled into one comparison.
 
 Sigma is printed both as the population (ddof=0) and the sample
 (ddof=1) standard deviation of the paired differences.
@@ -128,16 +129,17 @@ def _fmt_stats(values):
 def compare(groups, cells, left, right):
     """Pooled ``right - left`` over every tone both unit/rate sets have.
 
-    *left* and *right* are (unit, rate) pairs; tones are paired by
-    ``tone_hz`` and levels by ``tx``.
+    *left* and *right* are (unit, rate, setting) triples, so different
+    gain settings are never pooled; tones are paired by ``tone_hz`` and
+    levels by ``tx``.
     """
     pooled = defaultdict(list)
     for key in groups:
         unit, _, rate, tone, setting = key
-        if (unit, rate) != right:
+        if (unit, rate, setting) != right:
             continue
         for other in groups:
-            if (other[0], other[2]) == left and other[3] == tone:
+            if (other[0], other[2], other[4]) == left and other[3] == tone:
                 for field, values in paired(cells[other],
                                             cells[key]).items():
                     pooled[field].extend(values)
@@ -156,8 +158,8 @@ def _print_compare(title, pairs, groups, cells):
         c, n = _fmt_stats(pooled['carrier_dbfs'])
         nz, _ = _fmt_stats(pooled['noise_dbfs_hz'])
         cn, _ = _fmt_stats(pooled['cn0_dbhz'])
-        name = (f"{right[0]} {right[1] / 1e6:g}M − "
-                f"{left[0]} {left[1] / 1e6:g}M")
+        name = (f"{right[0]} {right[1] / 1e6:g}M {right[2]} − "
+                f"{left[0]} {left[1] / 1e6:g}M {left[2]}")
         print(f"| {name} | {c} | {nz} | {cn} | {n} |")
 
 
@@ -209,25 +211,30 @@ def main(argv=None):
               f"{sum(1 for r in off if r['detected'])}/{len(off)} | "
               f"{_mean([r['noise_dbfs_hz'] for r in off]):.2f} |")
 
-    unit_rates = sorted({(k[0], k[2]) for k in groups})
-    devices = {(k[0], k[2]): k[1] for k in groups}
-    refs = [ur for ur in unit_rates if devices[ur] == args.ref_device]
-    others = [ur for ur in unit_rates if devices[ur] != args.ref_device]
+    # Comparison identity: (unit, rate, setting).  Settings are never
+    # pooled; rate and unit comparisons keep the setting fixed.
+    configs = sorted({(k[0], k[2], k[4]) for k in groups})
+    devices = {(k[0], k[2], k[4]): k[1] for k in groups}
+    refs = [c for c in configs if devices[c] == args.ref_device]
+    others = [c for c in configs if devices[c] != args.ref_device]
     if refs:
         _print_compare(f"Against {args.ref_device}",
-                       [(ref, ur) for ref in refs for ur in others],
+                       [(ref, c) for ref in refs for c in others],
                        groups, cells)
     by_unit = defaultdict(list)
-    for unit, rate in unit_rates:
-        by_unit[unit].append(rate)
-    _print_compare("Rates (each unit against its lowest rate)",
-                   [((u, rs[0]), (u, r)) for u, rs in sorted(by_unit.items())
+    for unit, rate, setting in configs:
+        by_unit[(unit, setting)].append(rate)
+    _print_compare("Rates (each unit and setting against its lowest rate)",
+                   [((u, rs[0], st), (u, r, st))
+                    for (u, st), rs in sorted(by_unit.items())
                     for r in rs[1:]], groups, cells)
     by_rate = defaultdict(list)
-    for unit, rate in others:
-        by_rate[rate].append(unit)
-    _print_compare("Units (each unit against the first, same rate)",
-                   [((us[0], r), (u, r)) for r, us in sorted(by_rate.items())
+    for unit, rate, setting in others:
+        by_rate[(rate, setting)].append(unit)
+    _print_compare("Units (each unit against the first, same rate and "
+                   "setting)",
+                   [((us[0], r, st), (u, r, st))
+                    for (r, st), us in sorted(by_rate.items())
                     for u in us[1:]], groups, cells)
     return 0
 
