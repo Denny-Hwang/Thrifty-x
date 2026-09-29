@@ -122,6 +122,10 @@ scripts/bench/wsl_setup.sh               # apt packages, udev rules, venv, self-
 . ~/thriftyx-venv/bin/activate
 ```
 
+The venv goes to `~/thriftyx-venv` unless you name another:
+`scripts/bench/wsl_setup.sh .venv` reuses a venv inside the checkout
+(then activate `.venv/bin/activate` here and in 8.2).
+
 If udev is not running in WSL (no systemd), after every attach:
 `sudo chmod 666 /dev/bus/usb/*/*`.
 
@@ -176,7 +180,8 @@ Per receiver: RTL 1 setting, R2 4 settings × 5 s per level: about
 ```bash
 . ~/thriftyx-venv/bin/activate
 cd ~/Thrifty-x
-AMP_GAIN=20 LOSS=0.5 RUN=run1 scripts/bench/run_cw_bench.sh
+AMP_GAIN=20 LOSS=0.5 AMP_POWER="external supply" RUN=run1 \
+    scripts/bench/run_cw_bench.sh
 ```
 
 The script asks you to connect RTL, then R2-A, then R2-B, and before
@@ -196,6 +201,9 @@ the receiver order between runs.  Other variables:
 | `R2_RATE` | `10M` | `2.5M` repeats the June rate check |
 | `PACKING` | `1` | 12-bit USB packing (fewer drops over usbip) |
 | `CAPTURE_SECONDS` | `5` | per setting and level |
+| `R2_BIAS_TEE` | `0` | `1` powers the amplifier from the R2's bias tee (DC-safe chain only); keep `0` with a separately powered amplifier |
+| `AMP_POWER` | `external` | how the amplifier is powered, recorded in `run_info.txt` |
+| `REF` | `RTL:g0` | report reference (defaults to the first unit's first setting without RTL) |
 
 One receiver by hand:
 
