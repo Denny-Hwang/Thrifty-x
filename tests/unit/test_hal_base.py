@@ -85,3 +85,17 @@ def test_mock_device_get_info():
     assert isinstance(info, DeviceInfo)
     assert info.bit_depth == 12
     assert info.sample_format == SampleFormat.INT16
+
+
+def test_default_resume_buffering_discards_and_returns_the_counter():
+    class Recording(MockSDRDevice):
+        discards = 0
+
+        def discard_buffered(self):
+            self.discards += 1
+
+    dev = Recording()
+    dev.dropped_samples = 7
+    assert dev.pause_buffering() is None
+    assert dev.resume_buffering() == 7
+    assert dev.discards == 1

@@ -202,6 +202,10 @@ AIRSPY_SAMPLE_FLOAT32_REAL = 1
 AIRSPY_SAMPLE_INT16_IQ = 2
 AIRSPY_SAMPLE_INT16_REAL = 3
 
+_PAUSED_READ_MESSAGE = (
+    "read_sync() called while buffering is paused; call "
+    "resume_buffering() first.")
+
 # R820T2 register file: 0x00-0x04 read-only status, 0x05-0x1F control.
 R820T_FIRST_WRITABLE = 0x05
 R820T_LAST_REGISTER = 0x1F
@@ -350,6 +354,9 @@ class AirspyMiniDevice(SDRDevice):
         self.max_buffer_seconds = 4.0
         self._max_stream_values: int | None = None  # set by _start_rx()
         self._buffer_full_logged = False
+        # True between pause_buffering() and resume_buffering(): arriving
+        # samples are discarded, not queued (guarded by _stream_lock).
+        self._buffering_paused = False
         # IQ pairs dropped by *this* layer because the bounded buffer was
         # full (in addition to hardware/USB drops).  Also folded into
         # ``dropped_samples``.
@@ -823,18 +830,28 @@ class AirspyMiniDevice(SDRDevice):
         """
         if arrived is None:
             arrived = time.time()
-        if dropped_pairs > 0:
-            self.dropped_samples += dropped_pairs
         if self._user_callback is not None:
+            if dropped_pairs > 0:
+                self.dropped_samples += dropped_pairs
             self._user_callback(arr)
             return
         with self._stream_lock:
             if dropped_pairs > 0:
-                # The gap ended when the first sample of *arr* arrived.
-                rate = self._sample_rate
-                gap_end = (arrived - (len(arr) // 2) / rate
-                           if rate else arrived)
-                self._queue_gap(dropped_pairs * 2, gap_end)
+                # Count and queue the loss in one critical section: a
+                # consumer that sees the counter move and then discards
+                # the queue (or takes its boundary snapshot in
+                # resume_buffering) can never be left with a gap that
+                # the counter has already accounted for.
+                self.dropped_samples += dropped_pairs
+                if not self._buffering_paused:
+                    # The gap ended when the first sample of *arr* arrived.
+                    rate = self._sample_rate
+                    gap_end = (arrived - (len(arr) // 2) / rate
+                               if rate else arrived)
+                    self._queue_gap(dropped_pairs * 2, gap_end)
+            if self._buffering_paused:
+                # Nobody is reading: not queued, and not a loss either.
+                return
             cap = self._max_stream_values
             if cap is not None and self._stream_mem + len(arr) > cap:
                 # Bounded buffer: the consumer is persistently too slow.
@@ -878,12 +895,45 @@ class AirspyMiniDevice(SDRDevice):
         deliberately preserved so callers can take before/after snapshots.
         """
         with self._stream_lock:
-            self._stream_chunks.clear()
-            self._stream_total = 0
-            self._stream_mem = 0
-            self.last_read_time = None
-            self._buffer_full_logged = False
-            self._stream_event.clear()
+            self._clear_stream()
+
+    def _clear_stream(self) -> None:
+        """Empty the read_sync queue and its bookkeeping; lock held."""
+        self._stream_chunks.clear()
+        self._stream_total = 0
+        self._stream_mem = 0
+        self.last_read_time = None
+        self._buffer_full_logged = False
+        self._stream_event.clear()
+
+    def pause_buffering(self) -> None:
+        """Discard arriving samples instead of queueing them.
+
+        RX keeps running (a stop/start would re-run the firmware's
+        tuner initialisation and calibration), but the bounded
+        ``read_sync`` queue cannot fill while nobody reads, e.g. during
+        an operator prompt.  Hardware drops libairspy reports still
+        count in ``dropped_samples``; nothing discarded here counts as
+        a software drop.  Anything queued is dropped, and ``read_sync``
+        raises until :meth:`resume_buffering`.
+        """
+        with self._stream_lock:
+            self._buffering_paused = True
+            self._clear_stream()
+
+    def resume_buffering(self) -> int:
+        """Queue samples again from an empty queue; return the drop count.
+
+        Clearing the queue and reading ``dropped_samples`` happen under
+        the lock that also guards the callback's counting and queueing,
+        so the returned value is an exact boundary: losses counted
+        before it have no gap left in the queue, and losses after it
+        are counted after it.
+        """
+        with self._stream_lock:
+            self._buffering_paused = False
+            self._clear_stream()
+            return self.dropped_samples
 
     def _start_rx(self) -> None:
         """Start the Airspy RX stream (called once, shared by both modes)."""
@@ -946,6 +996,7 @@ class AirspyMiniDevice(SDRDevice):
         self._buffer_full_logged = False
         self.last_read_time = None
         with self._stream_lock:
+            self._buffering_paused = False
             self._stream_chunks.clear()
             self._stream_total = 0
             self._stream_mem = 0
@@ -986,6 +1037,8 @@ class AirspyMiniDevice(SDRDevice):
             raise DeviceCaptureError(
                 "read_sync() cannot be used while start_capture() is "
                 "active with a user callback. Call stop_capture() first.")
+        if self._buffering_paused:
+            raise DeviceCaptureError(_PAUSED_READ_MESSAGE)
         if num_samples <= 0:
             # np.concatenate([]) would raise; an empty request has an
             # obvious empty answer.
@@ -1005,6 +1058,9 @@ class AirspyMiniDevice(SDRDevice):
                 raise DeviceCaptureError(
                     f"Airspy RX callback failed: {exc!r}") from exc
             with self._stream_lock:
+                if self._buffering_paused:
+                    # Paused from another thread while we were waiting.
+                    raise DeviceCaptureError(_PAUSED_READ_MESSAGE)
                 if self._stream_total >= needed:
                     self._stream_event.clear()
                     return self._take(needed)

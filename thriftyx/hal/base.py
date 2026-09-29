@@ -181,6 +181,44 @@ class SDRDevice(ABC):
         """
         return None
 
+    def pause_buffering(self) -> None:
+        """Stop queueing samples for ``read_sync`` while nobody reads.
+
+        The hardware keeps streaming; the driver just drops what arrives
+        (default: nothing is queued).  Use it whenever the consumer will
+        be away for longer than the driver's buffer holds -- waiting for
+        an operator, slow control transfers -- so the queue cannot
+        overflow and pollute the drop counters.  Losses the hardware
+        itself reports keep counting in ``dropped_samples``.
+        :meth:`resume_buffering` ends the pause.
+
+        Calling ``read_sync`` while paused is unsupported: the Airspy
+        driver raises :class:`~thriftyx.exceptions.DeviceCaptureError`.
+        Like :meth:`discard_buffered`, pausing breaks the time-contiguity
+        of the stream.  A driver that queues samples must override both
+        this and :meth:`resume_buffering`; the defaults here are for
+        drivers that queue nothing.
+        """
+        return None
+
+    def resume_buffering(self) -> int:
+        """Resume queueing from an empty queue; return the drop counter.
+
+        Whatever the driver had queued is gone, and the returned
+        ``dropped_samples`` is the counter read together with that
+        clearing, so ``dropped_samples - returned`` counts the losses
+        the driver saw after the boundary.  The boundary is exact between
+        the driver's counter and its queue; samples and loss reports
+        already in the hardware or libusb/libairspy pipeline may still
+        arrive after it (a late loss report is counted in the new window,
+        which errs on the safe side).
+
+        The default only calls :meth:`discard_buffered` and reads the
+        counter, which is all a driver without a queue can do.
+        """
+        self.discard_buffered()
+        return self.dropped_samples
+
     @abstractmethod
     def start_capture(self, callback: Callable[[np.ndarray], None]) -> None:
         """Start asynchronous sample capture.

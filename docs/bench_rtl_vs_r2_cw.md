@@ -187,7 +187,11 @@ AMP_GAIN=20 LOSS=0.5 AMP_POWER="external supply" RUN=run1 \
 The script asks you to connect RTL, then R2-A, then R2-B, and before
 every level to set the N9310A (`Enter` = measure, `s` = skip,
 `q` = stop this receiver).  Each receiver keeps its settings for the
-whole sweep; only the generator changes.  Results:
+whole sweep; only the generator changes.  Take as long as you like at a
+prompt: the R2 keeps streaming (one RX start per sweep, so the tuner is
+calibrated once) but its driver discards the samples while no capture is
+running, so waiting cannot fill the driver's 4 s buffer or leave stale
+samples for the next measurement.  Results:
 `bench/run1/results.csv`, `run_info.txt`, `report.md`,
 `cw_levels.png`.
 
@@ -249,7 +253,7 @@ python scripts/bench_cw_level.py report bench/run1/results.csv \
 | ΔC/N0 of 0/0/8 keeps the June gap | the gap is after the noise-setting stage (IF/ADC/decimation), not tuner NF |
 | A − B keeps a constant offset | unit-to-unit: keep per-unit settings |
 | slope < 0.95 at the top | compression; exclude those levels, lower G or LOSS the top |
-| `dropped` > 0 on R2 rows | USB/usbip overflow: those chunks are left out; use `PACKING=1`, a direct port, or `R2_RATE=2.5M` |
+| `dropped` > 0 on R2 rows | samples were lost during that capture and the affected blocks are left out (fewer `segments`): USB/usbip overflow, so use `PACKING=1`, a direct port, or `R2_RATE=2.5M`; if `notes` says "… of them buffer overflow" the host itself was too slow to consume the stream |
 
 ## 10. Troubleshooting
 

@@ -133,7 +133,8 @@ def test_airspy_register_backlog_and_setup_drops_are_discarded():
     class FakeAirspy:
         def __init__(self):
             self.dropped_samples = 0
-            self.backlogged = False
+            self.paused = True
+            self.resumes = 0
             self.measurement_reads = 0
             self.discards = 0
 
@@ -141,20 +142,28 @@ def test_airspy_register_backlog_and_setup_drops_are_discarded():
             pass
 
         def discard_buffered(self):
-            self.backlogged = False
             self.discards += 1
 
+        def pause_buffering(self):
+            self.paused = True
+
+        def resume_buffering(self):
+            self.paused = False
+            self.resumes += 1
+            return self.dropped_samples
+
         def read_tuner_registers(self):
-            # Model a slow control transfer: stale data and setup-only drops
-            # have accumulated while the persistent stream remained active.
-            self.backlogged = True
+            # A slow control transfer while the persistent stream stays
+            # active: setup-only drops arrive, and with nobody reading the
+            # driver's queue would fill unless its buffering is paused.
+            assert self.paused, "register reads must run with buffering paused"
             self.dropped_samples += 17
             return {0x0C: 0x48}
 
         def read_sync(self, n):
-            if self.discards == 1:  # initial settling read
+            assert not self.paused, "read_sync while buffering is paused"
+            if self.resumes == 1:  # initial settling read
                 return np.full(n * 2, 111, dtype=np.int16)
-            assert not self.backlogged
             self.measurement_reads += 1
             if self.measurement_reads == 2:
                 self.dropped_samples += 3
@@ -182,7 +191,9 @@ def test_airspy_register_backlog_and_setup_drops_are_discarded():
     assert len(acc.blocks) == 3    # zero-filled dropped block was rejected
     assert all(np.all(block.real > 0) for block in acc.blocks)
     assert all(np.all(block.imag > 0) for block in acc.blocks)
-    assert receiver.device.discards >= 3
+    assert receiver.device.discards == 1    # the block that saw the drop
+    assert receiver.device.resumes == 2     # settle, and the boundary
+    assert receiver.device.paused           # idle again between captures
 
 
 @pytest.mark.parametrize('bias_tee, expected', [('0', False), ('1', True)])

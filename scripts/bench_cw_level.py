@@ -49,7 +49,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 import numpy as np
@@ -278,62 +277,70 @@ class Airspy:
 
     def capture(self, setting, acc, seconds, settle):
         dev = self.device
+        # RX is started once, by the first read_sync(), and runs until
+        # close(): stopping it between levels would re-run the R820T2
+        # start-up calibration each time.  The stream therefore keeps
+        # flowing while this receiver waits for the operator or writes
+        # results, so outside a capture the driver's buffering is paused
+        # (see the ``finally`` below), and every capture starts by
+        # resuming it from an empty queue.
         dev.apply_gain_mode('manual', lna=setting['lna'],
                             mixer=setting['mixer'], vga=setting['vga'],
                             lna_agc=False, mixer_agc=False)
-        dev.discard_buffered()
-        dev.read_sync(int(settle * self.rate))       # settle, discard
-        registers = ''
-        # Reading the R820T2 register file is a series of slow USB control
-        # transfers.  RX must remain active so the values include the tuner's
-        # start-up calibration, but read_sync's queue must not accumulate
-        # several seconds of samples while no consumer is running.
-        stop_drain = threading.Event()
-
-        def drain_setup_samples():
-            while not stop_drain.wait(0.05):
-                dev.discard_buffered()
-
-        dev.discard_buffered()
-        drainer = threading.Thread(target=drain_setup_samples, daemon=True)
-        drainer.start()
+        dev.resume_buffering()
         try:
-            regs = dev.read_tuner_registers()
-            registers = ' '.join(f"0x{r:02X}=0x{v:02X}"
-                                 for r, v in sorted(regs.items()))
-        except Exception as exc:
-            registers = f'unavailable: {exc}'
+            dev.read_sync(int(settle * self.rate))   # settle, discard
+            registers = ''
+            # Reading the R820T2 register file is a series of slow USB
+            # control transfers.  RX must remain active so the values
+            # include the tuner's start-up calibration, but nobody reads
+            # the stream meanwhile: pause buffering so the queue cannot
+            # fill however long the transfers take.
+            dev.pause_buffering()
+            try:
+                regs = dev.read_tuner_registers()
+                registers = ' '.join(f"0x{r:02X}=0x{v:02X}"
+                                     for r, v in sorted(regs.items()))
+            except Exception as exc:
+                registers = f'unavailable: {exc}'
+            finally:
+                # The clean measurement boundary: an empty queue and the
+                # cumulative drop counter at that same instant.  Counters
+                # are snapshotted, never reset, so HAL diagnostics stay
+                # intact and setup-phase drops fall before the baseline.
+                drop_baseline = dev.resume_buffering()
+            software_baseline = getattr(dev, 'software_dropped_samples', 0)
+            last_dropped = drop_baseline
+            remaining = int(seconds * self.rate)
+            seg = acc.nfft * 8
+            while remaining > 0:
+                # A loss may arrive between read_sync calls.  Clear its
+                # queued zero-filled gap before asking for measurement data.
+                current_dropped = dev.dropped_samples
+                if current_dropped != last_dropped:
+                    dev.discard_buffered()
+                    last_dropped = current_dropped
+                n = min(seg, remaining)
+                raw = dev.read_sync(n)
+                remaining -= n
+                current_dropped = dev.dropped_samples
+                if current_dropped != last_dropped:
+                    # A gap may be in this block or queued behind it.
+                    # Reject the block and clear the queue so neither can
+                    # bias power low.
+                    dev.discard_buffered()
+                    last_dropped = current_dropped
+                    continue
+                acc.add(raw_to_complex(raw, bit_depth=12))
+            dropped = dev.dropped_samples - drop_baseline
+            software = (getattr(dev, 'software_dropped_samples', 0)
+                        - software_baseline)
         finally:
-            stop_drain.set()
-            drainer.join()
-
-        # Establish a clean measurement boundary.  Counters are cumulative,
-        # so snapshot them rather than resetting HAL diagnostics.
-        dev.discard_buffered()
-        drop_baseline = dev.dropped_samples
-        last_dropped = drop_baseline
-        remaining = int(seconds * self.rate)
-        seg = acc.nfft * 8
-        while remaining > 0:
-            # A loss may arrive between read_sync calls.  Clear its queued
-            # zero-filled gap before asking for measurement data.
-            current_dropped = dev.dropped_samples
-            if current_dropped != last_dropped:
-                dev.discard_buffered()
-                last_dropped = current_dropped
-            n = min(seg, remaining)
-            raw = dev.read_sync(n)
-            remaining -= n
-            current_dropped = dev.dropped_samples
-            if current_dropped != last_dropped:
-                # A gap may be in this block or queued behind it.  Reject the
-                # block and clear the queue so neither can bias power low.
-                dev.discard_buffered()
-                last_dropped = current_dropped
-                continue
-            acc.add(raw_to_complex(raw, bit_depth=12))
-        dropped = dev.dropped_samples - drop_baseline
-        return {'dropped': dropped, 'registers': registers, 'notes': ''}
+            dev.pause_buffering()
+        # A full driver buffer (a consumer too slow) and a USB/hardware loss
+        # both land in 'dropped'; say which, when it is the former.
+        notes = f'{software} of them buffer overflow' if software else ''
+        return {'dropped': dropped, 'registers': registers, 'notes': notes}
 
     def close(self):
         try:
