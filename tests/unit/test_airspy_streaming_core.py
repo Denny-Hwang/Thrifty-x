@@ -102,6 +102,15 @@ class TestBoundedBuffer:
         rate = dev._sample_rate or max(dev._supported_sample_rates)
         assert int(rate * 2 * dev.max_buffer_seconds) == 12_000_000
 
+    @pytest.mark.parametrize('rate, expected', [
+        (10_000_000, 80_000_000),
+        (2_500_000, 20_000_000),
+    ])
+    def test_four_second_cap_at_bench_rates(self, rate, expected):
+        dev = AirspyMiniDevice()
+        dev._sample_rate = rate
+        assert int(rate * 2 * dev.max_buffer_seconds) == expected
+
 
 class TestReadSync:
     def test_assembles_exact_request_across_chunks(self):
@@ -182,8 +191,16 @@ class TestGapsAndTimes:
 
     def test_discard_buffered_drops_backlog(self):
         dev = _streaming_device()
+        dev.dropped_samples = 11
+        dev.software_dropped_samples = 7
+        dev.last_read_time = 123.0
+        dev._buffer_full_logged = True
         dev._on_samples(np.full(8, 3, dtype=np.int16))
         dev.discard_buffered()
         assert dev._stream_total == 0
+        assert dev.last_read_time is None
+        assert dev.dropped_samples == 11
+        assert dev.software_dropped_samples == 7
+        assert dev._buffer_full_logged is False
         dev._on_samples(np.full(4, 4, dtype=np.int16))
         assert dev.read_sync(2).tolist() == [4] * 4

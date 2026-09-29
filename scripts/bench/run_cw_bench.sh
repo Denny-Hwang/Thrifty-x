@@ -16,6 +16,8 @@
 #   R2_A_SERIAL / R2_B_SERIAL   Airspy serials (empty = skip that unit)
 #   R2_STAGES [0/0/0,0/0/8,0/0/10,0/0/11]
 #   R2_RATE  [10M]   PACKING [1] (12-bit USB packing for 10 Msps)
+#   R2_BIAS_TEE [0]  enable Airspy coax bias power (safe default: off)
+#   AMP_POWER [external USB-C]  external amplifier power source (logged)
 #   RUN      [run1]  label; results go to bench/$RUN/results.csv
 #   UNITS    [RTL R2-A R2-B]  which receivers to sweep, in order
 #   REF      [RTL:g0, or the first unit's first setting without RTL]
@@ -35,6 +37,8 @@ R2_B_SERIAL=${R2_B_SERIAL:-0xB01861DC393A891F}
 R2_STAGES=${R2_STAGES:-0/0/0,0/0/8,0/0/10,0/0/11}
 R2_RATE=${R2_RATE:-10M}
 PACKING=${PACKING:-1}
+R2_BIAS_TEE=${R2_BIAS_TEE:-0}
+AMP_POWER=${AMP_POWER:-external USB-C}
 RUN=${RUN:-run1}
 UNITS=${UNITS:-RTL R2-A R2-B}
 if [ -z "${REF:-}" ]; then
@@ -47,15 +51,38 @@ OUT="bench/${RUN}/results.csv"
 
 mkdir -p "bench/${RUN}"
 {
-    echo "run=${RUN} date=$(date -Is) host=$(hostname)"
-    echo "amp_gain=${AMP_GAIN} loss=${LOSS} levels=${LEVELS} seconds=${SECONDS_PER} freq=${FREQ}"
-    echo "thriftyx=$(git rev-parse --short HEAD) librtlsdr=$(ldconfig -p | grep -m1 'librtlsdr.so' | awk '{print $NF}')"
+    echo "run=${RUN}"
+    echo "date=$(date -Is)"
+    echo "host=$(hostname)"
+    echo "git_commit=$(git rev-parse HEAD)"
+    echo "frequency=${FREQ}"
+    echo "generator_levels=${LEVELS}"
+    echo "capture_seconds=${SECONDS_PER}"
+    echo "external_amplifier_nominal_gain_db=${AMP_GAIN}"
+    echo "external_amplifier_power=${AMP_POWER}"
+    echo "loss_db=${LOSS}"
+    echo "airspy_sample_rate=${R2_RATE}"
+    echo "airspy_packing=${PACKING}"
+    echo "airspy_bias_tee=${R2_BIAS_TEE}"
+    echo "r2_gain_stages=${R2_STAGES}"
+    echo "r2_a_serial=${R2_A_SERIAL}"
+    echo "r2_b_serial=${R2_B_SERIAL}"
+    echo "rtl_bias_tee=off (not controlled by this script)"
+    echo "librtlsdr=$(ldconfig -p | grep -m1 'librtlsdr.so' | awk '{print $NF}')"
 } | tee "bench/${RUN}/run_info.txt"
 
 common=(--freq "${FREQ}" --levels "${LEVELS}" --amp-gain "${AMP_GAIN}"
         --loss "${LOSS}" --seconds "${SECONDS_PER}" --out "${OUT}")
 packing=()
 [ "${PACKING}" = 1 ] && packing=(--packing)
+bias_tee=()
+if [ "${R2_BIAS_TEE}" = 1 ]; then
+    bias_tee=(--bias-tee)
+    echo "WARNING: Airspy bias tee ENABLED; verify the RF chain is DC-safe."
+elif [ "${R2_BIAS_TEE}" != 0 ]; then
+    echo "R2_BIAS_TEE must be 0 or 1" >&2
+    exit 2
+fi
 
 for unit in ${UNITS}; do
     echo
@@ -75,7 +102,7 @@ for unit in ${UNITS}; do
             python scripts/bench_cw_level.py sweep --unit "${unit}" \
                 --device airspy_r2 --airspy-serial "${serial}" \
                 --rate "${R2_RATE}" --stages "${R2_STAGES}" \
-                "${packing[@]}" "${common[@]}" ;;
+                "${packing[@]}" "${bias_tee[@]}" "${common[@]}" ;;
         *)
             echo "unknown unit ${unit}"; exit 2 ;;
     esac

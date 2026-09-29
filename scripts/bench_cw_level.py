@@ -48,6 +48,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import numpy as np
@@ -268,26 +269,55 @@ class Airspy:
         dev.discard_buffered()
         dev.read_sync(int(settle * self.rate))       # settle, discard
         registers = ''
+        # Reading the R820T2 register file is a series of slow USB control
+        # transfers.  RX must remain active so the values include the tuner's
+        # start-up calibration, but read_sync's queue must not accumulate
+        # several seconds of samples while no consumer is running.
+        stop_drain = threading.Event()
+
+        def drain_setup_samples():
+            while not stop_drain.wait(0.05):
+                dev.discard_buffered()
+
+        dev.discard_buffered()
+        drainer = threading.Thread(target=drain_setup_samples, daemon=True)
+        drainer.start()
         try:
             regs = dev.read_tuner_registers()
             registers = ' '.join(f"0x{r:02X}=0x{v:02X}"
                                  for r, v in sorted(regs.items()))
         except Exception as exc:
             registers = f'unavailable: {exc}'
-        dropped = 0
+        finally:
+            stop_drain.set()
+            drainer.join()
+
+        # Establish a clean measurement boundary.  Counters are cumulative,
+        # so snapshot them rather than resetting HAL diagnostics.
+        dev.discard_buffered()
+        drop_baseline = dev.dropped_samples
+        last_dropped = drop_baseline
         remaining = int(seconds * self.rate)
         seg = acc.nfft * 8
         while remaining > 0:
+            # A loss may arrive between read_sync calls.  Clear its queued
+            # zero-filled gap before asking for measurement data.
+            current_dropped = dev.dropped_samples
+            if current_dropped != last_dropped:
+                dev.discard_buffered()
+                last_dropped = current_dropped
             n = min(seg, remaining)
-            before = dev.dropped_samples
             raw = dev.read_sync(n)
             remaining -= n
-            lost = dev.dropped_samples - before
-            if lost:
-                # Zero-filled gaps would bias the power low: drop them.
-                dropped += lost
+            current_dropped = dev.dropped_samples
+            if current_dropped != last_dropped:
+                # A gap may be in this block or queued behind it.  Reject the
+                # block and clear the queue so neither can bias power low.
+                dev.discard_buffered()
+                last_dropped = current_dropped
                 continue
             acc.add(raw_to_complex(raw, bit_depth=12))
+        dropped = dev.dropped_samples - drop_baseline
         return {'dropped': dropped, 'registers': registers, 'notes': ''}
 
     def close(self):
@@ -412,6 +442,9 @@ def _print_row(row):
     if row['near_fs_frac'] > 1e-4:
         print("  WARNING: samples near full scale -- the receiver is "
               "clipping at this level", flush=True)
+    if row.get('dropped'):
+        print("  WARNING: samples were dropped during the measurement; "
+              "affected blocks were excluded from PSD statistics", flush=True)
 
 
 def _settings(args):

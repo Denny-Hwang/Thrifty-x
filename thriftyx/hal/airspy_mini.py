@@ -874,12 +874,15 @@ class AirspyMiniDevice(SDRDevice):
         """Drop queued samples so the next read_sync() returns fresh data.
 
         For live displays that read occasionally and want the newest
-        samples rather than a backlog.
+        samples rather than a backlog.  Cumulative drop counters are
+        deliberately preserved so callers can take before/after snapshots.
         """
         with self._stream_lock:
             self._stream_chunks.clear()
             self._stream_total = 0
             self._stream_mem = 0
+            self.last_read_time = None
+            self._buffer_full_logged = False
             self._stream_event.clear()
 
     def _start_rx(self) -> None:
