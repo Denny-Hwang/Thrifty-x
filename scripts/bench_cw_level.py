@@ -522,12 +522,42 @@ def append_row(path, row):
     if directory:
         os.makedirs(directory, exist_ok=True)
     new = not os.path.exists(path) or os.path.getsize(path) == 0
+    if not new:
+        _upgrade_header(path)
     with open(path, 'a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS,
                                 extrasaction='ignore')
         if new:
             writer.writeheader()
         writer.writerow({k: _fmt(row.get(k, '')) for k in CSV_FIELDS})
+
+
+def _upgrade_header(path):
+    """Bring an existing CSV's header up to CSV_FIELDS before appending.
+
+    A file from an older version of this script has a prefix of the
+    current columns (new ones are only ever appended): it is rewritten
+    with the full header, its rows keeping empty cells for the new
+    columns, so appended rows match the header.  Any other header is
+    refused rather than mixed with rows of a different layout.
+    """
+    with open(path, newline='') as f:
+        header = next(csv.reader(f), [])
+    fields = list(CSV_FIELDS)
+    if header == fields:
+        return
+    if not header or header != fields[:len(header)]:
+        raise SystemExit(
+            f"{path}: its columns are not this script's CSV layout; "
+            "write to a new file (--out)")
+    with open(path, newline='') as f:
+        rows = list(csv.DictReader(f))
+    tmp = f'{path}.tmp'
+    with open(tmp, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fields, restval='')
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(tmp, path)
 
 
 def _fmt(value):

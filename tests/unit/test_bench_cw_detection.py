@@ -12,6 +12,7 @@ excess is taken over the noise around the tone, and its sigma counts
 the Hann window's bin correlation and the noise estimate's own error.
 """
 
+import csv
 import importlib.util
 import math
 from pathlib import Path
@@ -149,3 +150,30 @@ def test_too_few_local_bins_falls_back_to_the_noise_band():
 
 def test_csv_carries_the_detection_diagnostics():
     assert bench.CSV_FIELDS[-2:] == ('local_noise_dbfs_hz', 'excess_sigma')
+
+
+def test_appending_to_an_older_csv_upgrades_its_header(tmp_path):
+    """Rows from before the new columns keep them empty; nothing is lost."""
+    path = tmp_path / 'r.csv'
+    old_fields = bench.CSV_FIELDS[:-2]
+    path.write_text(','.join(old_fields) + '\n'
+                    + ','.join('old' if f == 'unit' else ''
+                               for f in old_fields) + '\n')
+    bench.append_row(str(path), {'unit': 'new', 'excess_sigma': 7.25,
+                                 'local_noise_dbfs_hz': -120.5})
+    with open(path, newline='') as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0]) == list(bench.CSV_FIELDS)
+    assert [r['unit'] for r in rows] == ['old', 'new']
+    assert rows[0]['excess_sigma'] == ''
+    assert rows[1]['excess_sigma'] == '7.250'
+    assert rows[1]['local_noise_dbfs_hz'] == '-120.500'
+    assert not any(None in r for r in rows)
+
+
+def test_appending_to_a_foreign_csv_is_refused(tmp_path):
+    path = tmp_path / 'other.csv'
+    path.write_text('a,b\n1,2\n')
+    with pytest.raises(SystemExit):
+        bench.append_row(str(path), {'unit': 'x'})
+    assert path.read_text() == 'a,b\n1,2\n'
