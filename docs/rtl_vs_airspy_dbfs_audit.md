@@ -434,30 +434,40 @@ device and setting would be needed first, plus a check that the offset
 is gain-code independent (measurement 2). Until then any dBm figure
 would rest on an assumption.
 
-## 12. Secondary: RF-OFF detections (separate issue)
+## 12. Secondary: RF-OFF detections (fixed separately)
 
-This issue is independent of the dBFS scale. `detected` is
-`excess > 5·σ`, with `σ = n0·df·√(bins/k)`, and it is invariant to any
-scale factor (TEST). Two properties make it sensitive to spectral shape
-rather than to spurs alone:
+This issue is independent of the dBFS scale: the detection test is
+invariant to any scale factor (TEST). The detector has since been
+changed; see the follow-up PR and `tests/unit/test_bench_cw_detection.py`.
+The findings that led to the change:
 
-- With k = 381–732 segments (5 s), 5σ is only a 6–9 % (≈ 0.3–0.4 dB)
-  excess of the local noise over the 50–300 kHz median.
-- The peak is taken as the maximum of ~40–80 bins (±3 kHz), and adjacent
-  Hann bins are correlated (power correlation 4/9). That biases the
-  excess upward.
+- The old rule was `excess > 5·σ`, with the excess taken over the
+  **50–300 kHz** noise median and `σ = n0·df·√(bins/k)`, which assumes
+  independent bins. Hann bins are correlated (power correlation 4/9
+  between neighbours, 1/36 two apart). The true σ of a 9-bin sum is
+  about 1.35× larger.
+- With k = 381–732 segments (5 s), 5σ was only a 6–9 % (≈ 0.3–0.4 dB)
+  excess. The peak is also the maximum of ~40–80 bins (±3 kHz), which
+  biases the excess upward.
+- Simulated through the real windowed FFT (exact bin correlation) at
+  2.4 MSPS, k = 732: flat white noise gave 0/20 detections, but a
+  noise floor +0.3 dB higher within ±40 kHz of centre gave **20/20**.
+  So did a floor +1 dB at DC falling to 0 dB at 60 kHz. A floor near
+  centre a few tenths of a dB above the 50–300 kHz band is therefore
+  enough to explain 6/6 at R2 10M. The actual R2 10M spectrum was not
+  available, so which structure it has (raised floor or skirt, or a
+  spur inside the search window) is still INFERRED.
 
-Simulated, with independent Gamma bins: flat white noise gave 0/300
-false detections at 2.4, 2.5 and 10 MSPS. A +0.2 dB bump within ±40 kHz
-of centre gave 8–29 %, and +0.5 dB gave ~100 %. So 6/6 at R2 10M means
-the R2 10M spectrum near centre (12–25 kHz) sits a few tenths of a dB or
-more above its 50–300 kHz median. Candidate causes are the DC/LO
-residue's skirt, 1/f or phase noise near the fs/4 IF, or a spur
-(INFERRED). **Not changed here.** A detector fix (a local noise
-reference, a false-alarm threshold for a max over N correlated bins)
-belongs in its own PR. So does an RF-OFF spectrum dump to identify the
-structure. It does not affect the dBFS conclusions, which use only
-RF-ON rows that are far above noise.
+The detector now measures the excess over the noise **around** the
+tone: the median of a ring on each side of the search window,
+interpolated in dB to the tone bins. Its σ counts the window's bin
+correlation and the local estimate's own error. In the same simulations
+z is N(0, 1) on white noise, and raised or sloped floors give no
+detections. A C/N0 of ~22 dB-Hz is still detected at 2.4 MSPS / 5 s.
+A narrowband spur inside the search window is real power and is still
+reported. The new `excess_sigma` and `local_noise_dbfs_hz` columns, and
+the RF-OFF table of `scripts/bench_cw_audit.py`, show which of the two
+an RF-off detection is.
 
 ## 13. Secondary: intermittent R2 dropped samples (separate issue)
 

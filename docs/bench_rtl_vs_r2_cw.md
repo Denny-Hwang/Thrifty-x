@@ -267,7 +267,7 @@ python scripts/bench_cw_level.py report bench/run1/results.csv \
 | `usb_open error -3` / `airspy_open() failed` | permissions: udev rule (7.2) or `sudo chmod 666 /dev/bus/usb/*/*`; device attached to WSL? |
 | `rtl_sdr did not report a manual gain` | old rtl_sdr; check `rtl_sdr -h`, reinstall `rtl-sdr` |
 | No tone detected at any level | generator RF off / wrong frequency (161.315 MHz), DC block orientation, amplifier unpowered |
-| Tone detected with RF OFF | generator leakage or a nearby emitter: check with the terminator |
+| Tone detected with RF OFF | a real narrowband signal in the ±3 kHz search window (generator leakage, a nearby emitter, a receiver spur): check with the terminator. `tone_offset_hz` and `excess_sigma` of the RF-off rows (`scripts/bench_cw_audit.py` lists them) say where it is and how strong; the same offset on every row is a spur. Detection is against the noise around the tone, so a merely raised noise floor near centre no longer reads as a tone |
 | C/N0 drops at high levels | clipping (`*`) or amplifier compression: stop the sweep lower |
 
 ## 11. Keep

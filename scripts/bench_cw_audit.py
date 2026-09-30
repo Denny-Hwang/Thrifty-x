@@ -20,6 +20,12 @@ Printed:
   groups    per unit/rate/tone: rows, carrier slope vs generator level,
             mean frequency error (ppm), dropped-sample incidence,
             RF-OFF detections and noise
+  RF-OFF    every RF-off row: where the strongest bin of the search
+            window was (Hz from centre and from the nominal tone) and,
+            in CSVs from the local-noise detector, the local noise
+            against the 50-300 kHz band and the excess in sigmas.  A
+            detection at the same offset every time is a spur; one
+            whose local noise sits above the band is a raised floor
   vs ref    every non-reference unit/rate/setting against each
             reference setting (default: the rtlsdr rows), paired by
             tone and level: mean and sigma of the carrier,
@@ -62,7 +68,8 @@ def load(paths):
                              else float(row['tx_dbm']))
                 for key in ('rate', 'tone_hz', 'center_hz', 'carrier_dbfs',
                             'noise_dbfs_hz', 'cn0_dbhz', 'freq_error_ppm',
-                            'near_fs_frac'):
+                            'near_fs_frac', 'tone_offset_hz',
+                            'local_noise_dbfs_hz', 'excess_sigma'):
                     row[key] = _float(row.get(key))
                 row['detected'] = str(row.get('detected', '')).strip() == '1'
                 dropped = str(row.get('dropped', '')).strip()
@@ -210,6 +217,26 @@ def main(argv=None):
               f"{sum(r['dropped'] for r in items)} | "
               f"{sum(1 for r in off if r['detected'])}/{len(off)} | "
               f"{_mean([r['noise_dbfs_hz'] for r in off]):.2f} |")
+
+    off_rows = sorted((r for r in rows if r['tx'] is None),
+                      key=lambda r: group_key(r) + (r.get('time', ''),))
+    if off_rows:
+        print("\n### RF-OFF rows\n")
+        print("| unit | rate | tone | setting | detected | peak Hz | "
+              "peak − tone Hz | noise dB/Hz | local − noise dB | "
+              "excess σ |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
+        for r in off_rows:
+            nominal = r['tone_hz'] - r['center_hz']
+            local = r['local_noise_dbfs_hz'] - r['noise_dbfs_hz']
+            z = r['excess_sigma']
+            local_txt = '' if math.isnan(local) else f"{local:+.2f}"
+            z_txt = '' if math.isnan(z) else f"{z:.1f}"
+            print(f"| {r['unit']} | {r['rate'] / 1e6:g}M | "
+                  f"{r['tone_hz'] / 1e6:.3f} | {r['setting']} | "
+                  f"{int(r['detected'])} | {r['tone_offset_hz']:.0f} | "
+                  f"{r['tone_offset_hz'] - nominal:+.0f} | "
+                  f"{r['noise_dbfs_hz']:.2f} | {local_txt} | {z_txt} |")
 
     # Comparison identity: (unit, rate, setting).  Settings are never
     # pooled; rate and unit comparisons keep the setting fixed.
