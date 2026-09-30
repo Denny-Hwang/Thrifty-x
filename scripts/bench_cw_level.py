@@ -17,12 +17,20 @@ Per capture (Welch PSD, Hann window, ~150 Hz resolution at every rate):
                    sine on Airspy).  Device-relative: the same RF input
                    reads ~21 dB lower on an Airspy R2 at 0/0/8 than on
                    an RTL-SDR at gain 0 (docs/rtl_vs_airspy_dbfs_audit.md)
-  noise_dbfs_hz    noise density next to the tone (median PSD over the
-                   noise band, corrected to the mean)
+  noise_dbfs_hz    noise density 50-300 kHz from centre (median PSD over
+                   that band, corrected to the mean)
   cn0_dbhz         carrier_dbfs - noise_dbfs_hz: the figure to compare
                    across devices and sample rates
   near_fs_frac     fraction of samples with |I| or |Q| >= 0.98 of full
                    scale (clipping)
+  local_noise_dbfs_hz
+                   noise density around the tone (a ring 3.9-11.9 kHz
+                   either side of it at 2.4 MSPS, interpolated to the
+                   tone bins); the carrier is taken above this
+  excess_sigma     tone-bin excess over that local noise, in standard
+                   deviations; detected = excess_sigma > 5.  With RF
+                   off, a large value at a fixed tone_offset_hz is a
+                   spur, not noise
 The Airspy's R820T2 registers are read and stored with each row; the RTL
 gain is set in *manual* mode (rtl_sdr -g 0 would be AGC), like fastcard.
 
@@ -66,6 +74,15 @@ NOISE_BAND_HZ = (50e3, 300e3)
 # Tone power is integrated over the peak bin +/- this many bins.
 TONE_HALF_WIDTH_BINS = 4
 TONE_SEARCH_HZ = 3e3
+# Detection compares the tone bins with the noise *around* them: the
+# median PSD over a ring this wide on each side, starting just outside
+# the search window (and never closer than DC_GUARD_HZ to the centre).
+LOCAL_NOISE_HZ = 8e3
+DC_GUARD_HZ = 2e3
+# Fewer ring bins than this: fall back to the 50-300 kHz noise band.
+MIN_LOCAL_BINS = 32
+# Detection threshold, in standard deviations of the tone-bin excess.
+DETECT_SIGMA = 5.0
 NEAR_FULL_SCALE = 0.98
 # Refuse sweep steps that would put more than this into the receiver.
 MAX_SDR_INPUT_DBM = -20.0
@@ -76,7 +93,7 @@ CSV_FIELDS = (
     'amp_gain_db', 'loss_db', 'sdr_input_dbm', 'seconds', 'segments',
     'dropped', 'carrier_dbfs', 'noise_dbfs_hz', 'cn0_dbhz', 'detected',
     'tone_offset_hz', 'freq_error_ppm', 'rms_dbfs', 'near_fs_frac',
-    'registers', 'notes')
+    'registers', 'notes', 'local_noise_dbfs_hz', 'excess_sigma')
 
 
 # --------------------------------------------------------------------
@@ -118,13 +135,39 @@ class Accumulator:
             | (np.abs(flat.imag) >= NEAR_FULL_SCALE)))
 
 
+def _bin_power_correlation(window, lags):
+    """|rho_d|**2 of the power in bins d apart, d = 0..lags, for noise.
+
+    Windowed FFT bins of white noise are correlated: rho_d is the
+    normalised DFT of window**2 at lag d (Hann: rho_1 = -2/3, so
+    |rho_1|**2 = 4/9, and |rho_2|**2 = 1/36).
+    """
+    w2 = np.asarray(window, dtype=np.float64) ** 2
+    rho = np.fft.fft(w2)[:lags + 1] / np.sum(w2)
+    return np.abs(rho) ** 2
+
+
+def _median_to_mean(values, k):
+    """Mean of Gamma(k)-distributed bin averages from their median."""
+    return float(np.median(values)) * k / gammaincinv(k, 0.5)
+
+
 def figures(acc, rate, tone_offset_hz, center_hz=None,
             noise_band=NOISE_BAND_HZ, half_width=TONE_HALF_WIDTH_BINS,
-            search_hz=TONE_SEARCH_HZ):
+            search_hz=TONE_SEARCH_HZ, local_hz=LOCAL_NOISE_HZ):
     """Reduce an :class:`Accumulator` to the CSV figures.
 
     PSD units are full-scale power per Hz, so a tone of amplitude A
     integrates to A**2 whatever the rate or FFT length.
+
+    Detection: the power in the peak bin +/- *half_width* bins, less the
+    noise *local* to the tone (the median over a ring of *local_hz* on
+    each side of the search window), against its standard deviation.
+    That deviation counts the correlation of neighbouring window bins
+    and the uncertainty of the local noise estimate.  Neither the
+    50-300 kHz band (``noise_dbfs_hz``) nor an independent-bin sigma is
+    used, because with seconds of averaging a local noise level only a
+    few tenths of a dB above that band would then read as a tone.
     """
     if acc.segments == 0:
         raise ValueError("no complete FFT segment was captured")
@@ -139,16 +182,50 @@ def figures(acc, rate, tone_offset_hz, center_hz=None,
         raise ValueError("noise band lies outside the captured spectrum")
     # A bin averaged over k segments is Gamma(k, mean/k): scale the
     # (spur-robust) median to the mean.
-    n0 = float(np.median(psd[band])) * k / gammaincinv(k, 0.5)
+    n0 = _median_to_mean(psd[band], k)
 
-    search = np.abs(freqs - tone_offset_hz) <= search_hz
-    idx = np.flatnonzero(search)
+    distance = np.abs(freqs - tone_offset_hz)
+    idx = np.flatnonzero(distance <= search_hz)
     peak = int(idx[np.argmax(psd[idx])])
     lo, hi = max(peak - half_width, 0), min(peak + half_width + 1, nfft)
     bins = hi - lo
-    excess = float(np.sum(psd[lo:hi]) * df - n0 * bins * df)
-    sigma = n0 * df * math.sqrt(bins / k)
-    detected = excess > 5 * sigma
+
+    inner = search_hz + (half_width + 2) * df
+    ring = ((distance > inner) & (distance <= inner + local_hz)
+            & (np.abs(freqs) >= DC_GUARD_HZ))
+    rho2 = _bin_power_correlation(acc.window, max(bins, 1))
+    corr_sum = rho2[0] + 2 * np.sum(rho2[1:])
+    below = ring & (freqs < tone_offset_hz)
+    above = ring & (freqs > tone_offset_hz)
+    n_below, n_above = np.count_nonzero(below), np.count_nonzero(above)
+    f_peak = float(np.mean(freqs[lo:hi]))
+    if min(n_below, n_above) >= MIN_LOCAL_BINS // 2:
+        # Each side's median, interpolated in dB to the tone bins: a
+        # noise floor that slopes across the search window (a skirt near
+        # centre) would otherwise bias a peak found on its high side.
+        m_b, m_a = (_median_to_mean(psd[below], k),
+                    _median_to_mean(psd[above], k))
+        f_b, f_a = float(np.mean(freqs[below])), float(np.mean(freqs[above]))
+        w_a = min(max((f_peak - f_b) / (f_a - f_b), 0.0), 1.0)
+        n_local = m_b ** (1 - w_a) * m_a ** w_a
+        # Median of M correlated bins: variance (pi/2) n**2 / (k M_eff).
+        var_ref = math.pi / 2 * n_local ** 2 / k * corr_sum * (
+            (1 - w_a) ** 2 / n_below + w_a ** 2 / n_above)
+    elif np.count_nonzero(ring) >= MIN_LOCAL_BINS:
+        n_local = _median_to_mean(psd[ring], k)
+        var_ref = (math.pi / 2 * n_local ** 2 / k * corr_sum
+                   / np.count_nonzero(ring))
+    else:
+        n_local, var_ref = n0, 0.0
+    # Variance of the sum of *bins* correlated bin powers, each with
+    # variance n**2 / k, plus that of subtracting bins * n_local.
+    pair_weight = bins + 2 * sum((bins - d) * rho2[d]
+                                 for d in range(1, bins))
+    sigma = df * math.sqrt(n_local ** 2 * pair_weight / k
+                           + bins ** 2 * var_ref)
+    excess = float(np.sum(psd[lo:hi]) * df - n_local * bins * df)
+    z = excess / sigma if sigma > 0 else float('inf')
+    detected = z > DETECT_SIGMA
 
     # Parabolic peak interpolation on the log spectrum.
     offset = float(freqs[peak])
@@ -171,6 +248,8 @@ def figures(acc, rate, tone_offset_hz, center_hz=None,
                            if center_hz and detected else float('nan')),
         'rms_dbfs': 10 * math.log10(max(acc.energy / acc.samples, 1e-30)),
         'near_fs_frac': acc.near_fs / acc.samples,
+        'local_noise_dbfs_hz': 10 * math.log10(n_local),
+        'excess_sigma': z,
     }
 
 

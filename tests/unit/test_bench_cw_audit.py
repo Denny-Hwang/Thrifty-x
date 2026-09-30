@@ -130,3 +130,27 @@ def test_gain_settings_are_never_pooled(tmp_path, capsys):
                and 'R2-A' in k) == {'R2-B 10M 0/0/8 − R2-A 10M 0/0/8'}
     assert float(rows['R2-B 10M 0/0/8 − R2-A 10M 0/0/8'][2].split()[0]) \
         == pytest.approx(0.1)
+
+
+def test_rf_off_rows_show_where_the_peak_was(tmp_path, capsys):
+    """RF-off diagnostics: peak offset, local noise vs band, excess."""
+    path = tmp_path / 'off.csv'
+    base = {'unit': 'R2-A', 'device': 'airspy_r2', 'rate': int(10e6),
+            'tone_hz': int(161.315e6), 'center_hz': int(161.3e6),
+            'setting': '0/0/8', 'tx_dbm': '', 'noise_dbfs_hz': -130.0,
+            'near_fs_frac': 0.0}
+    bench.append_row(str(path), dict(base, detected=1,
+                                     tone_offset_hz=16000.0,
+                                     local_noise_dbfs_hz=-129.6,
+                                     excess_sigma=42.0))
+    bench.append_row(str(path), dict(base, detected=0,
+                                     tone_offset_hz=13950.0))
+    audit.main([str(path)])
+    out = capsys.readouterr().out
+    rows = [[c.strip() for c in line.split('|')[1:-1]]
+            for line in out.split('### RF-OFF rows')[1].splitlines()
+            if line.startswith('| R2-A')]
+    assert rows[0][4:] == ['1', '16000', '+1000', '-130.00', '+0.40',
+                           '42.0']
+    # A CSV from before the local-noise detector: those cells stay empty.
+    assert rows[1][4:] == ['0', '13950', '-1050', '-130.00', '', '']
