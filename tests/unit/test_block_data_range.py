@@ -3,9 +3,11 @@
 libairspy's INT16_IQ path left-shifts each 12-bit ADC code by 4 and
 converts the real stream to I/Q with a unity-gain half-band filter, so a
 tone of A ADC codes arrives as |I + jQ| = 8 * A (measured on libairspy's
-own code by scripts/airspy_scale_probe.sh: 8.08 per code).  ADC full
+own code by scripts/airspy_scale_probe.sh: 8.075 per code).  ADC full
 scale (2048 codes) is therefore int16 16384, and block_data divides by
-16384 so it maps to |z| = 1, the same as RTL-SDR's (x - 127.4) / 128.
+16384 so it maps to |z| = 1, as RTL-SDR's (x - 127.4) / 128 does for its
+8-bit output word.  Equal |z| is not equal RF input across device types
+(docs/rtl_vs_airspy_dbfs_audit.md).
 
 The synthetic captures below are specified in ADC codes and converted
 with that x8 gain, so a divisor that drifts from the libairspy scale

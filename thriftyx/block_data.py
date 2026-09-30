@@ -28,17 +28,28 @@ logger = logging.getLogger(__name__)
 _V2_HEADER_PREFIX = '#v2 '
 
 # int16 value of a full-scale Airspy ADC tone.  libairspy's INT16_IQ path
-# left-shifts each 12-bit ADC code by 4 (``(code - 2048) << 4``, full
-# scale +/-32768) and then converts the real stream to I/Q at half the
-# rate with a unity-gain half-band filter.  Real-to-complex conversion
-# halves a tone's amplitude, so a tone of A ADC codes arrives as
-# |I + jQ| = 8 * A: full scale (2048 codes) is 16384.  Running
-# libairspy's own convert_samples_int16 + iqconverter_int16_process on a
-# 256-code tone gives mean |I + jQ| = 2068 (8.08 per code), confirming this
-# (reproduce with scripts/airspy_scale_probe.sh).  Dividing by 16384
-# puts Airspy full scale at |z| = 1, the same as RTL-SDR's
-# ``(x - 127.4) / 128``, so absolute magnitudes, noise figures and
-# threshold constants mean the same on both.
+# left-shifts each 12-bit ADC code by 4 (``(code - 2048) << 4``) and
+# converts the real stream to I/Q at half the rate (an fs/4 shift and a
+# half-band decimator of unity DC gain).  A real tone keeps only its
+# positive-frequency half, so a tone of A ADC codes arrives as
+# |I + jQ| = 8 * A and ADC full scale (2048 codes) is 16384.  What is
+# left over is small: remove_dc()'s gain at the fs/4 IF (+0.088 dB) and
+# the half-band taps' DC gain (-0.007 dB).  libairspy's own code gives
+# 8.075 per code (+0.081 dB) at the CW bench's tone at both 2.5 and
+# 10 MSPS (scripts/airspy_scale_probe.sh).
+#
+# Scope of the normalisation: dividing by 16384 puts a full-scale sine
+# at the Airspy's *ADC* at |z| = 1, and RTL-SDR's ``(x - 127.4) / 128``
+# puts the RTL2832U's 8-bit *output word* (after its own ADC and DDC) at
+# |z| = 1.  Both are device-relative digital full scales.  Neither says
+# which RF input power reaches full scale: that depends on each
+# receiver's IF path, ADC range and (RTL) DDC scaling, which differ.  At
+# matched R820T gain codes (RTL gain 0, Airspy 0/0/8) the same RF input
+# measured about 21 dB lower in Airspy dBFS than in RTL dBFS, with C/N0
+# within about 1-1.6 dB (docs/rtl_vs_airspy_dbfs_audit.md).  So signal
+# levels, noise levels and absolute threshold constants do not carry over
+# between device types; SNR, C/N0 and SNR-relative thresholds (the
+# default 15*snr) do.
 AIRSPY_INT16_FULL_SCALE = 16384.0
 
 

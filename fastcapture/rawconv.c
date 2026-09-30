@@ -33,9 +33,11 @@ void rawconv_to_complex(rawconv_t *rawconv,
      * by 4 and converts the real stream to I/Q with a unity-gain
      * half-band filter, which halves a tone's amplitude: a tone of A ADC
      * codes arrives as |I + jQ| = 8 * A, so ADC full scale is 16384.
-     * Dividing by 16384 maps full scale to |z| = 1, like RTL-SDR's
-     * (val - 127.4) / 128.  Must match AIRSPY_INT16_FULL_SCALE in
-     * thriftyx/block_data.py (a power of two, so both are bit-exact).
+     * Dividing by 16384 maps a full-scale ADC sine to |z| = 1.  This is
+     * the Airspy's own digital full scale; it does not make levels equal
+     * to RTL-SDR's at the same RF input (docs/rtl_vs_airspy_dbfs_audit.md).
+     * Must match AIRSPY_INT16_FULL_SCALE in thriftyx/block_data.py (a
+     * power of two, so both are bit-exact).
      */
     for (size_t i = 0; i < len; ++i) {
         output[i].real = input[2*i] / 16384.0f;

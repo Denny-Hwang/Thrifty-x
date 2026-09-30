@@ -20,8 +20,8 @@ reduces it, the same way for every receiver, to:
 | Figure | Meaning | Compare across devices? |
 |---|---|---|
 | `cn0_dbhz` | carrier-to-noise density, dB-Hz (Welch PSD, ~150 Hz bins, noise 50–300 kHz from centre) | **yes**: independent of sample rate, FFT size and ADC scale; this is the sensitivity figure |
-| `carrier_dbfs` | tone power, dB below ADC full scale | only as gain structure (8-bit vs 12-bit, different analog headroom) |
-| `noise_dbfs_hz` | noise density next to the tone | with RF off: the receiver's (or amplifier's) noise floor |
+| `carrier_dbfs` | tone power, dB below the device's own digital full scale | **no** as RF level: full scale is device-relative (RTL: 8-bit output word; Airspy: ADC sine). R2 0/0/8 reads ~21 dB below RTL gain 0 for the same input ([audit](rtl_vs_airspy_dbfs_audit.md)); compare only within one device type |
+| `noise_dbfs_hz` | noise density next to the tone | within one device type; across types only through C/N0 (same device-relative scale as the carrier) |
 | `near_fs_frac` | samples within 2 % of full scale | clipping flag: rows above 1e-5 are excluded |
 | `registers` | the R2's R820T2 registers during the capture | check against `scripts/r820t_register_model.py` |
 
@@ -235,6 +235,11 @@ python scripts/r820t_register_model.py -f 161.3M --airspy-rate 10M \
 ```
 
 ## 9. Report and reading it
+
+Why R2 carrier dBFS sits ~21 dB below the RTL's at matched gain codes (and
+why that is not a sensitivity loss): [dBFS audit](rtl_vs_airspy_dbfs_audit.md).
+Recompute the cross-device statistics from any set of CSVs with
+`python scripts/bench_cw_audit.py bench/<run>/*.csv`.
 
 ```bash
 python scripts/bench_cw_level.py report bench/run1/results.csv \

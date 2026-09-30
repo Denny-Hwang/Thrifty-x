@@ -119,10 +119,15 @@ in the direction of correctness:
 | **Airspy Mini** | 3 MSPS / 6 MSPS | 24–1800 MHz | 12-bit signed | Optional (`--packing`) |
 | **Airspy R2** | 2.5 MSPS / 10 MSPS | 24–1800 MHz | 12-bit signed | Optional — useful at 10 MSPS on USB 2.0 |
 
-**Sample scale.** Every device is normalised so ADC full scale is
-`|z| = 1`: RTL-SDR as `(x − 127.4) / 128`, Airspy int16 as `x / 16384`
-(libairspy's INT16_IQ output is ×8 per ADC code; see
-`AIRSPY_INT16_FULL_SCALE` in `thriftyx/block_data.py`). Airspy results
+**Sample scale.** Every device is normalised so its own digital full
+scale is `|z| = 1`: RTL-SDR as `(x − 127.4) / 128` (the 8-bit output
+word), Airspy int16 as `x / 16384` (a full-scale ADC sine; libairspy's
+INT16_IQ output is ×8 per ADC code, see `AIRSPY_INT16_FULL_SCALE` in
+`thriftyx/block_data.py`). These full scales are device-relative: the
+same RF input reads about 21 dB lower on an Airspy R2 at 0/0/8 than on
+an RTL-SDR at gain 0, at nearly the same C/N0
+([dBFS audit](docs/rtl_vs_airspy_dbfs_audit.md)). Compare devices by
+SNR or C/N0, not by absolute levels. Airspy results
 from before this was corrected used `/2048`, so their absolute
 energy/noise columns are 8× larger; SNRs are unchanged.
 

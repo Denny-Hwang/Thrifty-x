@@ -11,9 +11,12 @@ external amplifier, into one receiver at a time; each capture is
 reduced to rate-independent figures and appended to a CSV.
 
 Per capture (Welch PSD, Hann window, ~150 Hz resolution at every rate):
-  carrier_dbfs     tone power, dB relative to ADC full scale (a
-                   full-scale tone, |z| = 1 after thriftyx's
-                   raw_to_complex scaling, is 0 dBFS on both devices)
+  carrier_dbfs     tone power, dB relative to the device's own digital
+                   full scale (|z| = 1 after thriftyx's raw_to_complex:
+                   the 8-bit output word on RTL-SDR, a full-scale ADC
+                   sine on Airspy).  Device-relative: the same RF input
+                   reads ~21 dB lower on an Airspy R2 at 0/0/8 than on
+                   an RTL-SDR at gain 0 (docs/rtl_vs_airspy_dbfs_audit.md)
   noise_dbfs_hz    noise density next to the tone (median PSD over the
                    noise band, corrected to the mean)
   cn0_dbhz         carrier_dbfs - noise_dbfs_hz: the figure to compare
