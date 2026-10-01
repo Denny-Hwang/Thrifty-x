@@ -178,10 +178,6 @@ class N9310A:
 
         self.clear_status()
         self._write(":RFOutput:STATe OFF")
-        self._write(":MOD:STATe OFF")
-        self._write(":SWEep:RF:STATe OFF")
-        self._write(":SWEep:LF:STATe OFF")
-        self._write(":SWEep:AMPLitude:STATe OFF")
         self._write(f":FREQuency:CW {frequency_hz:.12g} Hz")
         self._write(f":AMPLitude:CW {power_dbm:.12g} dBm")
 
