@@ -12,6 +12,8 @@
 #   TONE [161.315M]           N9310A CW frequency
 #   LEVELS [off,-125:-55:5]   generator levels, dBm
 #   AMP_GAIN [20]             external amplifier gain, dB (logged)
+#   AMP_POWER [external]       e.g. "receiver bias tee" or "external supply"
+#   RTL_BIAS_TEE_NOTE [hardware-dependent]  metadata only; script cannot switch it
 #   LOSS [0]                  cable/attenuator loss, dB (logged)
 #   CAPTURE_SECONDS [5]
 #   FREQ [161.3M]             receiver tuned centre
@@ -44,6 +46,7 @@ R2_RATES=${R2_RATES:-${R2_RATE:-10M}}
 PACKING=${PACKING:-1}
 R2_BIAS_TEE=${R2_BIAS_TEE:-0}
 AMP_POWER=${AMP_POWER:-external}
+RTL_BIAS_TEE_NOTE=${RTL_BIAS_TEE_NOTE:-hardware-dependent; not software controlled}
 RUN=${RUN:-run1}
 UNITS=${UNITS:-RTL R2-A R2-B}
 GENERATOR_MODE=${GENERATOR_MODE:-auto}
@@ -77,6 +80,9 @@ bias_tee=()
 if [[ "${R2_BIAS_TEE}" == 1 ]]; then
     bias_tee=(--bias-tee)
     echo "WARNING: Airspy bias tee ENABLED; verify the RF chain is DC-safe."
+    if [[ "${AMP_POWER}" == "external" ]]; then
+        echo "WARNING: AMP_POWER is still external. If this bias tee powers the amplifier, set AMP_POWER=receiver-bias-tee for correct metadata."
+    fi
 elif [[ "${R2_BIAS_TEE}" != 0 ]]; then
     echo "R2_BIAS_TEE must be 0 or 1" >&2
     exit 2
@@ -112,6 +118,7 @@ echo " R2 rates        : ${R2_RATES}"
 echo " R2 stages       : ${R2_STAGES}"
 echo " capture/setting : ${SECONDS_PER} s"
 echo " amp gain / loss : ${AMP_GAIN} / ${LOSS} dB"
+echo " amp power       : ${AMP_POWER}"
 echo " output          : ${OUT}"
 echo "=================================================================="
 if [[ "${CONFIRM_SETTINGS}" == 1 ]]; then
@@ -141,7 +148,7 @@ mkdir -p "bench/${RUN}"
     echo "r2_gain_stages=${R2_STAGES}"
     echo "r2_a_serial=${R2_A_SERIAL}"
     echo "r2_b_serial=${R2_B_SERIAL}"
-    echo "rtl_bias_tee=off (not controlled by this script)"
+    echo "rtl_bias_tee=${RTL_BIAS_TEE_NOTE}"
     echo "librtlsdr=$(ldconfig -p 2>/dev/null | grep -m1 'librtlsdr.so' | awk '{print $NF}')"
     if [[ "${GENERATOR_MODE}" == auto ]]; then
         python scripts/n9310a_control.py --resource "${N9310A_RESOURCE}" status \
