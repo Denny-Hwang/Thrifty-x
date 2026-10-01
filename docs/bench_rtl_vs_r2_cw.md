@@ -61,7 +61,7 @@ script stops if `rtl_sdr` reports AGC.
 - **DC block(s)** (inner/outer), SMA/N adapters, one fixed cable to the
   receiver, optional fixed attenuator
 - 50 Ω SMA terminator (noise reference)
-- RTL-SDR: Nooelec NESDR SMArt v5 (RTL2832U + R820T2, TCXO)
+- RTL-SDR: Nooelec NESDR SMArTee-family unit used in this bench (RTL2832U + R820T2, TCXO; hardware bias-tee behavior must be recorded)
 - Airspy R2 unit A (0x637862DC2E602DD7) and unit B (0xB01861DC393A891F)
 - Windows laptop with WSL2 (Ubuntu), USB 2.0/3.0 port, powered USB hub
   optional
@@ -71,19 +71,29 @@ script stops if `rtl_sdr` reports AGC.
 - Receiver input stays below **−20 dBm** (the script refuses steps above
   it; both receivers are damaged around +10 dBm).  Check the
   amplifier's output P1dB too.
-- Put a **DC block** between the generator and the amplifier, and
-  between the amplifier and any receiver whose bias tee could be on.
-  The R2 has a software bias tee (off unless `--bias-tee`); if your
-  NESDR has one, keep it off too (the scripts never switch the RTL's on).
-  Pass `--bias-tee` to the R2 only if the amplifier is powered through
-  the coax, and then power it the same way for the RTL.
+- Choose one amplifier-power topology and use it consistently. If the
+  amplifier is powered from the **receiver-side bias tee**, there must be
+  a DC path from receiver to amplifier (so do not put a DC block between
+  those two points). If the amplifier is powered externally, isolate any
+  receiver-side bias voltage with a DC block so the amplifier is not
+  double-powered.
+- The Airspy R2 bias tee is software switched. RTL-SDR bias-tee behavior is
+  hardware-dependent and cannot be switched by this script; SMArTee-family
+  units can have an always-on bias output. Record the actual condition with
+  `AMP_POWER` and `RTL_BIAS_TEE_NOTE`.
+- Do not assume equal bias-tee current capability across receivers. Verify
+  the amplifier current requirement before using receiver bias power.
 - Change cables only with the generator's RF **OFF**.
 
 ## 5. Wiring
 
 ```
-N9310A RF OUT ─ DC block ─ [atten. optional] ─ AMP in ─ AMP out ─ DC block ─ cable ─ receiver (one at a time)
-                                                   └─ amplifier supply (own PSU, or receiver bias tee)
+Receiver-bias-powered amplifier:
+N9310A RF OUT ─ [DC-safe input / DC block as required] ─ AMP ─ cable ─ receiver bias tee
+
+Externally powered amplifier:
+N9310A RF OUT ─ AMP ─ DC block ─ cable ─ receiver
+                   └─ external amplifier supply
 ```
 
 Use the **same** chain for every receiver; move only the receiver end
@@ -297,3 +307,11 @@ python scripts/bench_cw_level.py report bench/run1/results.csv \
 `bench/<run>/` (CSV, run_info, report, plot), the amplifier model and
 settings, cable/attenuator losses, generator and receiver serials, room
 temperature, and photos of the chain.
+
+### Bias-tee powered amplifier metadata
+
+When the inline amplifier is powered from the receiver-side bias tee, set
+`AMP_POWER="receiver bias tee"`. The script now records RTL bias behavior as
+hardware-dependent instead of claiming it is off. Use
+`RTL_BIAS_TEE_NOTE="always-on (NESDR SMArTee)"` for the current RTL bench
+unit.
