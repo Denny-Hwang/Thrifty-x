@@ -47,13 +47,19 @@ def _new_resource_manager() -> Any:
 def discover_n9310a(resource_manager: Any | None = None) -> str:
     """Return the sole connected N9310A VISA resource.
 
-    Restrict discovery to USB INSTR resources so PyVISA-py does not also
-    probe TCP/IP backends (and therefore does not require psutil/zeroconf).
+    Enumerate resources using the same unfiltered PyVISA-py call validated
+    against the physical N9310A, then filter by its USB VID/PID.  Some
+    pyvisa-py versions do not return the USBTMC resource when a VISA query
+    expression is supplied to list_resources().
     """
     owned = resource_manager is None
     rm = resource_manager or _new_resource_manager()
     try:
-        resources = tuple(rm.list_resources("USB?*::INSTR"))
+        # TCP/IP discovery warnings are irrelevant to this USB-only lookup.
+        # Keep the validated unfiltered call, then filter by USB VID/PID.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r"^TCPIP:.*")
+            resources = tuple(rm.list_resources())
         matches = [r for r in resources if _RESOURCE_TOKEN in r]
         if not matches:
             raise N9310AError(
