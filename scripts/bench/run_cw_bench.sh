@@ -26,7 +26,7 @@ set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "${REPO}"
-if [[ -f .venv/bin/activate ]]; then
+if [[ -z "${VIRTUAL_ENV:-}" && -f .venv/bin/activate ]]; then
     # shellcheck disable=SC1091
     . .venv/bin/activate
 fi
