@@ -11,6 +11,7 @@ it; opening a generator does.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
