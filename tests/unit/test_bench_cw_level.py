@@ -216,6 +216,10 @@ def test_cw_bench_script_bias_tee_switch(tmp_path, bias_tee, expected):
         'RUN': run,
         'UNITS': 'R2-A',
         'R2_BIAS_TEE': bias_tee,
+        # This test isolates receiver CLI wiring; automatic N9310A
+        # orchestration is covered in test_bench_cw_auto.py.
+        'GENERATOR_MODE': 'manual',
+        'CONFIRM_SETTINGS': '0',
     }
     try:
         subprocess.run([repo / 'scripts/bench/run_cw_bench.sh'], cwd=repo,
