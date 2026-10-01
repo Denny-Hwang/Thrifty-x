@@ -52,7 +52,8 @@ All documentation is in English.
 | [rpi/installation_pi5.md](rpi/installation_pi5.md) | Raspberry Pi 5 + Bookworm installation |
 | [docs/rpi5_runbook.md](docs/rpi5_runbook.md) | Pi 5 operational runbook |
 | [docs/rpi5_validation_checklist.md](docs/rpi5_validation_checklist.md) | Pi 5 acceptance/validation checklist |
-| [docs/bench_rtl_vs_r2_cw.md](docs/bench_rtl_vs_r2_cw.md) | Bench procedure: RTL-SDR vs Airspy R2 CW level behind an external amplifier (generator setup, WSL laptop, sweep, report) |
+| [docs/bench_rtl_vs_r2_cw.md](docs/bench_rtl_vs_r2_cw.md) | Bench procedure: RTL-SDR vs Airspy R2 CW level behind an external amplifier (automated generator sweep, WSL laptop, report) |
+| [docs/n9310a_usb_control.md](docs/n9310a_usb_control.md) | N9310A USB/WSL/PyVISA setup, validation, SCPI control and automated bench operation |
 | [docs/design/](docs/design/) | Design proposals for features not yet built |
 
 Reviews, investigations and their findings are recorded in pull requests
@@ -157,6 +158,7 @@ Optional Python extras (defined in `pyproject.toml`):
 |-------|------|-----------|
 | `analysis` | `matplotlib>=3.6` | You want `scope`, `analyze_toads`, `analyze_beacon`, `analyze_tdoa`, or the matplotlib fallback of `analyze_detect` |
 | `gui` | `matplotlib>=3.6` + `PyQt5>=5.15` | You want the **unified Qt viewer** for `analyze_detect` (PySide6 is also accepted at runtime if installed separately) |
+| `instrument` | `pyvisa` + `pyvisa-py` + `pyusb` | You want USB/SCPI control of the N9310A bench signal generator |
 | `fft` | `pyfftw>=0.13` | Faster FFT in the capture loop (notably on Raspberry Pi 5) |
 | `dev` | `pytest>=7.0`, `pytest-cov`, `mypy`, `ruff` | Running the test suite and linters |
 | `all` | All of the above | Full developer install |
