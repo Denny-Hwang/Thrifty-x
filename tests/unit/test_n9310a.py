@@ -59,8 +59,8 @@ class FakeRM:
         self.opened = []
         self.closed = False
 
-    def list_resources(self, query):
-        assert query == 'USB?*::INSTR'
+    def list_resources(self, query=None):
+        assert query is None
         return self.resources
 
     def open_resource(self, resource):
