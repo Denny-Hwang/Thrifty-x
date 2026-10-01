@@ -19,8 +19,7 @@ attached successfully but `/dev/usbtmc0` is absent.
 
 The N9310A commands used here are documented in the Keysight N9310A User's
 Guide / Quick Start Guide: `:FREQuency:CW`, `:AMPLitude:CW`,
-`:RFOutput:STATe`, `:MOD:STATe`, sweep-state commands and
-`:SYSTem:ERRor?`.
+`:RFOutput:STATe` and `:SYSTem:ERRor?`.
 
 - User's Guide: <https://www.keysight.com/us/en/assets/9018-02136/user-manuals/9018-02136.pdf>
 - Quick Start Guide: <https://www.keysight.com/zz/en/assets/9018-01586/quick-start-guides/9018-01586.pdf>
@@ -209,3 +208,17 @@ sweep exits, including exceptions and Ctrl-C.
 | `/dev/usbtmc0` is absent | acceptable on WSL; use PyVISA-py/PyUSB path |
 | `No N9310A found` | `lsusb`, permissions, then `n9310a_control.py discover` |
 | SCPI readback/error failure | stop sweep, leave RF off, run `status` |
+
+
+## 9. Repository experiment scripts
+
+Two uploaded experiment workflows are now maintained under `scripts/bench/`:
+
+- `run_cw_card_compare.sh`: automated N9310A CW level sweep with forced
+  all-block `.card` capture and `cw_card_metrics.py` reduction.
+- `run_external_tx_compare.sh`: external Thrifty transmitter comparison;
+  the source remains fixed and the operator only swaps RTL-SDR to R2.
+  R2 2.5 MSPS -> 10 MSPS is automatic without another hardware prompt.
+
+This keeps generator automation separate from the external-TX experiment,
+where the N9310A is not the RF source.
