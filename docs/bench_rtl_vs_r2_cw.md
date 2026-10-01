@@ -5,6 +5,13 @@ RTL-SDR and Airspy R2 units receive the same CW tone at their lowest
 gain settings, behind an external amplifier, over a range of generator
 levels.
 
+**Current workflow:** the N9310A is controlled automatically over USB by
+default. The operator reviews the sweep plan and swaps only the receiver at
+the fixed RF-chain endpoint. See
+[n9310a_usb_control.md](n9310a_usb_control.md) for USB/WSL setup and SCPI
+validation. Set `GENERATOR_MODE=manual` only when front-panel operation is
+desired.
+
 It repeats the 2026-06-10 gain-equivalence bench (N9310A straight into
 each receiver, correlation SNR; its findings are in that deck) with an
 amplifier in the chain and a plain CW tone, so the figures describe the
@@ -83,7 +90,18 @@ Use the **same** chain for every receiver; move only the receiver end
 of the last cable.  Measure the losses you can (adapters, attenuator)
 into `LOSS`; the receiver input is logged as `tx + AMP_GAIN − LOSS`.
 
-## 6. N9310A settings (front panel)
+## 6. N9310A settings and control
+
+For automatic operation, first verify the connection:
+
+```bash
+python scripts/n9310a_control.py status
+```
+
+The automated bench sets frequency, level and RF output itself with readback
+verification and returns RF to OFF before receiver swaps and on exit.
+
+For manual/fallback operation:
 
 1. **Preset**, then wait for self-test.
 2. **Frequency** → `161.315` **MHz** (the receivers tune 161.300 MHz; the
@@ -184,9 +202,11 @@ AMP_GAIN=20 LOSS=0.5 AMP_POWER="external supply" RUN=run1 \
     scripts/bench/run_cw_bench.sh
 ```
 
-The script asks you to connect RTL, then R2-A, then R2-B, and before
-every level to set the N9310A (`Enter` = measure, `s` = skip,
-`q` = stop this receiver).  Each receiver keeps its settings for the
+The script asks you to connect RTL, then R2-A, then R2-B. In the default
+`GENERATOR_MODE=auto` mode it programs every N9310A level itself; you do
+**not** touch the generator between levels. At receiver-swap prompts the
+script first turns RF OFF. Use `GENERATOR_MODE=manual` to retain the older
+per-level front-panel prompts.  Each receiver keeps its settings for the
 whole sweep; only the generator changes.  Take as long as you like at a
 prompt: the R2 keeps streaming (one RX start per sweep, so the tuner is
 calibrated once) but its driver discards the samples while no capture is
@@ -202,7 +222,9 @@ the receiver order between runs.  Other variables:
 |---|---|---|
 | `UNITS` | `RTL R2-A R2-B` | subset / order |
 | `R2_STAGES` | `0/0/0,0/0/8,0/0/10,0/0/11` | R2 settings per level |
-| `R2_RATE` | `10M` | `2.5M` repeats the June rate check |
+| `R2_RATES` | `10M` | Space-separated rates, e.g. `"2.5M 10M"` to run both automatically |
+| `GENERATOR_MODE` | `auto` | `manual` keeps the old front-panel generator workflow |
+| `N9310A_RESOURCE` | `auto` | Explicit VISA resource when multiple generators are attached |
 | `PACKING` | `1` | 12-bit USB packing (fewer drops over usbip) |
 | `CAPTURE_SECONDS` | `5` | per setting and level |
 | `R2_BIAS_TEE` | `0` | `1` powers the amplifier from the R2's bias tee (DC-safe chain only); keep `0` with a separately powered amplifier |
