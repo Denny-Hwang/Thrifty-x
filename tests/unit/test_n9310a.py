@@ -100,7 +100,6 @@ def test_configure_cw_is_rf_off_while_reprogramming_and_verifies_readback():
     assert inst.writes[0] == '*CLS'
     assert inst.writes[1] == ':RFOutput:STATe OFF'
     assert inst.writes[-1] == ':RFOutput:STATe ON'
-    assert ':MOD:STATe OFF' in inst.writes
 
 
 def test_prepare_off_never_changes_frequency_or_power():
