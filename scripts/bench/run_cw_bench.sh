@@ -156,7 +156,7 @@ mkdir -p "bench/${RUN}"
     fi
 } | tee "bench/${RUN}/run_info.txt"
 
-common=(--freq "${FREQ}" --tone "${TONE}" --levels "${LEVELS}"
+common=(--freq "${FREQ}" --tone "${TONE}" "--levels=${LEVELS}"
         --amp-gain "${AMP_GAIN}" --loss "${LOSS}"
         --seconds "${SECONDS_PER}" --out "${OUT}")
 
