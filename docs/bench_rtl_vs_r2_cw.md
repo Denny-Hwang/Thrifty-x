@@ -359,3 +359,18 @@ Interpretation:
 
 The normal benchmark can also skip Airspy register reads directly with
 R2_SKIP_REGISTERS=1 (or bench_cw_level.py --skip-registers).
+
+
+## Full RTL/R2 equivalence qualification
+
+For the publication-oriented paired validation using 5 dB input steps,
+multiple tone offsets, RTL gain 0, Airspy 2.5/10 MSPS, matched R820T gain-code
+points, held-out input calibration, and separate RTL/R2 hardware-swap runners,
+see `docs/bench/rtl_r2_equivalence_validation.md`.
+
+Run with one shared RUN name:
+
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_rtl_equivalence_validation.sh
+    # swap only RTL -> R2
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_r2_equivalence_validation.sh
+    python scripts/bench/compare_receiver_equivalence.py bench/equiv_YYYYMMDD_01
