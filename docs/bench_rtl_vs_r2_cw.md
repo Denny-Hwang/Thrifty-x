@@ -5,6 +5,13 @@ RTL-SDR and Airspy R2 units receive the same CW tone at their lowest
 gain settings, behind an external amplifier, over a range of generator
 levels.
 
+**Current workflow:** the N9310A is controlled automatically over USB by
+default. The operator reviews the sweep plan and swaps only the receiver at
+the fixed RF-chain endpoint. See
+[n9310a_usb_control.md](n9310a_usb_control.md) for USB/WSL setup and SCPI
+validation. Set `GENERATOR_MODE=manual` only when front-panel operation is
+desired.
+
 It repeats the 2026-06-10 gain-equivalence bench (N9310A straight into
 each receiver, correlation SNR; its findings are in that deck) with an
 amplifier in the chain and a plain CW tone, so the figures describe the
@@ -54,7 +61,7 @@ script stops if `rtl_sdr` reports AGC.
 - **DC block(s)** (inner/outer), SMA/N adapters, one fixed cable to the
   receiver, optional fixed attenuator
 - 50 Ω SMA terminator (noise reference)
-- RTL-SDR: Nooelec NESDR SMArt v5 (RTL2832U + R820T2, TCXO)
+- RTL-SDR: Nooelec NESDR SMArTee-family unit used in this bench (RTL2832U + R820T2, TCXO; hardware bias-tee behavior must be recorded)
 - Airspy R2 unit A (0x637862DC2E602DD7) and unit B (0xB01861DC393A891F)
 - Windows laptop with WSL2 (Ubuntu), USB 2.0/3.0 port, powered USB hub
   optional
@@ -64,26 +71,47 @@ script stops if `rtl_sdr` reports AGC.
 - Receiver input stays below **−20 dBm** (the script refuses steps above
   it; both receivers are damaged around +10 dBm).  Check the
   amplifier's output P1dB too.
-- Put a **DC block** between the generator and the amplifier, and
-  between the amplifier and any receiver whose bias tee could be on.
-  The R2 has a software bias tee (off unless `--bias-tee`); if your
-  NESDR has one, keep it off too (the scripts never switch the RTL's on).
-  Pass `--bias-tee` to the R2 only if the amplifier is powered through
-  the coax, and then power it the same way for the RTL.
+- Choose one amplifier-power topology and use it consistently. If the
+  amplifier is powered from the **receiver-side bias tee**, there must be
+  a DC path from receiver to amplifier (so do not put a DC block between
+  those two points). If the amplifier is powered externally, isolate any
+  receiver-side bias voltage with a DC block so the amplifier is not
+  double-powered.
+- The Airspy R2 bias tee is software switched. RTL-SDR bias-tee behavior is
+  hardware-dependent and cannot be switched by this script; SMArTee-family
+  units can have an always-on bias output. Record the actual condition with
+  `AMP_POWER` and `RTL_BIAS_TEE_NOTE`.
+- Do not assume equal bias-tee current capability across receivers. Verify
+  the amplifier current requirement before using receiver bias power.
 - Change cables only with the generator's RF **OFF**.
 
 ## 5. Wiring
 
 ```
-N9310A RF OUT ─ DC block ─ [atten. optional] ─ AMP in ─ AMP out ─ DC block ─ cable ─ receiver (one at a time)
-                                                   └─ amplifier supply (own PSU, or receiver bias tee)
+Receiver-bias-powered amplifier:
+N9310A RF OUT ─ [DC-safe input / DC block as required] ─ AMP ─ cable ─ receiver bias tee
+
+Externally powered amplifier:
+N9310A RF OUT ─ AMP ─ DC block ─ cable ─ receiver
+                   └─ external amplifier supply
 ```
 
 Use the **same** chain for every receiver; move only the receiver end
 of the last cable.  Measure the losses you can (adapters, attenuator)
 into `LOSS`; the receiver input is logged as `tx + AMP_GAIN − LOSS`.
 
-## 6. N9310A settings (front panel)
+## 6. N9310A settings and control
+
+For automatic operation, first verify the connection:
+
+```bash
+python scripts/n9310a_control.py status
+```
+
+The automated bench sets frequency, level and RF output itself with readback
+verification and returns RF to OFF before receiver swaps and on exit.
+
+For manual/fallback operation:
 
 1. **Preset**, then wait for self-test.
 2. **Frequency** → `161.315` **MHz** (the receivers tune 161.300 MHz; the
@@ -184,9 +212,11 @@ AMP_GAIN=20 LOSS=0.5 AMP_POWER="external supply" RUN=run1 \
     scripts/bench/run_cw_bench.sh
 ```
 
-The script asks you to connect RTL, then R2-A, then R2-B, and before
-every level to set the N9310A (`Enter` = measure, `s` = skip,
-`q` = stop this receiver).  Each receiver keeps its settings for the
+The script asks you to connect RTL, then R2-A, then R2-B. In the default
+`GENERATOR_MODE=auto` mode it programs every N9310A level itself; you do
+**not** touch the generator between levels. At receiver-swap prompts the
+script first turns RF OFF. Use `GENERATOR_MODE=manual` to retain the older
+per-level front-panel prompts.  Each receiver keeps its settings for the
 whole sweep; only the generator changes.  Take as long as you like at a
 prompt: the R2 keeps streaming (one RX start per sweep, so the tuner is
 calibrated once) but its driver discards the samples while no capture is
@@ -202,7 +232,9 @@ the receiver order between runs.  Other variables:
 |---|---|---|
 | `UNITS` | `RTL R2-A R2-B` | subset / order |
 | `R2_STAGES` | `0/0/0,0/0/8,0/0/10,0/0/11` | R2 settings per level |
-| `R2_RATE` | `10M` | `2.5M` repeats the June rate check |
+| `R2_RATES` | `10M` | Space-separated rates, e.g. `"2.5M 10M"` to run both automatically |
+| `GENERATOR_MODE` | `auto` | `manual` keeps the old front-panel generator workflow |
+| `N9310A_RESOURCE` | `auto` | Explicit VISA resource when multiple generators are attached |
 | `PACKING` | `1` | 12-bit USB packing (fewer drops over usbip) |
 | `CAPTURE_SECONDS` | `5` | per setting and level |
 | `R2_BIAS_TEE` | `0` | `1` powers the amplifier from the R2's bias tee (DC-safe chain only); keep `0` with a separately powered amplifier |
@@ -275,3 +307,70 @@ python scripts/bench_cw_level.py report bench/run1/results.csv \
 `bench/<run>/` (CSV, run_info, report, plot), the amplifier model and
 settings, cable/attenuator losses, generator and receiver serials, room
 temperature, and photos of the chain.
+
+### Bias-tee powered amplifier metadata
+
+When the inline amplifier is powered from the receiver-side bias tee, set
+`AMP_POWER="receiver bias tee"`. The script now records RTL bias behavior as
+hardware-dependent instead of claiming it is off. Use
+`RTL_BIAS_TEE_NOTE="always-on (NESDR SMArTee)"` for the current RTL bench
+unit.
+
+
+## 12. R2 10 MSPS intermittent-stream diagnostic
+
+A repeated diagnostic isolates the intermittent broadband bursts observed at
+10 MSPS. The fixed RF chain, bias-tee-powered AIS preamp, 0/0/8 gain, packing,
+generator levels and capture timing are held constant. Only sample rate and
+whether the benchmark issues R820T2 register-read control transfers are
+changed.
+
+Default matrix:
+
+| Condition | Rate | R820T2 reads | Purpose |
+|---|---:|---|---|
+| A_2p5_reg_on | 2.5 MSPS | on | known-clean low-bandwidth control |
+| B_10m_reg_on | 10 MSPS | on | reproduce the disturbed condition |
+| C_10m_reg_off | 10 MSPS | off | isolate register-control transfers from the 10 MSPS stream |
+
+Run three balanced repetitions:
+
+    RUN=r2_stream_diag1 REPEATS=3 PAIRS=3 \
+    AMP_GAIN=20 AMP_POWER="receiver bias tee" \
+    bash scripts/bench/run_r2_stream_diagnostic.sh
+
+Each condition starts with RF OFF, alternates -100/-90 dBm for PAIRS pairs,
+and ends RF OFF. The condition order rotates between repetitions so each
+condition occupies early/middle/late positions.
+
+The diagnostic summary flags RF-ON rows with any reported sample drop, any
+near-full-scale sample, a >3 dB broadband-noise jump, or a >6 dB RMS jump.
+Outputs are written under bench/<RUN>/, including summary.md and combined.csv.
+
+Interpretation:
+- A clean, B disturbed, C clean -> register-read/control-transfer hypothesis
+  supported.
+- A clean, B disturbed, C disturbed -> 10 MSPS streaming/USB/libairspy/usbipd
+  remains the leading path.
+- A disturbed too -> the problem is not confined to 10 MSPS; revisit RF/bias
+  power and general USB health.
+- B and C both clean -> the intermittent failure was not reproduced; increase
+  repetitions before assigning a cause.
+
+The normal benchmark can also skip Airspy register reads directly with
+R2_SKIP_REGISTERS=1 (or bench_cw_level.py --skip-registers).
+
+
+## Full RTL/R2 equivalence qualification
+
+For the publication-oriented paired validation using 5 dB input steps,
+multiple tone offsets, RTL gain 0, Airspy 2.5/10 MSPS, matched R820T gain-code
+points, held-out input calibration, and separate RTL/R2 hardware-swap runners,
+see `docs/bench/rtl_r2_equivalence_validation.md`.
+
+Run with one shared RUN name:
+
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_rtl_equivalence_validation.sh
+    # swap only RTL -> R2
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_r2_equivalence_validation.sh
+    python scripts/bench/compare_receiver_equivalence.py bench/equiv_YYYYMMDD_01
