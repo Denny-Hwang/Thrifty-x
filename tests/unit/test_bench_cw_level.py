@@ -182,6 +182,7 @@ def test_airspy_register_backlog_and_setup_drops_are_discarded():
     receiver = object.__new__(bench.Airspy)
     receiver.device = FakeAirspy()
     receiver.rate = 100
+    receiver.read_registers = True
     acc = Collector()
     result = receiver.capture({'lna': 0, 'mixer': 0, 'vga': 8}, acc,
                               seconds=2, settle=0.1)
@@ -194,6 +195,59 @@ def test_airspy_register_backlog_and_setup_drops_are_discarded():
     assert receiver.device.discards == 1    # the block that saw the drop
     assert receiver.device.resumes == 2     # settle, and the boundary
     assert receiver.device.paused           # idle again between captures
+
+
+def test_airspy_capture_skip_registers_issues_no_control_read():
+    class FakeAirspy:
+        def __init__(self):
+            self.dropped_samples = 0
+            self.software_dropped_samples = 0
+            self.paused = True
+            self.register_reads = 0
+
+        def apply_gain_mode(self, *_args, **_kwargs):
+            pass
+
+        def discard_buffered(self):
+            pass
+
+        def pause_buffering(self):
+            self.paused = True
+
+        def resume_buffering(self):
+            self.paused = False
+            return self.dropped_samples
+
+        def read_tuner_registers(self):
+            self.register_reads += 1
+            raise AssertionError("register read must be skipped")
+
+        def read_sync(self, n):
+            assert not self.paused
+            return np.full(n * 2, 1000, dtype=np.int16)
+
+    class Collector:
+        nfft = 8
+
+        def __init__(self):
+            self.blocks = []
+
+        def add(self, block):
+            self.blocks.append(block.copy())
+
+    receiver = object.__new__(bench.Airspy)
+    receiver.device = FakeAirspy()
+    receiver.rate = 100
+    receiver.read_registers = False
+    acc = Collector()
+    result = receiver.capture({'lna': 0, 'mixer': 0, 'vga': 8}, acc,
+                              seconds=0.5, settle=0.1)
+
+    assert result['registers'] == 'skipped'
+    assert result['dropped'] == 0
+    assert receiver.device.register_reads == 0
+    assert receiver.device.paused
+    assert acc.blocks
 
 
 @pytest.mark.parametrize('bias_tee, expected', [('0', False), ('1', True)])
@@ -227,6 +281,39 @@ def test_cw_bench_script_bias_tee_switch(tmp_path, bias_tee, expected):
                        capture_output=True)
         sweep = arg_log.read_text().splitlines()[0]
         assert ('--bias-tee' in sweep.split()) is expected
+    finally:
+        shutil.rmtree(repo / 'bench' / run, ignore_errors=True)
+
+
+@pytest.mark.parametrize('skip, expected', [('0', False), ('1', True)])
+def test_cw_bench_script_skip_registers_switch(tmp_path, skip, expected):
+    repo = Path(__file__).parents[2]
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    arg_log = tmp_path / 'python-args'
+    for name, body in {
+            'python': '#!/bin/sh\necho "$@" >> "$ARG_LOG"\n',
+            'ldconfig': '#!/bin/sh\necho "libfoo.so => /tmp/libfoo.so"\n',
+    }.items():
+        path = bindir / name
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    run = f'pytest_skip_registers_{skip}'
+    env = os.environ | {
+        'PATH': f'{bindir}:{os.environ["PATH"]}',
+        'ARG_LOG': str(arg_log),
+        'RUN': run,
+        'UNITS': 'R2-A',
+        'R2_SKIP_REGISTERS': skip,
+        'GENERATOR_MODE': 'manual',
+        'CONFIRM_SETTINGS': '0',
+    }
+    try:
+        subprocess.run([repo / 'scripts/bench/run_cw_bench.sh'], cwd=repo,
+                       env=env, input='\n', text=True, check=True,
+                       capture_output=True)
+        sweep = arg_log.read_text().splitlines()[0]
+        assert ('--skip-registers' in sweep.split()) is expected
     finally:
         shutil.rmtree(repo / 'bench' / run, ignore_errors=True)
 
