@@ -99,10 +99,20 @@ Keep the following unchanged for the RTL and R2 runs:
 
 Only the receiver is swapped.
 
-The amplifier is powered from the receiver side:
+The operational/deployment test powers the amplifier from the receiver side:
 
 - NESDR SMArTee hardware bias output on the RTL run.
 - Airspy R2 software bias tee ON on the R2 run.
+
+This is the correct test of the system as it will actually be operated, but
+it is not a perfectly isolated receiver-only comparison because the two bias
+supplies are different. The preamplifier is labelled 5 V / 50 mA and the
+Airspy bias output is also nominally limited to 50 mA. Before a final
+publication campaign, measure the loaded DC voltage/current delivered to the
+preamplifier for each receiver. If possible, add a second control experiment
+using one common external bias injector/supply (with the receiver-side DC
+properly blocked) so the preamplifier operating point is identical. Report
+the operational-bias and common-bias results separately.
 
 Do not move the generator-side cable, amplifier, attenuators or adapters
 between receivers. If an adapter must change, record it and measure its
