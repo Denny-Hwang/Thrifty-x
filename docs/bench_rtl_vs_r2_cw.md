@@ -315,3 +315,47 @@ When the inline amplifier is powered from the receiver-side bias tee, set
 hardware-dependent instead of claiming it is off. Use
 `RTL_BIAS_TEE_NOTE="always-on (NESDR SMArTee)"` for the current RTL bench
 unit.
+
+
+## 12. R2 10 MSPS intermittent-stream diagnostic
+
+A repeated diagnostic isolates the intermittent broadband bursts observed at
+10 MSPS. The fixed RF chain, bias-tee-powered AIS preamp, 0/0/8 gain, packing,
+generator levels and capture timing are held constant. Only sample rate and
+whether the benchmark issues R820T2 register-read control transfers are
+changed.
+
+Default matrix:
+
+| Condition | Rate | R820T2 reads | Purpose |
+|---|---:|---|---|
+| A_2p5_reg_on | 2.5 MSPS | on | known-clean low-bandwidth control |
+| B_10m_reg_on | 10 MSPS | on | reproduce the disturbed condition |
+| C_10m_reg_off | 10 MSPS | off | isolate register-control transfers from the 10 MSPS stream |
+
+Run three balanced repetitions:
+
+    RUN=r2_stream_diag1 REPEATS=3 PAIRS=3 \
+    AMP_GAIN=22 AMP_POWER="receiver bias tee" \
+    bash scripts/bench/run_r2_stream_diagnostic.sh
+
+Each condition starts with RF OFF, alternates -100/-90 dBm for PAIRS pairs,
+and ends RF OFF. The condition order rotates between repetitions so each
+condition occupies early/middle/late positions.
+
+The diagnostic summary flags RF-ON rows with any reported sample drop, any
+near-full-scale sample, a >3 dB broadband-noise jump, or a >6 dB RMS jump.
+Outputs are written under bench/<RUN>/, including summary.md and combined.csv.
+
+Interpretation:
+- A clean, B disturbed, C clean -> register-read/control-transfer hypothesis
+  supported.
+- A clean, B disturbed, C disturbed -> 10 MSPS streaming/USB/libairspy/usbipd
+  remains the leading path.
+- A disturbed too -> the problem is not confined to 10 MSPS; revisit RF/bias
+  power and general USB health.
+- B and C both clean -> the intermittent failure was not reproduced; increase
+  repetitions before assigning a cause.
+
+The normal benchmark can also skip Airspy register reads directly with
+R2_SKIP_REGISTERS=1 (or bench_cw_level.py --skip-registers).
