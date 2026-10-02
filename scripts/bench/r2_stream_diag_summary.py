@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """Summarize the repeated Airspy R2 stream diagnostic."""
 
 import argparse
