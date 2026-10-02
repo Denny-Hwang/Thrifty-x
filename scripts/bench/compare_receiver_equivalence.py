@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501
 """Compare paired RTL-SDR and Airspy R2 RF-equivalence qualification runs.
 
 The runners store raw device-relative measurements. This script preserves that
@@ -13,7 +14,6 @@ import argparse
 import csv
 import json
 import math
-import re
 from collections import defaultdict
 from pathlib import Path
 
