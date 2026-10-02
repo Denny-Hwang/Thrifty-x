@@ -336,7 +336,7 @@ Default matrix:
 Run three balanced repetitions:
 
     RUN=r2_stream_diag1 REPEATS=3 PAIRS=3 \
-    AMP_GAIN=22 AMP_POWER="receiver bias tee" \
+    AMP_GAIN=20 AMP_POWER="receiver bias tee" \
     bash scripts/bench/run_r2_stream_diagnostic.sh
 
 Each condition starts with RF OFF, alternates -100/-90 dBm for PAIRS pairs,
