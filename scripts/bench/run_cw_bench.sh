@@ -22,6 +22,7 @@
 #   R2_STAGES [0/0/0,0/0/8,0/0/10,0/0/11]
 #   PACKING [1]
 #   R2_BIAS_TEE [0]
+#   R2_SKIP_REGISTERS [0]    1 = diagnostic mode; skip R820T2 reads
 #   RUN [run1]
 #   CONFIRM_SETTINGS [1]      0 for unattended/scripted use
 set -euo pipefail
@@ -45,6 +46,7 @@ R2_STAGES=${R2_STAGES:-0/0/0,0/0/8,0/0/10,0/0/11}
 R2_RATES=${R2_RATES:-${R2_RATE:-10M}}
 PACKING=${PACKING:-1}
 R2_BIAS_TEE=${R2_BIAS_TEE:-0}
+R2_SKIP_REGISTERS=${R2_SKIP_REGISTERS:-0}
 AMP_POWER=${AMP_POWER:-external}
 RTL_BIAS_TEE_NOTE=${RTL_BIAS_TEE_NOTE:-hardware-dependent; not software controlled}
 RUN=${RUN:-run1}
@@ -88,6 +90,14 @@ elif [[ "${R2_BIAS_TEE}" != 0 ]]; then
     exit 2
 fi
 
+skip_registers=()
+if [[ "${R2_SKIP_REGISTERS}" == 1 ]]; then
+    skip_registers=(--skip-registers)
+elif [[ "${R2_SKIP_REGISTERS}" != 0 ]]; then
+    echo "R2_SKIP_REGISTERS must be 0 or 1" >&2
+    exit 2
+fi
+
 generator_off() {
     if [[ "${GENERATOR_MODE}" == auto ]]; then
         python scripts/n9310a_control.py --resource "${N9310A_RESOURCE}" off \
@@ -116,6 +126,7 @@ echo " levels          : ${LEVELS} dBm"
 echo " units/order     : ${UNITS}"
 echo " R2 rates        : ${R2_RATES}"
 echo " R2 stages       : ${R2_STAGES}"
+echo " R2 reg reads    : $([[ "${R2_SKIP_REGISTERS}" == 1 ]] && echo skipped || echo enabled)"
 echo " capture/setting : ${SECONDS_PER} s"
 echo " amp gain / loss : ${AMP_GAIN} / ${LOSS} dB"
 echo " amp power       : ${AMP_POWER}"
@@ -145,6 +156,7 @@ mkdir -p "bench/${RUN}"
     echo "airspy_sample_rates=${R2_RATES}"
     echo "airspy_packing=${PACKING}"
     echo "airspy_bias_tee=${R2_BIAS_TEE}"
+    echo "airspy_register_reads=$([[ "${R2_SKIP_REGISTERS}" == 1 ]] && echo skipped || echo enabled)"
     echo "r2_gain_stages=${R2_STAGES}"
     echo "r2_a_serial=${R2_A_SERIAL}"
     echo "r2_b_serial=${R2_B_SERIAL}"
@@ -201,7 +213,7 @@ for unit in ${UNITS}; do
                 run_sweep --unit "${unit}" --device airspy_r2 \
                     --airspy-serial "${serial}" --rate "${rate}" \
                     --stages "${R2_STAGES}" "${packing[@]}" \
-                    "${bias_tee[@]}" "${common[@]}"
+                    "${bias_tee[@]}" "${skip_registers[@]}" "${common[@]}"
             done
             ;;
         *)
