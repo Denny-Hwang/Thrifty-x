@@ -72,7 +72,7 @@ def main():
     starts = [g[0] for g in groups]
     stride = args.block_size - args.history
     intervals = [(b-a) * stride / args.sample_rate
-                 for a, b in zip(starts[:-1], starts[1:])]
+                 for a, b in zip(starts[:-1], starts[1:], strict=True)]
 
     carr_mean, carr_std = stats(carrier_snr)
     corr_mean, corr_std = stats(corr_snr)
