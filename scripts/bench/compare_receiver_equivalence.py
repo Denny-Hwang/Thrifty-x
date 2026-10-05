@@ -55,6 +55,16 @@ def fmt(x, n=3):
 
 
 def phase_from_name(name):
+    # Current device-prefixed publication filenames.
+    if "_phaseA_" in name:
+        return "primary"
+    if "_phaseB_" in name:
+        return "gainmap"
+    if "_phaseC_" in name:
+        return "stage"
+    if "_phaseD_" in name:
+        return "register"
+    # Backward compatibility for earlier unprefixed files.
     if name.startswith("primary_"):
         return "primary"
     if name.startswith("gainmap_"):
