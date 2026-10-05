@@ -175,6 +175,21 @@ class N9310A:
         self.assert_no_error("RF output state")
         return actual
 
+    def best_effort_rf_off(self) -> None:
+        """Write RF OFF without issuing any follow-up query.
+
+        This is only for exception cleanup after a VISA/USBTMC query failure.
+        A timed-out query can leave the instrument query state pending; issuing
+        another query while unwinding can produce SCPI -410 and mask the
+        original failure.  Normal operation must continue to use
+        set_rf_output(False), which verifies readback and the error queue.
+        """
+        try:
+            self._write(":RFOutput:STATe OFF")
+        except Exception:
+            # Cleanup must never replace the original I/O exception.
+            pass
+
     def configure_cw(self, frequency_hz: float, power_dbm: float,
                      rf_on: bool = False) -> N9310AStatus:
         """Configure a plain CW tone, with RF forced OFF while changing it."""
@@ -201,8 +216,21 @@ class N9310A:
         self.assert_no_error("CW configuration")
 
         if rf_on:
-            self.set_rf_output(True)
-        return self.status()
+            actual_rf = self.set_rf_output(True)
+        else:
+            actual_rf = False
+
+        # frequency_hz/power_dbm were already read back and verified above,
+        # and set_rf_output() already verified the RF state.  Re-querying all
+        # three here doubles the USBTMC query traffic in long sweeps and adds
+        # no verification information.
+        return N9310AStatus(
+            resource=self.resource,
+            idn=self.idn,
+            frequency_hz=actual_f,
+            power_dbm=actual_p,
+            rf_on=actual_rf,
+        )
 
     def prepare_level(self, frequency_hz: float,
                       power_dbm: float | None) -> N9310AStatus:
