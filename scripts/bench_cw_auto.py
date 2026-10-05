@@ -108,7 +108,9 @@ def main(argv=None):
                         row = bench.measure_one(receiver, args, setting, tx)
                         dropped = row.get('dropped')
                         try:
-                            dropped_count = int(float(dropped)) if dropped not in ('', None) else 0
+                            dropped_count = (int(float(dropped))
+                                             if dropped not in ('', None)
+                                             else 0)
                         except (TypeError, ValueError):
                             dropped_count = 0
                         if dropped_count:
