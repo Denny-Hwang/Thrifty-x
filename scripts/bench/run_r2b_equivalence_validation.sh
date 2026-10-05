@@ -84,6 +84,24 @@ generator_off() {
 }
 trap generator_off EXIT
 
+prepare_output() {
+    local out=$1
+    local log=$2
+    if [[ -s "${out}" && -s "${log}" ]] &&
+       grep -Fq "Done: ${out}" "${log}"; then
+        echo "SKIP completed sweep: ${out}"
+        return 1
+    fi
+    # A failed sweep is re-run from its beginning. Remove only that sweep's
+    # partial files so rows are never duplicated; already-completed sweeps
+    # remain untouched.
+    if [[ -e "${out}" || -e "${log}" ]]; then
+        echo "RESTART partial sweep: ${out}"
+        rm -f "${out}" "${log}"
+    fi
+    return 0
+}
+
 rate_tag() {
     case "$1" in
         2500000) echo "2p5M" ;;
@@ -354,6 +372,9 @@ for rate in ${R2_RATES}; do
             log="${OUTDIR}/${stem}.log"
             echo
             echo "-- ${DEVICE_LABEL} Phase A ${rtag}, rep ${rep_tag}, ${direction}, ${ttag} --"
+            if ! prepare_output "${out}" "${log}"; then
+                continue
+            fi
             python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${levels}"                 --stages "${R2_PRIMARY_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=A device=${DEVICE_LABEL} rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}; airspy_stream_mode=$([[ "${STOP_AIRSPY_BETWEEN_LEVELS}" == 1 ]] && echo restart-each-level || echo persistent)"                 --out "${out}" 2>&1 | tee "${log}"
         done < <(tone_order_for_rep "${rep}")
     done
@@ -371,6 +392,9 @@ if [[ "${RUN_GAINMAP}" == 1 ]]; then
             stem="${DEVICE_LABEL}_phaseB_gainmap_rate${rtag}_rep${rep_tag}_tone_${ttag}"
             out="${OUTDIR}/${stem}.csv"
             log="${OUTDIR}/${stem}.log"
+            if ! prepare_output "${out}" "${log}"; then
+                continue
+            fi
             python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${GAINMAP_LEVELS}"                 --stages "${GAINMAP_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=B device=${DEVICE_LABEL} gainmap rep=${rep} tone_offset_hz=${GAINMAP_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"                 --out "${out}" 2>&1 | tee "${log}"
         done
     done
@@ -386,6 +410,9 @@ if [[ "${RUN_STAGE_SENSITIVITY}" == 1 ]]; then
         stem="${DEVICE_LABEL}_phaseC_stage_rate${rtag}_tone_${ttag}"
         out="${OUTDIR}/${stem}.csv"
         log="${OUTDIR}/${stem}.log"
+        if ! prepare_output "${out}" "${log}"; then
+            continue
+        fi
         python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --receiver-warmup "${RECEIVER_WARMUP}"             --retry-dropped "${RETRY_DROPPED}"             --retry-delay "${RETRY_DELAY}"             "${stream_isolation_args[@]}"             --unit "${DEVICE_LABEL}"             --device airspy_r2             --airspy-serial "${R2_SERIAL}"             --rate "${rate}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${STAGE_LEVELS}"             --stages "${STAGE_MATRIX}"             "${packing_args[@]}"             "${bias_args[@]}"             "${register_args[@]}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=C device=${DEVICE_LABEL} stage-sensitivity tone_offset_hz=${STAGE_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"             --out "${out}" 2>&1 | tee "${log}"
     done
 fi
@@ -402,6 +429,9 @@ if [[ "${RUN_REGISTER_SNAPSHOTS}" == 1 ]]; then
             stem="${DEVICE_LABEL}_phaseD_reg${stag}_rate${rtag}"
             out="${OUTDIR}/${stem}.csv"
             log="${OUTDIR}/${stem}.log"
+            if ! prepare_output "${out}" "${log}"; then
+                continue
+            fi
             python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 --levels=off                 --stages "${stage}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 --seconds "${REGISTER_CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=D device=${DEVICE_LABEL} isolated-register-snapshot stage=${stage}; amp_power=${AMP_POWER}"                 --out "${out}" 2>&1 | tee "${log}"
         done
     done
