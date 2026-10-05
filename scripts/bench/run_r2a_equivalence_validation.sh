@@ -44,8 +44,9 @@ R2_BIAS_TEE=${R2_BIAS_TEE:-1}
 PACKING=${PACKING:-1}
 # Measurement phases intentionally skip per-point register reads.
 R2_SKIP_REGISTERS=${R2_SKIP_REGISTERS:-1}
-# Stop RX before each generator command to isolate the two USB devices.
-STOP_AIRSPY_BETWEEN_LEVELS=${STOP_AIRSPY_BETWEEN_LEVELS:-1}
+# Keep one persistent Airspy stream through each sweep. Repeated stop/start
+# at 10 MSPS can itself fail after many cycles; use 1 only as a diagnostic.
+STOP_AIRSPY_BETWEEN_LEVELS=${STOP_AIRSPY_BETWEEN_LEVELS:-0}
 CONFIRM_SETTINGS=${CONFIRM_SETTINGS:-1}
 
 # Phase A: dense deployment-setting transfer function.
@@ -345,7 +346,7 @@ for rate in ${R2_RATES}; do
             log="${OUTDIR}/${stem}.log"
             echo
             echo "-- ${DEVICE_LABEL} Phase A ${rtag}, rep ${rep_tag}, ${direction}, ${ttag} --"
-            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${levels}"                 --stages "${R2_PRIMARY_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=A device=${DEVICE_LABEL} rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"                 --out "${out}" 2>&1 | tee "${log}"
+            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${levels}"                 --stages "${R2_PRIMARY_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=A device=${DEVICE_LABEL} rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}; airspy_stream_mode=$([[ "${STOP_AIRSPY_BETWEEN_LEVELS}" == 1 ]] && echo restart-each-level || echo persistent)"                 --out "${out}" 2>&1 | tee "${log}"
         done < <(tone_order_for_rep "${rep}")
     done
 done
