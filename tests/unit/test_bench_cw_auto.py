@@ -25,6 +25,8 @@ class FakeGenerator:
         self.idn = 'Agilent Technologies,N9310A,CN0116A347'
         self.levels = []
         self.outputs = []
+        self.reconnects = 0
+        self.failures_remaining = 0
         FakeGenerator.instances.append(self)
 
     def __enter__(self):
@@ -33,12 +35,21 @@ class FakeGenerator:
     def __exit__(self, *_args):
         pass
 
-    def set_rf_output(self, enabled):
+    def set_rf_output(self, enabled, verify=True):
         self.outputs.append(enabled)
         return enabled
 
+    def best_effort_rf_off(self):
+        self.outputs.append(False)
+
+    def reconnect(self):
+        self.reconnects += 1
+
     def prepare_level(self, frequency, power):
         self.levels.append((frequency, power))
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise RuntimeError("transient VISA timeout")
         status = FakeStatus()
         status.power_dbm = -100.0 if power is None else power
         status.rf_on = power is not None
@@ -211,3 +222,33 @@ def test_auto_sweep_retries_dropped_rows_and_keeps_attempt(monkeypatch):
     failed = [r for r in bench.rows if r.get('dropped')]
     assert len(failed) == 1
     assert 'dropped_retry_attempt=1' in failed[0]['notes']
+
+
+
+def test_auto_sweep_reconnects_after_generator_failure(monkeypatch):
+    bench = FakeBench()
+    FakeGenerator.instances.clear()
+    monkeypatch.setattr(auto, '_load_bench_module', lambda: bench)
+    monkeypatch.setattr(auto, 'N9310A', FakeGenerator)
+    monkeypatch.setattr(auto.time, 'sleep', lambda _s: None)
+
+    original_enter = FakeGenerator.__enter__
+
+    def enter_with_one_failure(self):
+        self.failures_remaining = 1
+        return original_enter(self)
+
+    monkeypatch.setattr(FakeGenerator, '__enter__', enter_with_one_failure)
+
+    rc = auto.main([
+        '--generator-resource', 'auto', '--generator-settle', '0',
+        '--generator-retries', '2', '--generator-retry-delay', '0',
+        '--unit', 'R2-A', '--device', 'airspy_r2',
+        '--levels', 'off,-100,-90', '--tone', '161315000',
+        '--out', 'dummy.csv',
+    ])
+
+    assert rc == 0
+    sg = FakeGenerator.instances[0]
+    assert sg.reconnects == 1
+    assert len(bench.rows) == 3
