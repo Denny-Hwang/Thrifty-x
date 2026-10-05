@@ -32,6 +32,10 @@ def _generator_parser():
     p.add_argument('--generator-timeout-ms', type=int, default=5000)
     p.add_argument('--generator-settle', type=float, default=0.25,
                    help='seconds to wait after verified N9310A level change')
+    p.add_argument(
+        '--stop-airspy-between-levels', action='store_true',
+        help='stop Airspy RX before each N9310A USB transaction; useful when '
+             '10 MSPS Airspy and the generator share a USB/usbipd path')
     return p
 
 
@@ -65,6 +69,9 @@ def main(argv=None):
         try:
             receiver = bench.open_receiver(args)
             for i, tx in enumerate(levels, 1):
+                if (gen.stop_airspy_between_levels
+                        and hasattr(receiver, 'stop_stream')):
+                    receiver.stop_stream()
                 state = sg.prepare_level(args.tone, tx)
                 if gen.generator_settle:
                     time.sleep(gen.generator_settle)
@@ -83,6 +90,9 @@ def main(argv=None):
                     time.sleep(0.1)
         finally:
             try:
+                if (gen.stop_airspy_between_levels and receiver is not None
+                        and hasattr(receiver, 'stop_stream')):
+                    receiver.stop_stream()
                 sg.set_rf_output(False)
                 print('\nN9310A RF OFF (safe state).', flush=True)
             finally:
