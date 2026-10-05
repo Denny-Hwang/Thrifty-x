@@ -432,6 +432,16 @@ class Airspy:
         notes = f'{software} of them buffer overflow' if software else ''
         return {'dropped': dropped, 'registers': registers, 'notes': notes}
 
+    def stop_stream(self):
+        """Stop Airspy RX while keeping the device open and configured.
+
+        Publication bench automation uses this before N9310A USBTMC traffic
+        so a 10 MSPS Airspy bulk stream does not overlap generator USB I/O on
+        hosts where both devices share the same USB controller/usbipd path.
+        The next read_sync() restarts RX and re-runs the normal settle period.
+        """
+        self.device.stop_capture()
+
     def close(self):
         try:
             self.device.close()
