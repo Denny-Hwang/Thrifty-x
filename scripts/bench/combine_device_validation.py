@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 NAME_RE = re.compile(
-    r"^(?P<device>.+)_phase(?P<phase>[ABC])_"
+    r"^(?P<device>.+)_phase(?P<phase>[ABCD])_"
     r"(?P<kind>[A-Za-z0-9]+)"
     r"(?:_rate(?P<rate>[^_]+))?"
     r"(?:_rep(?P<rep>\d+))?"
@@ -113,6 +113,7 @@ def main() -> int:
         "A": [p for p in files if "_phaseA_" in p.name],
         "B": [p for p in files if "_phaseB_" in p.name],
         "C": [p for p in files if "_phaseC_" in p.name],
+        "D": [p for p in files if "_phaseD_" in p.name],
     }
 
     outputs = [
@@ -131,6 +132,10 @@ def main() -> int:
         (
             root / f"{label}_combined_phaseC_stage.csv",
             groups["C"],
+        ),
+        (
+            root / f"{label}_combined_phaseD_registers.csv",
+            groups["D"],
         ),
     ]
 
