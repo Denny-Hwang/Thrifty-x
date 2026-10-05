@@ -131,16 +131,28 @@ def main(argv=None):
                             continue
                         break
                     time.sleep(0.1)
+        except BaseException:
+            # Preserve the original failure. After a timed-out VISA query,
+            # another verified query in cleanup can trigger SCPI -410 and
+            # obscure the root cause. Write RF OFF only; the outer runner
+            # performs a fresh-session OFF again on exit.
+            if hasattr(sg, 'best_effort_rf_off'):
+                sg.best_effort_rf_off()
+            else:
+                try:
+                    sg.set_rf_output(False, verify=False)
+                except Exception:
+                    pass
+            raise
+        else:
+            if (gen.stop_airspy_between_levels and receiver is not None
+                    and hasattr(receiver, 'stop_stream')):
+                receiver.stop_stream()
+            sg.set_rf_output(False)
+            print('\nN9310A RF OFF (safe state).', flush=True)
         finally:
-            try:
-                if (gen.stop_airspy_between_levels and receiver is not None
-                        and hasattr(receiver, 'stop_stream')):
-                    receiver.stop_stream()
-                sg.set_rf_output(False)
-                print('\nN9310A RF OFF (safe state).', flush=True)
-            finally:
-                if receiver is not None:
-                    receiver.close()
+            if receiver is not None:
+                receiver.close()
 
     print(f"Done: {args.out}")
     return 0
