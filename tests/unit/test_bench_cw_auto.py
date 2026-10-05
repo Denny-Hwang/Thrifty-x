@@ -48,6 +48,10 @@ class FakeGenerator:
 class FakeReceiver:
     def __init__(self):
         self.closed = False
+        self.stop_calls = 0
+
+    def stop_stream(self):
+        self.stop_calls += 1
 
     def close(self):
         self.closed = True
@@ -125,4 +129,25 @@ def test_auto_sweep_programs_each_level_and_leaves_rf_off(monkeypatch):
     assert sg.outputs[0] is False
     assert sg.outputs[-1] is False
     assert len(bench.rows) == 3
+    assert bench.receiver.closed
+
+
+def test_auto_sweep_can_stop_airspy_stream_before_generator_io(monkeypatch):
+    bench = FakeBench()
+    FakeGenerator.instances.clear()
+    monkeypatch.setattr(auto, '_load_bench_module', lambda: bench)
+    monkeypatch.setattr(auto, 'N9310A', FakeGenerator)
+    monkeypatch.setattr(auto.time, 'sleep', lambda _s: None)
+
+    rc = auto.main([
+        '--generator-resource', 'auto', '--generator-settle', '0',
+        '--stop-airspy-between-levels',
+        '--unit', 'R2-A', '--device', 'airspy_r2',
+        '--levels', 'off,-100,-90', '--tone', '161315000',
+        '--out', 'dummy.csv',
+    ])
+
+    assert rc == 0
+    # Before each of three generator levels, plus once before final RF OFF.
+    assert bench.receiver.stop_calls == 4
     assert bench.receiver.closed
