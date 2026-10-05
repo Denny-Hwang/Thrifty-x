@@ -33,6 +33,8 @@ CAPTURE_SECONDS=${CAPTURE_SECONDS:-3}
 GENERATOR_SETTLE=${GENERATOR_SETTLE:-1}
 RX_SETTLE=${RX_SETTLE:-0.5}
 N9310A_RESOURCE=${N9310A_RESOURCE:-auto}
+GENERATOR_RETRIES=${GENERATOR_RETRIES:-2}
+GENERATOR_RETRY_DELAY=${GENERATOR_RETRY_DELAY:-0.5}
 
 # The AIS preamp is labelled gain >20 dB. Keep 20 dB as nominal metadata
 # until actual gain and cable loss are measured.
@@ -281,6 +283,7 @@ echo " receiver warmup      : ${RECEIVER_WARMUP} s"
 echo " retry dropped rows   : ${RETRY_DROPPED}"
 echo " Phase D reg snapshots: ${RUN_REGISTER_SNAPSHOTS} (${REGISTER_STAGES})"
 echo " capture / gen settle : ${CAPTURE_SECONDS} s / ${GENERATOR_SETTLE} s"
+echo " generator retries    : ${GENERATOR_RETRIES} (delay ${GENERATOR_RETRY_DELAY} s)"
 echo " RX settle            : ${RX_SETTLE} s"
 echo " amp nominal / power  : ${AMP_GAIN} dB / ${AMP_POWER}"
 echo " ETA                   : ${ETA_TEXT}"
@@ -322,6 +325,8 @@ fi
     echo "amp_power=${AMP_POWER}"
     echo "loss_nominal_db=${LOSS}"
     echo "n9310a_resource=${N9310A_RESOURCE}"
+    echo "generator_retries=${GENERATOR_RETRIES}"
+    echo "generator_retry_delay_s=${GENERATOR_RETRY_DELAY}"
     echo "gainmap_stages=${GAINMAP_STAGES}"
     echo "gainmap_levels=${GAINMAP_LEVELS}"
     echo "gainmap_repeats=${GAINMAP_REPEATS}"
@@ -375,7 +380,7 @@ for rate in ${R2_RATES}; do
             if ! prepare_output "${out}" "${log}"; then
                 continue
             fi
-            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${levels}"                 --stages "${R2_PRIMARY_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=A device=${DEVICE_LABEL} rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}; airspy_stream_mode=$([[ "${STOP_AIRSPY_BETWEEN_LEVELS}" == 1 ]] && echo restart-each-level || echo persistent)"                 --out "${out}" 2>&1 | tee "${log}"
+            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --generator-retries "${GENERATOR_RETRIES}"                 --generator-retry-delay "${GENERATOR_RETRY_DELAY}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${levels}"                 --stages "${R2_PRIMARY_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=A device=${DEVICE_LABEL} rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}; airspy_stream_mode=$([[ "${STOP_AIRSPY_BETWEEN_LEVELS}" == 1 ]] && echo restart-each-level || echo persistent)"                 --out "${out}" 2>&1 | tee "${log}"
         done < <(tone_order_for_rep "${rep}")
     done
 done
@@ -395,7 +400,7 @@ if [[ "${RUN_GAINMAP}" == 1 ]]; then
             if ! prepare_output "${out}" "${log}"; then
                 continue
             fi
-            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${GAINMAP_LEVELS}"                 --stages "${GAINMAP_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=B device=${DEVICE_LABEL} gainmap rep=${rep} tone_offset_hz=${GAINMAP_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"                 --out "${out}" 2>&1 | tee "${log}"
+            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --generator-retries "${GENERATOR_RETRIES}"                 --generator-retry-delay "${GENERATOR_RETRY_DELAY}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 "--levels=${GAINMAP_LEVELS}"                 --stages "${GAINMAP_STAGES}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 "${register_args[@]}"                 --seconds "${CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=B device=${DEVICE_LABEL} gainmap rep=${rep} tone_offset_hz=${GAINMAP_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"                 --out "${out}" 2>&1 | tee "${log}"
         done
     done
 fi
@@ -413,7 +418,7 @@ if [[ "${RUN_STAGE_SENSITIVITY}" == 1 ]]; then
         if ! prepare_output "${out}" "${log}"; then
             continue
         fi
-        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --receiver-warmup "${RECEIVER_WARMUP}"             --retry-dropped "${RETRY_DROPPED}"             --retry-delay "${RETRY_DELAY}"             "${stream_isolation_args[@]}"             --unit "${DEVICE_LABEL}"             --device airspy_r2             --airspy-serial "${R2_SERIAL}"             --rate "${rate}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${STAGE_LEVELS}"             --stages "${STAGE_MATRIX}"             "${packing_args[@]}"             "${bias_args[@]}"             "${register_args[@]}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=C device=${DEVICE_LABEL} stage-sensitivity tone_offset_hz=${STAGE_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"             --out "${out}" 2>&1 | tee "${log}"
+        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"                 --generator-retries "${GENERATOR_RETRIES}"                 --generator-retry-delay "${GENERATOR_RETRY_DELAY}"             --receiver-warmup "${RECEIVER_WARMUP}"             --retry-dropped "${RETRY_DROPPED}"             --retry-delay "${RETRY_DELAY}"             "${stream_isolation_args[@]}"             --unit "${DEVICE_LABEL}"             --device airspy_r2             --airspy-serial "${R2_SERIAL}"             --rate "${rate}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${STAGE_LEVELS}"             --stages "${STAGE_MATRIX}"             "${packing_args[@]}"             "${bias_args[@]}"             "${register_args[@]}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=C device=${DEVICE_LABEL} stage-sensitivity tone_offset_hz=${STAGE_TONE_OFFSET}; amp_power=${AMP_POWER}; usb_isolation=stop-rx-between-levels"             --out "${out}" 2>&1 | tee "${log}"
     done
 fi
 
@@ -432,7 +437,7 @@ if [[ "${RUN_REGISTER_SNAPSHOTS}" == 1 ]]; then
             if ! prepare_output "${out}" "${log}"; then
                 continue
             fi
-            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 --levels=off                 --stages "${stage}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 --seconds "${REGISTER_CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=D device=${DEVICE_LABEL} isolated-register-snapshot stage=${stage}; amp_power=${AMP_POWER}"                 --out "${out}" 2>&1 | tee "${log}"
+            python scripts/bench_cw_auto.py                 --generator-resource "${N9310A_RESOURCE}"                 --generator-settle "${GENERATOR_SETTLE}"                 --generator-retries "${GENERATOR_RETRIES}"                 --generator-retry-delay "${GENERATOR_RETRY_DELAY}"                 --receiver-warmup "${RECEIVER_WARMUP}"                 --retry-dropped "${RETRY_DROPPED}"                 --retry-delay "${RETRY_DELAY}"                 "${stream_isolation_args[@]}"                 --unit "${DEVICE_LABEL}"                 --device airspy_r2                 --airspy-serial "${R2_SERIAL}"                 --rate "${rate}"                 --freq "${CENTER_HZ}"                 --tone "${tone}"                 --levels=off                 --stages "${stage}"                 "${packing_args[@]}"                 "${bias_args[@]}"                 --seconds "${REGISTER_CAPTURE_SECONDS}"                 --settle "${RX_SETTLE}"                 --amp-gain "${AMP_GAIN}"                 --loss "${LOSS}"                 --notes "equivalence phase=D device=${DEVICE_LABEL} isolated-register-snapshot stage=${stage}; amp_power=${AMP_POWER}"                 --out "${out}" 2>&1 | tee "${log}"
         done
     done
 fi
