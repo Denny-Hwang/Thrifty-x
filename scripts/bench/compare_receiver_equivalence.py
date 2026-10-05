@@ -66,16 +66,26 @@ def phase_from_name(name):
 
 def load(root):
     rows = []
-    for side in ("rtl", "r2"):
-        directory = root / side
+    # Current publication layout uses device-labelled directories. Keep the
+    # older rtl/r2 names as read-only compatibility for earlier bench runs.
+    directories = ("RTL", "R2-A", "R2-B", "rtl", "r2")
+    for directory_name in directories:
+        directory = root / directory_name
         if not directory.exists():
             continue
-        for path in sorted(directory.glob("*.csv")):
+        for path in sorted(directory.glob("*_phase*.csv")):
+            # Do not re-ingest generated combined files.
+            if "_combined_" in path.name:
+                continue
             phase = phase_from_name(path.name)
             with path.open(newline="") as handle:
                 for source_row, row in enumerate(csv.DictReader(handle), 1):
                     item = dict(row)
-                    item["_side"] = side
+                    unit = item.get("unit") or directory_name
+                    item["_device_label"] = unit
+                    item["_side"] = (
+                        "rtl" if str(unit).upper().startswith("RTL") else "r2"
+                    )
                     item["_phase"] = phase
                     item["_source"] = path.name
                     item["_source_row"] = source_row
@@ -102,9 +112,10 @@ def load(root):
 
 def config_name(row):
     rate_m = row["_rate"] / 1e6
-    if row["_side"] == "rtl":
-        return f"RTL:{row.get('setting','')}@{rate_m:g}M"
-    return f"R2:{row.get('setting','')}@{rate_m:g}M"
+    label = row.get("_device_label") or (
+        "RTL" if row["_side"] == "rtl" else "R2"
+    )
+    return f"{label}:{row.get('setting','')}@{rate_m:g}M"
 
 
 def linear_fit(rows):
@@ -195,7 +206,15 @@ def averaged_points(rows):
 
 def identify_primary_configs(groups):
     rtl = [k for k in groups if k.startswith("RTL:")]
-    r2 = [k for k in groups if k.startswith("R2:0/0/8@")]
+    r2 = [
+        k for k in groups
+        if k.startswith("R2-") and ":0/0/8@" in k
+    ]
+    # Backward compatibility for older single-R2 directories.
+    r2.extend(
+        k for k in groups
+        if k.startswith("R2:0/0/8@") and k not in r2
+    )
     return (rtl[0] if len(rtl) == 1 else None, sorted(r2))
 
 
@@ -273,45 +292,62 @@ GAIN_MATCH = {
 
 
 def gainmap_summary(rows):
-    rtl = [r for r in rows if r["_phase"] == GAINMAP and r["_side"] == "rtl" and r["_valid"]]
-    r2 = [r for r in rows if r["_phase"] == GAINMAP and r["_side"] == "r2" and r["_valid"]]
+    rtl = [
+        r for r in rows
+        if r["_phase"] == GAINMAP and r["_side"] == "rtl" and r["_valid"]
+    ]
+    r2 = [
+        r for r in rows
+        if r["_phase"] == GAINMAP and r["_side"] == "r2" and r["_valid"]
+    ]
     result = []
     for gain, stage in GAIN_MATCH.items():
-        rr = [r for r in rtl if finite(fnum(r, "rtl_gain_db")) and abs(fnum(r, "rtl_gain_db") - gain) < 0.05]
+        rr = [
+            r for r in rtl
+            if finite(fnum(r, "rtl_gain_db"))
+            and abs(fnum(r, "rtl_gain_db") - gain) < 0.05
+        ]
         if not rr:
             continue
-        for rate in sorted({r["_rate"] for r in r2}):
-            aa = [r for r in r2 if r["_rate"] == rate and r.get("setting") == stage]
-            if not aa:
-                continue
-            rf = linear_fit(rr)
-            af = linear_fit(aa)
-            # Paired mean offsets at common powers.
-            rtl_by = defaultdict(list)
-            r2_by = defaultdict(list)
-            for x in rr:
-                rtl_by[x["_tx"]].append(x)
-            for x in aa:
-                r2_by[x["_tx"]].append(x)
-            dc, dn = [], []
-            for tx in sorted(set(rtl_by) & set(r2_by)):
-                rc = mean([x["_carrier"] for x in rtl_by[tx]])
-                ac = mean([x["_carrier"] for x in r2_by[tx]])
-                rn = mean([x["_cn0"] for x in rtl_by[tx]])
-                an = mean([x["_cn0"] for x in r2_by[tx]])
-                dc.append(ac - rc)
-                dn.append(an - rn)
-            result.append({
-                "rtl_gain_db": gain,
-                "r2_stage": stage,
-                "r2_rate": rate,
-                "rtl_slope": rf["slope"] if rf else float("nan"),
-                "r2_slope": af["slope"] if af else float("nan"),
-                "delta_carrier_mean": mean(dc),
-                "delta_carrier_std": std(dc),
-                "delta_cn0_mean": mean(dn),
-                "n_levels": len(dc),
-            })
+        units = sorted({r.get("_device_label", "R2") for r in r2})
+        for unit in units:
+            unit_rows = [r for r in r2 if r.get("_device_label") == unit]
+            for rate in sorted({r["_rate"] for r in unit_rows}):
+                aa = [
+                    r for r in unit_rows
+                    if r["_rate"] == rate and r.get("setting") == stage
+                ]
+                if not aa:
+                    continue
+                rf = linear_fit(rr)
+                af = linear_fit(aa)
+                # Paired mean offsets at common powers.
+                rtl_by = defaultdict(list)
+                r2_by = defaultdict(list)
+                for x in rr:
+                    rtl_by[x["_tx"]].append(x)
+                for x in aa:
+                    r2_by[x["_tx"]].append(x)
+                dc, dn = [], []
+                for tx in sorted(set(rtl_by) & set(r2_by)):
+                    rc = mean([x["_carrier"] for x in rtl_by[tx]])
+                    ac = mean([x["_carrier"] for x in r2_by[tx]])
+                    rn = mean([x["_cn0"] for x in rtl_by[tx]])
+                    an = mean([x["_cn0"] for x in r2_by[tx]])
+                    dc.append(ac - rc)
+                    dn.append(an - rn)
+                result.append({
+                    "r2_unit": unit,
+                    "rtl_gain_db": gain,
+                    "r2_stage": stage,
+                    "r2_rate": rate,
+                    "rtl_slope": rf["slope"] if rf else float("nan"),
+                    "r2_slope": af["slope"] if af else float("nan"),
+                    "delta_carrier_mean": mean(dc),
+                    "delta_carrier_std": std(dc),
+                    "delta_cn0_mean": mean(dn),
+                    "n_levels": len(dc),
+                })
     return result
 
 
@@ -460,10 +496,10 @@ def main():
 
     if gainmap:
         lines += ["", "## Matched R820T gain-code map", "",
-                  "| RTL gain dB | R2 stage | R2 rate | RTL slope | R2 slope | mean delta carrier dB | sigma dB | mean delta C/N0 dB | levels |",
-                  "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+                  "| R2 unit | RTL gain dB | R2 stage | R2 rate | RTL slope | R2 slope | mean delta carrier dB | sigma dB | mean delta C/N0 dB | levels |",
+                  "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for g in gainmap:
-            lines.append(f"| {g['rtl_gain_db']:g} | {g['r2_stage']} | {g['r2_rate']/1e6:g}M | "
+            lines.append(f"| {g.get('r2_unit','R2')} | {g['rtl_gain_db']:g} | {g['r2_stage']} | {g['r2_rate']/1e6:g}M | "
                          f"{fmt(g['rtl_slope'],4)} | {fmt(g['r2_slope'],4)} | "
                          f"{fmt(g['delta_carrier_mean'])} | {fmt(g['delta_carrier_std'])} | "
                          f"{fmt(g['delta_cn0_mean'])} | {g['n_levels']} |")
