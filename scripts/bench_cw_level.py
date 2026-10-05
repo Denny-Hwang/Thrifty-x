@@ -432,6 +432,29 @@ class Airspy:
         notes = f'{software} of them buffer overflow' if software else ''
         return {'dropped': dropped, 'registers': registers, 'notes': notes}
 
+    def warmup(self, setting, seconds):
+        """Run and discard Airspy samples so bias/preamp/tuner can settle.
+
+        RX remains persistent after this call; buffering is paused at the end
+        so the next measurement starts from a clean queue boundary.
+        """
+        if seconds <= 0:
+            return
+        dev = self.device
+        dev.apply_gain_mode('manual', lna=setting['lna'],
+                            mixer=setting['mixer'], vga=setting['vga'],
+                            lna_agc=False, mixer_agc=False)
+        dev.resume_buffering()
+        try:
+            remaining = int(seconds * self.rate)
+            seg = min(max(1, self.rate // 4), 1_000_000)
+            while remaining > 0:
+                n = min(seg, remaining)
+                dev.read_sync(n)
+                remaining -= n
+        finally:
+            dev.pause_buffering()
+
     def stop_stream(self):
         """Stop Airspy RX while keeping the device open and configured.
 
