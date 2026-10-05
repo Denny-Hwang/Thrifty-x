@@ -34,8 +34,14 @@ def _generator_parser():
                    help='seconds to wait after verified N9310A level change')
     p.add_argument(
         '--stop-airspy-between-levels', action='store_true',
-        help='stop Airspy RX before each N9310A USB transaction; useful when '
-             '10 MSPS Airspy and the generator share a USB/usbipd path')
+        help='diagnostic only: stop Airspy RX before each N9310A USB '
+             'transaction; persistent streaming is preferred at 10 MSPS')
+    p.add_argument('--receiver-warmup', type=float, default=0.0,
+                   help='seconds of receiver data to run/discard before sweep')
+    p.add_argument('--retry-dropped', type=int, default=0,
+                   help='retry a measurement this many times when samples drop')
+    p.add_argument('--retry-delay', type=float, default=0.5,
+                   help='seconds between dropped-sample retry attempts')
     return p
 
 
@@ -55,6 +61,12 @@ def main(argv=None):
     bench.check_input_levels(levels, args)
     if gen.generator_settle < 0:
         raise SystemExit('--generator-settle must be >= 0')
+    if gen.receiver_warmup < 0:
+        raise SystemExit('--receiver-warmup must be >= 0')
+    if gen.retry_dropped < 0:
+        raise SystemExit('--retry-dropped must be >= 0')
+    if gen.retry_delay < 0:
+        raise SystemExit('--retry-delay must be >= 0')
 
     print(f"{args.unit}: {len(levels)} levels x {len(settings)} settings, "
           f"{args.seconds:g} s each -> {args.out}")
@@ -68,6 +80,13 @@ def main(argv=None):
         sg.set_rf_output(False)
         try:
             receiver = bench.open_receiver(args)
+            if gen.receiver_warmup and hasattr(receiver, 'warmup'):
+                print(
+                    f"Receiver warmup: {gen.receiver_warmup:g} s "
+                    "(discarded, RF OFF)",
+                    flush=True,
+                )
+                receiver.warmup(settings[0], gen.receiver_warmup)
             for i, tx in enumerate(levels, 1):
                 if (gen.stop_airspy_between_levels
                         and hasattr(receiver, 'stop_stream')):
@@ -84,9 +103,31 @@ def main(argv=None):
                     flush=True,
                 )
                 for setting in settings:
-                    row = bench.measure_one(receiver, args, setting, tx)
-                    bench._print_row(row)
-                    bench.append_row(args.out, row)
+                    attempt = 0
+                    while True:
+                        row = bench.measure_one(receiver, args, setting, tx)
+                        dropped = row.get('dropped')
+                        try:
+                            dropped_count = int(float(dropped)) if dropped not in ('', None) else 0
+                        except (TypeError, ValueError):
+                            dropped_count = 0
+                        if dropped_count:
+                            row['notes'] = _append_note(
+                                row.get('notes', ''),
+                                f'dropped_retry_attempt={attempt + 1}')
+                        bench._print_row(row)
+                        bench.append_row(args.out, row)
+                        if dropped_count and attempt < gen.retry_dropped:
+                            attempt += 1
+                            print(
+                                f"  RETRY: dropped {dropped_count} samples; "
+                                f"attempt {attempt}/{gen.retry_dropped}",
+                                flush=True,
+                            )
+                            if gen.retry_delay:
+                                time.sleep(gen.retry_delay)
+                            continue
+                        break
                     time.sleep(0.1)
         finally:
             try:
