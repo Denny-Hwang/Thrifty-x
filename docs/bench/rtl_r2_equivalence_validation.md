@@ -453,3 +453,21 @@ A successful qualification shows that:
 
 This distinction is essential if the results will later support a
 peer-reviewed hardware/software validation claim.
+
+
+## 14. Airspy 10 MSPS stream-lifecycle rule
+
+Dense R2 sweeps keep one Airspy RX stream persistent for the duration of each
+CSV sweep. Repeatedly stopping and restarting the same Airspy handle before
+every generator level is not used: a 10 MSPS smoke test reached 20 completed
+restarts and then timed out with 0 samples collected on the next restart.
+This is a stream-start/lifecycle failure, not an RF-level failure.
+
+During Phases A/B/C, per-point R820T2 register reads remain disabled so the
+transfer-function measurement is not perturbed by diagnostic USB control
+traffic. Actual register snapshots are collected separately in Phase D.
+
+If Airspy and N9310A are attached through the same physical USB controller,
+move one instrument to a different host USB controller/root hub when possible.
+The preferred publication setup is persistent Airspy streaming plus physically
+separated USB paths, rather than repeated Airspy stop/start cycles.
