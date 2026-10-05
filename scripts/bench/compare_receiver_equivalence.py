@@ -98,6 +98,7 @@ def load(root):
                     )
                     item["_phase"] = phase
                     item["_source"] = path.name
+                    item["_source_key"] = f"{directory_name}/{path.name}"
                     item["_source_row"] = source_row
                     center = fnum(item, "center_hz")
                     tone = fnum(item, "tone_hz")
@@ -117,6 +118,20 @@ def load(root):
                         and (not finite(item["_near_fs"]) or item["_near_fs"] == 0)
                     )
                     rows.append(item)
+
+    # If the detector sees the test tone while the generator is explicitly
+    # RF OFF, that whole sweep is contaminated by an ambient/interfering spur
+    # at the tone frequency. Keep every raw row for QC, but do not let that
+    # sweep contribute to transfer-function fits or held-out calibration.
+    contaminated = {
+        r["_source_key"]
+        for r in rows
+        if not finite(r["_tx"]) and r["_detected"] == 1
+    }
+    for r in rows:
+        r["_rf_off_contaminated"] = r["_source_key"] in contaminated
+        if r["_rf_off_contaminated"]:
+            r["_valid"] = False
     return rows
 
 
@@ -286,9 +301,20 @@ def quality_counts(rows):
     return {
         "active_rows": len(primary),
         "valid_rows": sum(r["_valid"] for r in primary),
-        "drop_rows": sum(finite(r["_dropped"]) and r["_dropped"] > 0 for r in primary),
-        "near_fs_rows": sum(finite(r["_near_fs"]) and r["_near_fs"] > 0 for r in primary),
+        "drop_rows": sum(
+            finite(r["_dropped"]) and r["_dropped"] > 0 for r in primary
+        ),
+        "near_fs_rows": sum(
+            finite(r["_near_fs"]) and r["_near_fs"] > 0 for r in primary
+        ),
         "nondetect_rows": sum(r["_detected"] == 0 for r in primary),
+        "rf_off_contaminated_rows": sum(
+            r.get("_rf_off_contaminated", False) for r in primary
+        ),
+        "rf_off_contaminated_sweeps": len({
+            r["_source_key"] for r in primary
+            if r.get("_rf_off_contaminated", False)
+        }),
     }
 
 
@@ -464,12 +490,16 @@ def main():
                      f"{fmt(x['r2'],6)} | {fmt(x['resid_rms'])} | {fmt(x['resid_max'])} |")
 
     lines += ["", "## Data quality", "",
-              "| configuration | active | valid | drops | near-FS | non-detect |",
-              "| --- | ---: | ---: | ---: | ---: | ---: |"]
+              "| configuration | active | valid | drops | near-FS | non-detect | RF-off contaminated rows | RF-off contaminated sweeps |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for cfg in sorted(quality):
         q = quality[cfg]
-        lines.append(f"| {cfg} | {q['active_rows']} | {q['valid_rows']} | {q['drop_rows']} | "
-                     f"{q['near_fs_rows']} | {q['nondetect_rows']} |")
+        lines.append(
+            f"| {cfg} | {q['active_rows']} | {q['valid_rows']} | "
+            f"{q['drop_rows']} | {q['near_fs_rows']} | "
+            f"{q['nondetect_rows']} | {q['rf_off_contaminated_rows']} | "
+            f"{q['rf_off_contaminated_sweeps']} |"
+        )
 
     lines += ["", "## Held-out input-referred calibration", "",
               "Alternating generator levels are used for fitting; the remaining levels are held out.",
