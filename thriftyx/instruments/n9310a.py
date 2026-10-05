@@ -86,8 +86,9 @@ class N9310A:
         self.rm = resource_manager or _new_resource_manager()
         self.resource = (discover_n9310a(self.rm)
                          if resource.lower() == "auto" else resource)
+        self.timeout_ms = int(timeout_ms)
         self.instrument = self.rm.open_resource(self.resource)
-        self.instrument.timeout = int(timeout_ms)
+        self.instrument.timeout = self.timeout_ms
         try:
             self.idn = self.instrument.query("*IDN?").strip()
             if "N9310A" not in self.idn.upper():
@@ -115,6 +116,22 @@ class N9310A:
             if rm is not None:
                 rm.close()
                 self.rm = None
+
+    def reconnect(self) -> None:
+        """Re-open the same VISA resource after a transient USBTMC failure."""
+        inst = getattr(self, "instrument", None)
+        if inst is not None:
+            try:
+                inst.close()
+            except Exception:
+                pass
+        self.instrument = self.rm.open_resource(self.resource)
+        self.instrument.timeout = self.timeout_ms
+        self.idn = self.instrument.query("*IDN?").strip()
+        if "N9310A" not in self.idn.upper():
+            raise N9310AError(
+                f"Resource {self.resource} is not an N9310A: {self.idn!r}"
+            )
 
     def _write(self, command: str) -> None:
         self.instrument.write(command)
