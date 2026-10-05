@@ -49,6 +49,10 @@ class FakeReceiver:
     def __init__(self):
         self.closed = False
         self.stop_calls = 0
+        self.warmups = []
+
+    def warmup(self, setting, seconds):
+        self.warmups.append((setting["setting"], seconds))
 
     def stop_stream(self):
         self.stop_calls += 1
@@ -151,3 +155,59 @@ def test_auto_sweep_can_stop_airspy_stream_before_generator_io(monkeypatch):
     # Before each of three generator levels, plus once before final RF OFF.
     assert bench.receiver.stop_calls == 4
     assert bench.receiver.closed
+
+
+
+def test_auto_sweep_receiver_warmup(monkeypatch):
+    bench = FakeBench()
+    FakeGenerator.instances.clear()
+    monkeypatch.setattr(auto, '_load_bench_module', lambda: bench)
+    monkeypatch.setattr(auto, 'N9310A', FakeGenerator)
+    monkeypatch.setattr(auto.time, 'sleep', lambda _s: None)
+
+    rc = auto.main([
+        '--generator-resource', 'auto', '--generator-settle', '0',
+        '--receiver-warmup', '3',
+        '--unit', 'R2-A', '--device', 'airspy_r2',
+        '--levels', 'off,-100,-90', '--tone', '161315000',
+        '--out', 'dummy.csv',
+    ])
+
+    assert rc == 0
+    assert bench.receiver.warmups == [('g0', 3.0)]
+
+
+def test_auto_sweep_retries_dropped_rows_and_keeps_attempt(monkeypatch):
+    bench = FakeBench()
+    FakeGenerator.instances.clear()
+    calls = {}
+
+    def measure(_receiver, _args, _setting, tx):
+        calls[tx] = calls.get(tx, 0) + 1
+        dropped = 49152 if tx == -100.0 and calls[tx] == 1 else 0
+        return {
+            'setting': 'g0',
+            'tx': tx,
+            'dropped': dropped,
+            'notes': '',
+        }
+
+    bench.measure_one = measure
+    monkeypatch.setattr(auto, '_load_bench_module', lambda: bench)
+    monkeypatch.setattr(auto, 'N9310A', FakeGenerator)
+    monkeypatch.setattr(auto.time, 'sleep', lambda _s: None)
+
+    rc = auto.main([
+        '--generator-resource', 'auto', '--generator-settle', '0',
+        '--retry-dropped', '2', '--retry-delay', '0',
+        '--unit', 'R2-A', '--device', 'airspy_r2',
+        '--levels', 'off,-100,-90', '--tone', '161315000',
+        '--out', 'dummy.csv',
+    ])
+
+    assert rc == 0
+    assert calls[-100.0] == 2
+    assert len(bench.rows) == 4
+    failed = [r for r in bench.rows if r.get('dropped')]
+    assert len(failed) == 1
+    assert 'dropped_retry_attempt=1' in failed[0]['notes']
