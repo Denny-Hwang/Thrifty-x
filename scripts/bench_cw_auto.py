@@ -32,6 +32,10 @@ def _generator_parser():
     p.add_argument('--generator-timeout-ms', type=int, default=5000)
     p.add_argument('--generator-settle', type=float, default=0.25,
                    help='seconds to wait after verified N9310A level change')
+    p.add_argument('--generator-retries', type=int, default=2,
+                   help='retry/reconnect this many times after generator I/O failure')
+    p.add_argument('--generator-retry-delay', type=float, default=0.5,
+                   help='seconds before retrying a failed generator transaction')
     p.add_argument(
         '--stop-airspy-between-levels', action='store_true',
         help='diagnostic only: stop Airspy RX before each N9310A USB '
@@ -61,6 +65,10 @@ def main(argv=None):
     bench.check_input_levels(levels, args)
     if gen.generator_settle < 0:
         raise SystemExit('--generator-settle must be >= 0')
+    if gen.generator_retries < 0:
+        raise SystemExit('--generator-retries must be >= 0')
+    if gen.generator_retry_delay < 0:
+        raise SystemExit('--generator-retry-delay must be >= 0')
     if gen.receiver_warmup < 0:
         raise SystemExit('--receiver-warmup must be >= 0')
     if gen.retry_dropped < 0:
@@ -91,7 +99,24 @@ def main(argv=None):
                 if (gen.stop_airspy_between_levels
                         and hasattr(receiver, 'stop_stream')):
                     receiver.stop_stream()
-                state = sg.prepare_level(args.tone, tx)
+                gen_attempt = 0
+                while True:
+                    try:
+                        state = sg.prepare_level(args.tone, tx)
+                        break
+                    except Exception as exc:
+                        sg.best_effort_rf_off()
+                        if gen_attempt >= gen.generator_retries:
+                            raise
+                        gen_attempt += 1
+                        print(
+                            f"  GENERATOR RETRY: {type(exc).__name__}: {exc}; "
+                            f"attempt {gen_attempt}/{gen.generator_retries}",
+                            flush=True,
+                        )
+                        if gen.generator_retry_delay:
+                            time.sleep(gen.generator_retry_delay)
+                        sg.reconnect()
                 if gen.generator_settle:
                     time.sleep(gen.generator_settle)
                 level_text = 'RF OFF' if tx is None else f'{tx:g} dBm, RF ON'
