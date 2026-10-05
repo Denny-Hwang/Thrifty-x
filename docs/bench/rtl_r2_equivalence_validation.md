@@ -137,7 +137,7 @@ receiver-input dBm is nominal metadata only.
 
 ### Primary swept factors
 
-- Generator power: -120 to -60 dBm in **5 dB steps**.
+- Generator power: -125 to -60 dBm in **2.5 dB steps** for the final paired qualification.
 - Tone offset from centre: -30, -15, +15, +30 kHz.
 - Sweep direction: ascending and descending, alternated by repetition.
 - Independent repetition: default 3; use at least 5 for a final
@@ -147,11 +147,7 @@ receiver-input dBm is nominal metadata only.
   - R2: 2.5 MSPS.
   - R2: 10 MSPS.
 
-The 5 dB grid is preferred over 10 dB for the qualification because it gives
-enough points to detect slope curvature and local deviations without making
-the run unnecessarily long. A **2.5 dB follow-up** is recommended only
-around a detected transition (sensitivity knee, detection threshold or
-compression knee).
+The final paired qualification uses a **2.5 dB grid**. This is dense enough to resolve local slope curvature, threshold behavior and small receiver-to-receiver transfer differences while the N9310A sweep remains fully automated. A coarser 5 dB grid remains suitable for smoke tests. If a transition is still ambiguous, a narrower 1 dB follow-up may be added only around that region.
 
 The tone offsets stay below the benchmark's 50-300 kHz noise-density band
 and avoid the centre/DC region.
@@ -175,7 +171,7 @@ R2:
 For every rate and tone offset:
 
 1. RF OFF baseline.
-2. Sweep -120 ... -60 dBm in 5 dB steps.
+2. Sweep -125 ... -60 dBm in 2.5 dB steps.
 3. RF OFF baseline.
 4. Repeat with the opposite power direction.
 5. Repeat independently.
@@ -413,13 +409,11 @@ an absolute receiver-input-power claim.
 
 ## 12. Script workflow
 
-Use one shared RUN name. Run RTL first, swap only the receiver, then run R2.
+Use one shared RUN name and the physical order R2-A -> R2-B -> RTL. Only the receiver is swapped; the generator, preamp and common RF path stay fixed.
 
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_r2a_equivalence_validation.sh
+    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_r2b_equivalence_validation.sh
     RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_rtl_equivalence_validation.sh
-
-Swap RTL -> R2 only, leaving the generator, preamp and common cable fixed:
-
-    RUN=equiv_YYYYMMDD_01 bash scripts/bench/run_r2_equivalence_validation.sh
 
 Then:
 
@@ -427,8 +421,11 @@ Then:
 
 The runners write independent raw CSV/log files under:
 
-    bench/<RUN>/rtl/
-    bench/<RUN>/r2/
+    bench/<RUN>/R2-A/
+    bench/<RUN>/R2-B/
+    bench/<RUN>/RTL/
+
+Each raw filename begins with the device label, phase, rate, repetition, sweep direction and tone offset. Each device directory also contains device-prefixed combined CSVs such as `R2-A_combined_all.csv`, `R2-A_combined_phaseA_primary.csv`, `R2-A_combined_phaseB_gainmap.csv`, `R2-A_combined_phaseC_stage.csv`, and the corresponding R2-B/RTL files.
 
 and the comparison script writes:
 
