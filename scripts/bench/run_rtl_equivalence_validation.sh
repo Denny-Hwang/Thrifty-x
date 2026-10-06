@@ -25,6 +25,8 @@ CAPTURE_SECONDS=${CAPTURE_SECONDS:-3}
 GENERATOR_SETTLE=${GENERATOR_SETTLE:-1}
 RX_SETTLE=${RX_SETTLE:-0.5}
 N9310A_RESOURCE=${N9310A_RESOURCE:-auto}
+GENERATOR_RETRIES=${GENERATOR_RETRIES:-2}
+GENERATOR_RETRY_DELAY=${GENERATOR_RETRY_DELAY:-0.5}
 
 AMP_GAIN=${AMP_GAIN:-20}
 AMP_POWER=${AMP_POWER:-"NESDR SMArTee hardware bias tee"}
@@ -48,6 +50,24 @@ generator_off() {
     python scripts/n9310a_control.py --resource "${N9310A_RESOURCE}" off         >/dev/null 2>&1 || true
 }
 trap generator_off EXIT
+
+prepare_output() {
+    local out=$1
+    local log=$2
+    if [[ -s "${out}" && -s "${log}" ]] &&
+       grep -Fq "Done: ${out}" "${log}"; then
+        echo "SKIP completed sweep: ${out}"
+        return 1
+    fi
+    # A failed sweep is re-run from its beginning. Remove only that sweep's
+    # partial files so rows are never duplicated; already-completed sweeps
+    # remain untouched.
+    if [[ -e "${out}" || -e "${log}" ]]; then
+        echo "RESTART partial sweep: ${out}"
+        rm -f "${out}" "${log}"
+    fi
+    return 0
+}
 
 tone_tag() {
     local value=$1
@@ -159,6 +179,7 @@ echo " primary step         : ${PRIMARY_STEP_DB} dB"
 echo " primary repeats      : ${REPEATS}"
 echo " gain-map gains       : ${GAINMAP_GAINS} dB"
 echo " capture / gen settle : ${CAPTURE_SECONDS} s / ${GENERATOR_SETTLE} s"
+echo " generator retries    : ${GENERATOR_RETRIES} (delay ${GENERATOR_RETRY_DELAY} s)"
 echo " RX settle            : ${RX_SETTLE} s"
 echo " amp nominal / power  : ${AMP_GAIN} dB / ${AMP_POWER}"
 echo " ETA                   : ${ETA_TEXT}"
@@ -191,6 +212,8 @@ fi
     echo "amp_power=${AMP_POWER}"
     echo "loss_nominal_db=${LOSS}"
     echo "n9310a_resource=${N9310A_RESOURCE}"
+    echo "generator_retries=${GENERATOR_RETRIES}"
+    echo "generator_retry_delay_s=${GENERATOR_RETRY_DELAY}"
     echo "gainmap_gains_db=${GAINMAP_GAINS}"
     echo "gainmap_levels=${GAINMAP_LEVELS}"
     echo "gainmap_repeats=${GAINMAP_REPEATS}"
@@ -227,7 +250,10 @@ for ((rep=1; rep<=REPEATS; rep++)); do
         log="${OUTDIR}/${stem}.log"
         echo
         echo "-- RTL Phase A 2p4M, rep ${rep_tag}, ${direction}, ${ttag} --"
-        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --unit "${DEVICE_LABEL}"             --device rtlsdr             --rate "${RTL_RATE}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${levels}"             --rtl-gains "${RTL_PRIMARY_GAIN}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=A device=RTL rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}"             --out "${out}" 2>&1 | tee "${log}"
+        if ! prepare_output "${out}" "${log}"; then
+            continue
+        fi
+        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --generator-retries "${GENERATOR_RETRIES}"             --generator-retry-delay "${GENERATOR_RETRY_DELAY}"             --unit "${DEVICE_LABEL}"             --device rtlsdr             --rate "${RTL_RATE}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${levels}"             --rtl-gains "${RTL_PRIMARY_GAIN}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=A device=RTL rep=${rep} direction=${direction} tone_offset_hz=${offset}; amp_power=${AMP_POWER}"             --out "${out}" 2>&1 | tee "${log}"
     done < <(tone_order_for_rep "${rep}")
 done
 
@@ -241,7 +267,10 @@ if [[ "${RUN_GAINMAP}" == 1 ]]; then
         stem="${DEVICE_LABEL}_phaseB_gainmap_rate2p4M_rep${rep_tag}_tone_${ttag}"
         out="${OUTDIR}/${stem}.csv"
         log="${OUTDIR}/${stem}.log"
-        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --unit "${DEVICE_LABEL}"             --device rtlsdr             --rate "${RTL_RATE}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${GAINMAP_LEVELS}"             --rtl-gains "${GAINMAP_GAINS}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=B device=RTL gainmap rep=${rep} tone_offset_hz=${GAINMAP_TONE_OFFSET}; amp_power=${AMP_POWER}"             --out "${out}" 2>&1 | tee "${log}"
+        if ! prepare_output "${out}" "${log}"; then
+            continue
+        fi
+        python scripts/bench_cw_auto.py             --generator-resource "${N9310A_RESOURCE}"             --generator-settle "${GENERATOR_SETTLE}"             --generator-retries "${GENERATOR_RETRIES}"             --generator-retry-delay "${GENERATOR_RETRY_DELAY}"             --unit "${DEVICE_LABEL}"             --device rtlsdr             --rate "${RTL_RATE}"             --freq "${CENTER_HZ}"             --tone "${tone}"             "--levels=${GAINMAP_LEVELS}"             --rtl-gains "${GAINMAP_GAINS}"             --seconds "${CAPTURE_SECONDS}"             --settle "${RX_SETTLE}"             --amp-gain "${AMP_GAIN}"             --loss "${LOSS}"             --notes "equivalence phase=B device=RTL gainmap rep=${rep} tone_offset_hz=${GAINMAP_TONE_OFFSET}; amp_power=${AMP_POWER}"             --out "${out}" 2>&1 | tee "${log}"
     done
 fi
 
