@@ -356,6 +356,7 @@ class Airspy:
                        or (f"0x{serial[-16:]}" if serial != 'unknown'
                            else serial))
         self.rate = int(args.rate)
+        self.read_registers = not bool(args.skip_registers)
 
     def capture(self, setting, acc, seconds, settle):
         dev = self.device
@@ -372,24 +373,31 @@ class Airspy:
         dev.resume_buffering()
         try:
             dev.read_sync(int(settle * self.rate))   # settle, discard
-            registers = ''
-            # Reading the R820T2 register file is a series of slow USB
-            # control transfers.  RX must remain active so the values
-            # include the tuner's start-up calibration, but nobody reads
-            # the stream meanwhile: pause buffering so the queue cannot
-            # fill however long the transfers take.
-            dev.pause_buffering()
-            try:
-                regs = dev.read_tuner_registers()
-                registers = ' '.join(f"0x{r:02X}=0x{v:02X}"
-                                     for r, v in sorted(regs.items()))
-            except Exception as exc:
-                registers = f'unavailable: {exc}'
-            finally:
-                # The clean measurement boundary: an empty queue and the
-                # cumulative drop counter at that same instant.  Counters
-                # are snapshotted, never reset, so HAL diagnostics stay
-                # intact and setup-phase drops fall before the baseline.
+            registers = 'skipped'
+            if self.read_registers:
+                # Reading the R820T2 register file is a series of slow USB
+                # control transfers.  RX must remain active so the values
+                # include the tuner's start-up calibration, but nobody reads
+                # the stream meanwhile: pause buffering so the queue cannot
+                # fill however long the transfers take.
+                dev.pause_buffering()
+                try:
+                    regs = dev.read_tuner_registers()
+                    registers = ' '.join(f"0x{r:02X}=0x{v:02X}"
+                                         for r, v in sorted(regs.items()))
+                except Exception as exc:
+                    registers = f'unavailable: {exc}'
+                finally:
+                    # The clean measurement boundary: an empty queue and the
+                    # cumulative drop counter at that same instant. Counters
+                    # are snapshotted, never reset, so setup-phase drops fall
+                    # before the baseline.
+                    drop_baseline = dev.resume_buffering()
+            else:
+                # Diagnostic path: keep the USB RX stream running, but issue
+                # no R820T2 control transfers at the measurement boundary.
+                # resume_buffering() is also an atomic empty-queue boundary
+                # when buffering is already active.
                 drop_baseline = dev.resume_buffering()
             software_baseline = getattr(dev, 'software_dropped_samples', 0)
             last_dropped = drop_baseline
@@ -423,6 +431,39 @@ class Airspy:
         # both land in 'dropped'; say which, when it is the former.
         notes = f'{software} of them buffer overflow' if software else ''
         return {'dropped': dropped, 'registers': registers, 'notes': notes}
+
+    def warmup(self, setting, seconds):
+        """Run and discard Airspy samples so bias/preamp/tuner can settle.
+
+        RX remains persistent after this call; buffering is paused at the end
+        so the next measurement starts from a clean queue boundary.
+        """
+        if seconds <= 0:
+            return
+        dev = self.device
+        dev.apply_gain_mode('manual', lna=setting['lna'],
+                            mixer=setting['mixer'], vga=setting['vga'],
+                            lna_agc=False, mixer_agc=False)
+        dev.resume_buffering()
+        try:
+            remaining = int(seconds * self.rate)
+            seg = min(max(1, self.rate // 4), 1_000_000)
+            while remaining > 0:
+                n = min(seg, remaining)
+                dev.read_sync(n)
+                remaining -= n
+        finally:
+            dev.pause_buffering()
+
+    def stop_stream(self):
+        """Stop Airspy RX while keeping the device open and configured.
+
+        Publication bench automation uses this before N9310A USBTMC traffic
+        so a 10 MSPS Airspy bulk stream does not overlap generator USB I/O on
+        hosts where both devices share the same USB controller/usbipd path.
+        The next read_sync() restarts RX and re-runs the normal settle period.
+        """
+        self.device.stop_capture()
 
     def close(self):
         try:
@@ -848,6 +889,10 @@ def _add_capture_args(p):
                    help="Airspy bias tee on (an amplifier powered through "
                         "the coax); never with a generator on the port "
                         "without a DC block")
+    p.add_argument('--skip-registers', action='store_true',
+                   help="Airspy diagnostic: skip R820T2 register reads "
+                        "during capture to isolate USB control-transfer "
+                        "effects")
     p.add_argument('--rtl-sdr', default='rtl_sdr', help="rtl_sdr binary")
     p.add_argument('--seconds', type=float, default=5.0)
     p.add_argument('--settle', type=float, default=0.5)
